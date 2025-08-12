@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import Link from "next/link";
+import { Providers } from "@/components/Providers";
+import { AuthButtons } from "@/components/AuthButtons";
+import { PlayerBar } from "@/components/PlayerBar";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -24,10 +28,21 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}>
+        <Providers>
+          <header className="border-b border-black/10 dark:border-white/10">
+            <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
+              <Link href="/" className="font-semibold">Spotify Clone</Link>
+              <nav className="flex items-center gap-6">
+                <Link href="/" className="opacity-80 hover:opacity-100">Home</Link>
+                <Link href="/upload" className="opacity-80 hover:opacity-100">Upload</Link>
+                <AuthButtons />
+              </nav>
+            </div>
+          </header>
+          <main>{children}</main>
+          <PlayerBar />
+        </Providers>
       </body>
     </html>
   );
