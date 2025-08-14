@@ -1,4 +1,4 @@
-import type { NextAuthOptions } from "next-auth";
+import type { NextAuthOptions, Session } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/lib/prisma";
@@ -33,14 +33,19 @@ export const authOptions: NextAuthOptions = {
           email: user.email,
           name: user.name ?? undefined,
           image: user.image ?? undefined,
-        } as any;
+        } satisfies {
+          id: string;
+          email: string;
+          name?: string;
+          image?: string;
+        };
       },
     }),
   ],
   callbacks: {
-    async session({ session, token }: any) {
+    async session({ session, token }) {
       if (session?.user && token?.sub) {
-        (session.user as any).id = token.sub;
+        (session.user as Session["user"] & { id?: string }).id = token.sub;
       }
       return session;
     },

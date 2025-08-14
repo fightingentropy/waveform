@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
+import type { Session } from "next-auth";
 import { authOptions } from "@/auth";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -15,8 +16,10 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const session = (await getServerSession(authOptions as any)) as any;
-  if (!session?.user?.email || !session?.user?.id) {
+  const session = await getServerSession(authOptions);
+  type AppSession = Session & { user: NonNullable<Session["user"]> & { id: string } };
+  const s = session as AppSession | null;
+  if (!s?.user?.email || !s.user.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -54,7 +57,7 @@ export async function POST(req: Request) {
   const imageUrl = `/uploads/images/${imageFileName}`;
   const audioUrl = `/uploads/audio/${audioFileName}`;
 
-  const userId = (session as any).user.id as string;
+  const userId = s.user.id;
   const song = await prisma.song.create({
     data: { title, artist, imageUrl, audioUrl, userId },
   });

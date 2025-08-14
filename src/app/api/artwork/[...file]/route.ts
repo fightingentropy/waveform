@@ -13,9 +13,10 @@ function safeJoin(baseDir: string, pathSegments: string[]): string | null {
   return targetPath;
 }
 
-export async function GET(_req: Request, { params }: { params: { file: string[] } }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ file: string[] }> }) {
   const baseDir = join(process.cwd(), "public", "uploads", "audio");
-  const segments = Array.isArray(params.file) ? params.file : [params.file];
+  const { file } = await params;
+  const segments = Array.isArray(file) ? file : [file];
   const audioPath = safeJoin(baseDir, segments);
   if (!audioPath) {
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
@@ -32,7 +33,9 @@ export async function GET(_req: Request, { params }: { params: { file: string[] 
       const headers = new Headers();
       headers.set("Content-Type", picture.format || "image/jpeg");
       headers.set("Cache-Control", "public, max-age=604800, immutable");
-      return new Response(picture.data, { headers });
+      const arrayBuffer = new ArrayBuffer(picture.data.byteLength);
+      new Uint8Array(arrayBuffer).set(picture.data);
+      return new Response(arrayBuffer, { headers });
     }
   } catch {}
 
@@ -43,7 +46,9 @@ export async function GET(_req: Request, { params }: { params: { file: string[] 
     const headers = new Headers();
     headers.set("Content-Type", "image/jpeg");
     headers.set("Cache-Control", "public, max-age=604800, immutable");
-    return new Response(buf, { headers });
+    const arrayBuffer = new ArrayBuffer(buf.byteLength);
+    new Uint8Array(arrayBuffer).set(buf);
+    return new Response(arrayBuffer, { headers });
   } catch {
     return NextResponse.json({ error: "Artwork not found" }, { status: 404 });
   }

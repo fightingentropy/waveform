@@ -47,8 +47,9 @@ export default function UploadPage() {
         throw new Error(data?.error ?? "Upload failed");
       }
       router.push("/");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Upload failed";
+      setError(message);
     } finally {
       setLoading(false);
     }

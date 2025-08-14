@@ -27,8 +27,9 @@ export default function RegisterPage() {
         throw new Error(data?.error ?? "Registration failed");
       }
       router.push("/signin");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Registration failed";
+      setError(message);
     } finally {
       setLoading(false);
     }
