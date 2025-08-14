@@ -6,6 +6,11 @@ Spotify Clone built with Next.js 15 (App Router), Tailwind, Prisma (SQLite), and
 - Generate DB client and migrate: `npx prisma generate && npx prisma migrate dev --name init`
 - Start dev server: `npm run dev`
 
+### Demo sign-in
+- **Email**: `demo@example.com`
+- **Password**: `password`
+- **Sign-in page**: `/signin`
+
 ### Features
 - Email/password auth (NextAuth Credentials + Prisma adapter)
 - Upload songs (cover + audio) to `public/uploads` with metadata in SQLite

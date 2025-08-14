@@ -35,11 +35,10 @@ async function main() {
   ];
 
   for (const s of songs) {
-    await prisma.song.upsert({
-      where: { audioUrl: s.audioUrl },
-      update: {},
-      create: { ...s, userId: user.id },
-    });
+    const exists = await prisma.song.findFirst({ where: { audioUrl: s.audioUrl } });
+    if (!exists) {
+      await prisma.song.create({ data: { ...s, userId: user.id } });
+    }
   }
 }
 
