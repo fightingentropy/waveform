@@ -43,14 +43,36 @@ export function PlayerBar() {
     try {
       const raw = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { song?: PlayerSong | null; time?: number } | null;
-      if (parsed?.song) {
-        // Hydrate the last played song but do not auto-play to avoid autoplay restrictions
+      const parsed = JSON.parse(raw) as {
+        song?: PlayerSong | null;
+        time?: number;
+        queue?: PlayerSong[];
+        index?: number;
+        shuffle?: boolean;
+        repeatMode?: "off" | "one" | "all";
+      } | null;
+      if (!parsed) return;
+      // Hydrate queue and index so next/previous work after refresh
+      if (parsed.queue && Array.isArray(parsed.queue) && parsed.queue.length > 0) {
+        const idx = typeof parsed.index === "number" && parsed.index >= 0 && parsed.index < parsed.queue.length
+          ? parsed.index
+          : 0;
+        // Set state directly to avoid auto-play
+        usePlayerStore.setState({
+          queue: parsed.queue,
+          currentIndex: idx,
+          currentSong: parsed.queue[idx],
+          isPlaying: false,
+          shuffle: Boolean(parsed.shuffle),
+          repeatMode: parsed.repeatMode ?? "off",
+        });
+      } else if (parsed.song) {
+        // Fallback: just hydrate the song
         setSong(parsed.song);
         pause();
-        if (typeof parsed.time === "number" && parsed.time > 0) {
-          pendingSeekRef.current = parsed.time;
-        }
+      }
+      if (typeof parsed.time === "number" && parsed.time > 0) {
+        pendingSeekRef.current = parsed.time;
       }
     } catch {
       // ignore malformed storage
@@ -73,11 +95,20 @@ export function PlayerBar() {
   useEffect(() => {
     function save() {
       const audio = audioRef.current;
-      if (!currentSong || !audio) return;
+      if (!audio) return;
+      const state = usePlayerStore.getState();
+      if (!state.currentSong) return;
       try {
         localStorage.setItem(
           STORAGE_KEY,
-          JSON.stringify({ song: currentSong, time: audio.currentTime })
+          JSON.stringify({
+            song: state.currentSong,
+            time: audio.currentTime,
+            queue: state.queue,
+            index: state.currentIndex,
+            shuffle: state.shuffle,
+            repeatMode: state.repeatMode,
+          })
         );
       } catch {}
     }
@@ -98,7 +129,7 @@ export function PlayerBar() {
       document.removeEventListener("visibilitychange", onVisibility);
       if (audio) audio.removeEventListener("pause", save);
     };
-  }, [currentSong]);
+  }, []);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -148,19 +179,39 @@ export function PlayerBar() {
     audio.currentTime = (pct / 100) * audio.duration;
     setProgressPct(pct);
     // Immediately persist the new seek position
-    if (currentSong) {
-      try {
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({ song: currentSong, time: audio.currentTime })
-        );
-      } catch {}
-    }
+    try {
+      const state = usePlayerStore.getState();
+      if (!state.currentSong) return;
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          song: state.currentSong,
+          time: audio.currentTime,
+          queue: state.queue,
+          index: state.currentIndex,
+          shuffle: state.shuffle,
+          repeatMode: state.repeatMode,
+        })
+      );
+    } catch {}
   }
 
   // Space to toggle
   useEffect(() => {
     function onKeydown(ev: KeyboardEvent) {
+      // Cmd + Arrow: track navigation
+      if (ev.metaKey && ev.code === "ArrowRight") {
+        ev.preventDefault();
+        next();
+        return;
+      }
+      if (ev.metaKey && ev.code === "ArrowLeft") {
+        ev.preventDefault();
+        previous();
+        return;
+      }
+
+      // Space to toggle; plain arrows to seek
       if (ev.code === "Space") {
         ev.preventDefault();
         toggle();
@@ -176,7 +227,7 @@ export function PlayerBar() {
     }
     window.addEventListener("keydown", onKeydown);
     return () => window.removeEventListener("keydown", onKeydown);
-  }, [toggle]);
+  }, [toggle, next, previous]);
 
   if (!currentSong) return null;
 
