@@ -1,18 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { usePlayerStore } from "@/store/player";
+import { usePlayerStore, type PlayerSong } from "@/store/player";
 import { Pause, Play, Volume2, VolumeX, Shuffle, SkipBack, SkipForward, Repeat } from "lucide-react";
 import { cn, formatTime } from "@/lib/utils";
 
 export function PlayerBar() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pendingSeekRef = useRef<number | null>(null);
+  const restoredOnceRef = useRef<boolean>(false);
+  const STORAGE_KEY = "waveform-player";
   const {
     currentSong,
     isPlaying,
     toggle,
     play,
     pause,
+    setSong,
     volume,
     setVolume,
     isMuted,
@@ -32,6 +36,27 @@ export function PlayerBar() {
   const [duration, setDuration] = useState(0);
   const [bufferedPct, setBufferedPct] = useState(0);
 
+  // Restore last session on first mount
+  useEffect(() => {
+    if (restoredOnceRef.current) return;
+    restoredOnceRef.current = true;
+    try {
+      const raw = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { song?: PlayerSong | null; time?: number } | null;
+      if (parsed?.song) {
+        // Hydrate the last played song but do not auto-play to avoid autoplay restrictions
+        setSong(parsed.song);
+        pause();
+        if (typeof parsed.time === "number" && parsed.time > 0) {
+          pendingSeekRef.current = parsed.time;
+        }
+      }
+    } catch {
+      // ignore malformed storage
+    }
+  }, [pause, setSong]);
+
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -43,6 +68,37 @@ export function PlayerBar() {
     if (!audio) return;
     audio.muted = isMuted;
   }, [isMuted]);
+
+  // Save on visibility/unload and when audio pauses
+  useEffect(() => {
+    function save() {
+      const audio = audioRef.current;
+      if (!currentSong || !audio) return;
+      try {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ song: currentSong, time: audio.currentTime })
+        );
+      } catch {}
+    }
+    const onVisibility = () => {
+      if (document.hidden) save();
+    };
+
+    window.addEventListener("pagehide", save);
+    window.addEventListener("beforeunload", save);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    const audio = audioRef.current;
+    if (audio) audio.addEventListener("pause", save);
+
+    return () => {
+      window.removeEventListener("pagehide", save);
+      window.removeEventListener("beforeunload", save);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (audio) audio.removeEventListener("pause", save);
+    };
+  }, [currentSong]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -58,6 +114,14 @@ export function PlayerBar() {
     const audio = audioRef.current;
     if (!audio) return;
     setDuration(audio.duration || 0);
+    // Seek to previously saved position after metadata is available
+    if (pendingSeekRef.current && audio.duration) {
+      const clamped = Math.max(0, Math.min(audio.duration - 0.01, pendingSeekRef.current));
+      audio.currentTime = clamped;
+      setCurrentTime(clamped);
+      setProgressPct((clamped / audio.duration) * 100);
+      pendingSeekRef.current = null;
+    }
   }
 
   function onProgress() {
@@ -83,6 +147,15 @@ export function PlayerBar() {
     const pct = Number(e.target.value);
     audio.currentTime = (pct / 100) * audio.duration;
     setProgressPct(pct);
+    // Immediately persist the new seek position
+    if (currentSong) {
+      try {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ song: currentSong, time: audio.currentTime })
+        );
+      } catch {}
+    }
   }
 
   // Space to toggle
