@@ -42,9 +42,7 @@ export default async function Home() {
 
   return (
     <div className="px-6 py-8 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold">Home</h1>
-      </div>
+      <div className="mb-6" />
       {songs.length === 0 ? (
         <div className="opacity-70">No songs found in Top 100.</div>
       ) : (

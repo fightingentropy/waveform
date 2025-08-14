@@ -1,373 +1,162 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { usePlayerStore, type PlayerSong } from "@/store/player";
-import { Pause, Play, Volume2, VolumeX, Shuffle, SkipBack, SkipForward, Repeat } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { usePlayerStore } from "@/store/player";
 import { cn, formatTime } from "@/lib/utils";
+import { Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
 
-export function PlayerBar() {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const pendingSeekRef = useRef<number | null>(null);
-  const restoredOnceRef = useRef<boolean>(false);
-  const STORAGE_KEY = "waveform-player";
+function PlayerBar(): React.ReactElement | null {
   const {
     currentSong,
     isPlaying,
     toggle,
-    play,
-    pause,
-    setSong,
+    next,
+    previous,
     volume,
     setVolume,
     isMuted,
     toggleMute,
     shuffle,
-    repeatMode,
-    previous,
-    next,
     toggleShuffle,
+    repeatMode,
     cycleRepeatMode,
-    currentIndex,
-    queue,
-  } =
-    usePlayerStore();
-  const [progressPct, setProgressPct] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [bufferedPct, setBufferedPct] = useState(0);
+  } = usePlayerStore();
 
-  // Restore last session on first mount
-  useEffect(() => {
-    if (restoredOnceRef.current) return;
-    restoredOnceRef.current = true;
-    try {
-      const raw = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as {
-        song?: PlayerSong | null;
-        time?: number;
-        queue?: PlayerSong[];
-        index?: number;
-        shuffle?: boolean;
-        repeatMode?: "off" | "one" | "all";
-      } | null;
-      if (!parsed) return;
-      // Hydrate queue and index so next/previous work after refresh
-      if (parsed.queue && Array.isArray(parsed.queue) && parsed.queue.length > 0) {
-        const idx = typeof parsed.index === "number" && parsed.index >= 0 && parsed.index < parsed.queue.length
-          ? parsed.index
-          : 0;
-        // Set state directly to avoid auto-play
-        usePlayerStore.setState({
-          queue: parsed.queue,
-          currentIndex: idx,
-          currentSong: parsed.queue[idx],
-          isPlaying: false,
-          shuffle: Boolean(parsed.shuffle),
-          repeatMode: parsed.repeatMode ?? "off",
-        });
-      } else if (parsed.song) {
-        // Fallback: just hydrate the song
-        setSong(parsed.song);
-        pause();
-      }
-      if (typeof parsed.time === "number" && parsed.time > 0) {
-        pendingSeekRef.current = parsed.time;
-      }
-    } catch {
-      // ignore malformed storage
-    }
-  }, [pause, setSong]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [duration, setDuration] = useState<number>(0);
+  const [currentTime, setCurrentTime] = useState<number>(0);
+
+  const src = currentSong?.audioUrl ?? null;
 
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.volume = isMuted ? 0 : volume;
+    if (!audioRef.current) return;
+    audioRef.current.muted = isMuted;
+  }, [isMuted]);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.volume = volume;
   }, [volume]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.muted = isMuted;
-  }, [isMuted]);
-
-  // Save on visibility/unload and when audio pauses
-  useEffect(() => {
-    function save() {
-      const audio = audioRef.current;
-      if (!audio) return;
-      const state = usePlayerStore.getState();
-      if (!state.currentSong) return;
-      try {
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            song: state.currentSong,
-            time: audio.currentTime,
-            queue: state.queue,
-            index: state.currentIndex,
-            shuffle: state.shuffle,
-            repeatMode: state.repeatMode,
-          })
-        );
-      } catch {}
-    }
-    const onVisibility = () => {
-      if (document.hidden) save();
+    const onLoaded = () => setDuration(audio.duration || 0);
+    const onTime = () => setCurrentTime(audio.currentTime || 0);
+    const onEnded = () => {
+      if (repeatMode === "one") {
+        audio.currentTime = 0;
+        audio.play().catch(() => {});
+        return;
+      }
+      next();
     };
-
-    window.addEventListener("pagehide", save);
-    window.addEventListener("beforeunload", save);
-    document.addEventListener("visibilitychange", onVisibility);
-
-    const audio = audioRef.current;
-    if (audio) audio.addEventListener("pause", save);
-
+    audio.addEventListener("loadedmetadata", onLoaded);
+    audio.addEventListener("timeupdate", onTime);
+    audio.addEventListener("ended", onEnded);
     return () => {
-      window.removeEventListener("pagehide", save);
-      window.removeEventListener("beforeunload", save);
-      document.removeEventListener("visibilitychange", onVisibility);
-      if (audio) audio.removeEventListener("pause", save);
+      audio.removeEventListener("loadedmetadata", onLoaded);
+      audio.removeEventListener("timeupdate", onTime);
+      audio.removeEventListener("ended", onEnded);
     };
-  }, []);
+  }, [next, repeatMode]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    if (isPlaying) {
-      audio.play().catch(() => {/* ignore */});
-    } else {
+    if (!src) {
       audio.pause();
+      setCurrentTime(0);
+      setDuration(0);
+      return;
     }
-  }, [isPlaying, currentSong]);
-
-  function onLoadedMetadata() {
-    const audio = audioRef.current;
-    if (!audio) return;
-    setDuration(audio.duration || 0);
-    // Seek to previously saved position after metadata is available
-    if (pendingSeekRef.current && audio.duration) {
-      const clamped = Math.max(0, Math.min(audio.duration - 0.01, pendingSeekRef.current));
-      audio.currentTime = clamped;
-      setCurrentTime(clamped);
-      setProgressPct((clamped / audio.duration) * 100);
-      pendingSeekRef.current = null;
+    const absolute = location.origin + src;
+    if (audio.src !== absolute) {
+      audio.src = absolute;
     }
-  }
-
-  function onProgress() {
-    const audio = audioRef.current;
-    if (!audio || !audio.buffered?.length) return;
-    try {
-      const end = audio.buffered.end(audio.buffered.length - 1);
-      const pct = audio.duration ? (end / audio.duration) * 100 : 0;
-      setBufferedPct(Math.max(0, Math.min(100, pct)));
-    } catch {}
-  }
-
-  function onTimeUpdate() {
-    const audio = audioRef.current;
-    if (!audio || !audio.duration) return;
-    setCurrentTime(audio.currentTime);
-    setProgressPct((audio.currentTime / audio.duration) * 100);
-  }
-
-  function onSeek(e: React.ChangeEvent<HTMLInputElement>) {
-    const audio = audioRef.current;
-    if (!audio || !audio.duration) return;
-    const pct = Number(e.target.value);
-    audio.currentTime = (pct / 100) * audio.duration;
-    setProgressPct(pct);
-    // Immediately persist the new seek position
-    try {
-      const state = usePlayerStore.getState();
-      if (!state.currentSong) return;
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          song: state.currentSong,
-          time: audio.currentTime,
-          queue: state.queue,
-          index: state.currentIndex,
-          shuffle: state.shuffle,
-          repeatMode: state.repeatMode,
-        })
-      );
-    } catch {}
-  }
-
-  // Space to toggle
-  useEffect(() => {
-    function onKeydown(ev: KeyboardEvent) {
-      // Cmd + Arrow: track navigation
-      if (ev.metaKey && ev.code === "ArrowRight") {
-        ev.preventDefault();
-        next();
-        return;
-      }
-      if (ev.metaKey && ev.code === "ArrowLeft") {
-        ev.preventDefault();
-        previous();
-        return;
-      }
-
-      // Space to toggle; plain arrows to seek
-      if (ev.code === "Space") {
-        ev.preventDefault();
-        toggle();
-      } else if (ev.code === "ArrowRight") {
-        const audio = audioRef.current;
-        if (!audio) return;
-        audio.currentTime = Math.min((audio.duration || 0) - 0.01, audio.currentTime + 5);
-      } else if (ev.code === "ArrowLeft") {
-        const audio = audioRef.current;
-        if (!audio) return;
-        audio.currentTime = Math.max(0, audio.currentTime - 5);
-      }
-    }
-    window.addEventListener("keydown", onKeydown);
-    return () => window.removeEventListener("keydown", onKeydown);
-  }, [toggle, next, previous]);
+    if (isPlaying) audio.play().catch(() => {});
+    else audio.pause();
+  }, [src, isPlaying]);
 
   if (!currentSong) return null;
+  const progress = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+
+  function onSeek(value: number) {
+    const audio = audioRef.current;
+    if (!audio || !duration) return;
+    const nextTime = Math.max(0, Math.min(duration, value));
+    audio.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  }
+
+  const VolumeIcon = isMuted || volume === 0 ? VolumeX : Volume2;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 border-t border-black/10 dark:border-white/10 bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto max-w-7xl px-4 py-2 grid grid-cols-[auto_1fr_auto] items-center gap-4">
-        <img
-          src={currentSong.imageUrl}
-          alt={currentSong.title}
-          className="h-12 w-12 rounded object-cover"
-        />
-        <div className="min-w-0">
-          <div className="font-medium truncate">{currentSong.title}</div>
-          <div className="text-sm opacity-70 truncate">{currentSong.artist}</div>
-        </div>
-        <div className="flex flex-col items-center gap-2">
-          <div className="flex items-center gap-3">
-            <button
-              aria-label="Shuffle"
-              onClick={toggleShuffle}
-              className={cn("p-2 rounded hover:bg-black/10 dark:hover:bg-white/10", shuffle && "text-emerald-500")}
-              title="Shuffle"
-            >
+    <div className="fixed bottom-0 inset-x-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <audio ref={audioRef} hidden playsInline />
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
+        <div className="flex items-center gap-3 sm:gap-4">
+          <img src={currentSong.imageUrl} alt="cover" className="hidden sm:block w-12 h-12 rounded object-cover" />
+          <div className="min-w-0">
+            <div className="text-sm font-medium truncate">{currentSong.title}</div>
+            <div className="text-xs opacity-70 truncate">{currentSong.artist}</div>
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-3">
+              <span className="text-xs tabular-nums opacity-70 w-10 text-right">{formatTime(currentTime)}</span>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, duration)}
+                step={0.1}
+                value={currentTime}
+                onChange={(e) => onSeek(Number(e.target.value))}
+                className="w-full h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500"
+              />
+              <span className="text-xs tabular-nums opacity-70 w-10">{formatTime(duration)}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 sm:gap-4">
+            <button aria-label="Shuffle" onClick={toggleShuffle} className={cn("p-2 rounded-full", shuffle && "text-emerald-500")}>
               <Shuffle size={18} />
             </button>
-            <button
-              aria-label="Previous"
-              onClick={() => {
-                const audio = audioRef.current;
-                if (audio && audio.currentTime > 3) {
-                  audio.currentTime = 0;
-                } else {
-                  previous();
-                }
-              }}
-              className="p-2 rounded hover:bg-black/10 dark:hover:bg-white/10"
-              title="Previous"
-            >
+            <button aria-label="Previous" onClick={previous} className="p-2 rounded-full">
               <SkipBack size={18} />
             </button>
-            <button
-              aria-label={isPlaying ? "Pause" : "Play"}
-              onClick={toggle}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-background"
-              title={isPlaying ? "Pause" : "Play"}
-            >
-              {isPlaying ? <Pause size={20} /> : <Play size={20} />}
+            <button aria-label={isPlaying ? "Pause" : "Play"} onClick={toggle} className="h-9 w-9 rounded-full grid place-items-center bg-foreground text-background">
+              {isPlaying ? <Pause size={18} /> : <Play size={18} />}
             </button>
-            <button
-              aria-label="Next"
-              onClick={() => next()}
-              className="p-2 rounded hover:bg-black/10 dark:hover:bg-white/10"
-              title="Next"
-            >
+            <button aria-label="Next" onClick={next} className="p-2 rounded-full">
               <SkipForward size={18} />
             </button>
-            <button
-              aria-label="Repeat"
-              onClick={cycleRepeatMode}
-              className={cn(
-                "relative p-2 rounded hover:bg-black/10 dark:hover:bg-white/10",
-                repeatMode !== "off" && "text-emerald-500"
-              )}
-              title={repeatMode === "off" ? "Repeat: off" : repeatMode === "all" ? "Repeat: all" : "Repeat: one"}
-            >
+            <button aria-label="Repeat" onClick={cycleRepeatMode} className={cn("p-2 rounded-full", repeatMode !== "off" && "text-emerald-500")}>
               <Repeat size={18} />
-              {repeatMode === "one" && (
-                <span className="absolute right-1 bottom-1 text-[10px] leading-none">1</span>
-              )}
             </button>
-          </div>
-          <div className="flex items-center gap-3 min-w-0 w-[min(720px,70vw)]">
-          <span className="w-12 text-xs tabular-nums text-right opacity-70">
-            {formatTime(currentTime)}
-          </span>
-          <div className="relative w-full h-2 rounded bg-black/10 dark:bg-white/10 overflow-hidden">
-            <div
-              className="absolute left-0 top-0 bottom-0 bg-black/20 dark:bg-white/20"
-              style={{ width: `${bufferedPct}%` }}
-            />
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={0.1}
-              value={progressPct}
-              onChange={onSeek}
-              aria-label="Seek"
-              className={cn(
-                "absolute inset-0 w-full appearance-none bg-transparent cursor-pointer",
-                "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-foreground",
-                "[&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-foreground"
-              )}
-            />
-            <div
-              className="absolute left-0 top-0 bottom-0 bg-foreground/70 pointer-events-none"
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-          <span className="w-12 text-xs tabular-nums opacity-70">{formatTime(duration)}</span>
+
+            <div className="hidden sm:flex items-center gap-2 ml-2">
+              <button aria-label={isMuted ? "Unmute" : "Mute"} onClick={toggleMute} className="p-2 rounded-full">
+                <VolumeIcon size={18} />
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={isMuted ? 0 : volume}
+                onChange={(e) => setVolume(Number(e.target.value))}
+                className="w-28 h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500"
+              />
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 justify-self-end">
-          <button aria-label={isMuted ? "Unmute" : "Mute"} onClick={toggleMute} className="p-1">
-            {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={isMuted ? 0 : volume}
-            onChange={(e) => setVolume(Number(e.target.value))}
-          />
-        </div>
-        <audio
-          ref={audioRef}
-          src={currentSong.audioUrl}
-          onLoadedMetadata={onLoadedMetadata}
-          onProgress={onProgress}
-          onTimeUpdate={onTimeUpdate}
-          onEnded={() => {
-            const audio = audioRef.current;
-            if (!audio) return;
-            if (repeatMode === "one") {
-              audio.currentTime = 0;
-              audio.play().catch(() => {/* ignore */});
-              return;
-            }
-            const atEnd = currentIndex >= queue.length - 1;
-            if (!atEnd || shuffle || repeatMode === "all") {
-              next();
-            } else {
-              pause();
-            }
-          }}
-        />
       </div>
     </div>
   );
 }
+
+export { PlayerBar };
+export default PlayerBar;
 
 
