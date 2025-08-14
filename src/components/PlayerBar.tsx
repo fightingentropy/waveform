@@ -7,6 +7,8 @@ import { Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX }
 
 function PlayerBar(): React.ReactElement | null {
   const {
+    queue,
+    currentIndex,
     currentSong,
     isPlaying,
     toggle,
@@ -20,9 +22,13 @@ function PlayerBar(): React.ReactElement | null {
     toggleShuffle,
     repeatMode,
     cycleRepeatMode,
+    setSong,
+    setQueue,
+    pause,
   } = usePlayerStore();
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const savedSeekRef = useRef<number | null>(null);
   const [duration, setDuration] = useState<number>(0);
   const [currentTime, setCurrentTime] = useState<number>(0);
 
@@ -38,28 +44,50 @@ function PlayerBar(): React.ReactElement | null {
     audioRef.current.volume = volume;
   }, [volume]);
 
+  // Restore last played queue/song and time on mount
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem("wf_player_state");
+      if (!raw) return;
+      const data = JSON.parse(raw) as
+        | {
+            queue?: any[];
+            currentIndex?: number;
+            song?: any;
+            currentTime?: number;
+            isPlaying?: boolean;
+          }
+        | null;
+      if (data?.queue && Array.isArray(data.queue) && typeof data.currentIndex === "number") {
+        const idx = Math.max(0, Math.min(data.queue.length - 1, data.currentIndex));
+        setQueue(data.queue, idx);
+        // Always start paused on fresh load to avoid autoplay restrictions
+        pause();
+        if (typeof data.currentTime === "number") {
+          savedSeekRef.current = data.currentTime;
+          setCurrentTime(data.currentTime);
+        }
+      } else if (data?.song) {
+        setSong(data.song);
+        pause();
+        if (typeof data.currentTime === "number") {
+          savedSeekRef.current = data.currentTime;
+          setCurrentTime(data.currentTime);
+        }
+      }
+    } catch {}
+  }, [setSong, setQueue, pause]);
+
+  function handleEnded() {
     const audio = audioRef.current;
     if (!audio) return;
-    const onLoaded = () => setDuration(audio.duration || 0);
-    const onTime = () => setCurrentTime(audio.currentTime || 0);
-    const onEnded = () => {
-      if (repeatMode === "one") {
-        audio.currentTime = 0;
-        audio.play().catch(() => {});
-        return;
-      }
-      next();
-    };
-    audio.addEventListener("loadedmetadata", onLoaded);
-    audio.addEventListener("timeupdate", onTime);
-    audio.addEventListener("ended", onEnded);
-    return () => {
-      audio.removeEventListener("loadedmetadata", onLoaded);
-      audio.removeEventListener("timeupdate", onTime);
-      audio.removeEventListener("ended", onEnded);
-    };
-  }, [next, repeatMode]);
+    if (repeatMode === "one") {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+      return;
+    }
+    next();
+  }
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -74,9 +102,96 @@ function PlayerBar(): React.ReactElement | null {
     if (audio.src !== absolute) {
       audio.src = absolute;
     }
-    if (isPlaying) audio.play().catch(() => {});
+    if (isPlaying) audio.play().catch(() => { pause(); });
     else audio.pause();
-  }, [src, isPlaying]);
+  }, [src, isPlaying, pause]);
+
+  // Save queue/song and playback position right before page unload
+  useEffect(() => {
+    function saveState() {
+      try {
+        if (!currentSong) {
+          localStorage.removeItem("wf_player_state");
+          return;
+        }
+        const audio = audioRef.current;
+        const time = audio?.currentTime ?? currentTime;
+        const payload = {
+          queue,
+          currentIndex,
+          song: currentSong,
+          currentTime: time,
+          isPlaying,
+        };
+        localStorage.setItem("wf_player_state", JSON.stringify(payload));
+      } catch {}
+    }
+
+    window.addEventListener("beforeunload", saveState);
+    window.addEventListener("pagehide", saveState);
+    return () => {
+      window.removeEventListener("beforeunload", saveState);
+      window.removeEventListener("pagehide", saveState);
+    };
+  }, [queue, currentIndex, currentSong, currentTime, isPlaying]);
+
+  // Global keyboard shortcuts (always register to keep hook order stable)
+  useEffect(() => {
+    function isTypingTarget(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName.toLowerCase();
+      return tag === "input" || tag === "textarea" || target.isContentEditable;
+    }
+
+    function seekBy(seconds: number) {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const total = Number.isFinite(audio.duration) ? audio.duration : duration;
+      if (!total || Number.isNaN(total)) return;
+      const nextTime = Math.max(0, Math.min(total, (audio.currentTime || 0) + seconds));
+      audio.currentTime = nextTime;
+      setCurrentTime(nextTime);
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (isTypingTarget(e.target)) return;
+      // Spacebar toggles play/pause
+      if ((e.code === "Space" || e.key === " " || e.key === "Spacebar") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggle();
+        return;
+      }
+      // Meta + Arrow for previous/next track
+      if (e.metaKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        e.stopPropagation();
+        next();
+        return;
+      }
+      if (e.metaKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        e.stopPropagation();
+        previous();
+        return;
+      }
+      // Arrow keys for seeking +/- 5 seconds
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        e.stopPropagation();
+        seekBy(5);
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        e.stopPropagation();
+        seekBy(-5);
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true } as any);
+  }, [next, previous, duration, toggle]);
 
   if (!currentSong) return null;
   const progress = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
@@ -93,7 +208,26 @@ function PlayerBar(): React.ReactElement | null {
 
   return (
     <div className="fixed bottom-0 inset-x-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <audio ref={audioRef} hidden playsInline />
+      <audio
+        ref={audioRef}
+        hidden
+        playsInline
+        preload="metadata"
+        onLoadedMetadata={() => {
+          const audio = audioRef.current;
+          if (!audio) return;
+          setDuration(audio.duration || 0);
+          const pending = savedSeekRef.current;
+          if (typeof pending === "number") {
+            const clamped = Math.max(0, Math.min(audio.duration || 0, pending));
+            audio.currentTime = clamped;
+            setCurrentTime(clamped);
+            savedSeekRef.current = null;
+          }
+        }}
+        onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
+        onEnded={handleEnded}
+      />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
         <div className="flex items-center gap-3 sm:gap-4">
           <img src={currentSong.imageUrl} alt="cover" className="hidden sm:block w-12 h-12 rounded object-cover" />
