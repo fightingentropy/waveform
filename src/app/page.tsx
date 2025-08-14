@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { SongGrid } from "@/components/SongGrid";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -36,7 +35,7 @@ export default async function Home() {
       id: `top100-${f}`,
       title,
       artist,
-      imageUrl: `/uploads/images/helix-${(i % 3) + 1}.jpg`,
+      imageUrl: `/api/artwork/${folderEncoded}/${encodeURIComponent(f)}`,
       audioUrl: `/uploads/audio/${folderEncoded}/${encodeURIComponent(f)}`,
     };
   });
@@ -45,9 +44,6 @@ export default async function Home() {
     <div className="px-6 py-8 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-semibold">Home</h1>
-        <Link href="/upload" className="h-9 px-4 rounded bg-foreground text-background">
-          Upload
-        </Link>
       </div>
       {songs.length === 0 ? (
         <div className="opacity-70">No songs found in Top 100.</div>
