@@ -1,4 +1,4 @@
-Spotify Clone built with Next.js 15 (App Router), Tailwind, Prisma (SQLite), and NextAuth.
+Waveform — a minimal music player built with Next.js 15 (App Router), Tailwind, Prisma (SQLite), and NextAuth.
 
 ### Quick start
 - Install dependencies: `npm install`
