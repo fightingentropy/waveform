@@ -15,11 +15,22 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
-  type AppSession = Session & { user: NonNullable<Session["user"]> & { id: string } };
-  const s = session as AppSession | null;
-  if (!s?.user?.email || !s.user.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Check for admin upload bypass
+  const adminKey = req.headers.get("x-admin-key");
+  const expectedAdminKey = process.env.ADMIN_UPLOAD_KEY;
+  const isAdminUpload = adminKey && expectedAdminKey && adminKey === expectedAdminKey;
+  
+  let userId: string | null = null;
+  
+  if (!isAdminUpload) {
+    // Regular user upload - require authentication
+    const session = await getServerSession(authOptions);
+    type AppSession = Session & { user: NonNullable<Session["user"]> & { id: string } };
+    const s = session as AppSession | null;
+    if (!s?.user?.email || !s.user.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    userId = s.user.id;
   }
 
   let title = "";
@@ -58,7 +69,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
   }
 
-  const song = await prisma.song.create({ data: { title, artist, imageUrl, audioUrl, userId: s.user.id } });
+  const song = await prisma.song.create({ data: { title, artist, imageUrl, audioUrl, userId } });
 
   return NextResponse.json(song, { status: 201 });
 }
