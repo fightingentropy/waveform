@@ -152,8 +152,12 @@ function PlayerBar(): React.ReactElement | null {
       setDuration(0);
       return;
     }
-    const absolute = location.origin + src;
-    if (audio.src !== absolute) audio.src = absolute;
+    function resolveAudioUrl(url: string): string {
+      if (/^https?:\/\//i.test(url) || url.startsWith("//")) return url;
+      return url.startsWith("/") ? location.origin + url : new URL(url, location.origin).toString();
+    }
+    const finalSrc = resolveAudioUrl(src);
+    if (audio.src !== finalSrc) audio.src = finalSrc;
     if (other && other !== audio) {
       // Ensure the inactive element is quiet and not playing
       try { other.pause(); } catch {}
@@ -226,8 +230,12 @@ function PlayerBar(): React.ReactElement | null {
 
         // Prepare incoming track
         suppressAutoLoadRef.current = true;
-        const absoluteNext = location.origin + nextSong.audioUrl;
-        if (incoming.src !== absoluteNext) incoming.src = absoluteNext;
+        function resolveAudioUrl(url: string): string {
+          if (/^https?:\/\//i.test(url) || url.startsWith("//")) return url;
+          return url.startsWith("/") ? location.origin + url : new URL(url, location.origin).toString();
+        }
+        const nextSrc = resolveAudioUrl(nextSong.audioUrl);
+        if (incoming.src !== nextSrc) incoming.src = nextSrc;
         incoming.currentTime = 0;
         incoming.volume = 0;
 
