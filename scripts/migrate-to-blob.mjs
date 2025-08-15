@@ -1,5 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { readdir, stat, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { put } from "@vercel/blob";
@@ -37,14 +36,46 @@ function sanitizeFileName(name) {
 	return name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
 }
 
+async function loadEnv() {
+	const envLocalPath = join(__dirname, "..", ".env.local");
+	const envPath = join(__dirname, "..", ".env");
+	for (const p of [envLocalPath, envPath]) {
+		try {
+			const content = await readFile(p, "utf8");
+			for (const rawLine of content.split(/\r?\n/)) {
+				const line = rawLine.trim();
+				if (!line || line.startsWith("#")) continue;
+				const eq = line.indexOf("=");
+				if (eq === -1) continue;
+				const key = line.slice(0, eq).trim();
+				let value = line.slice(eq + 1).trim();
+				if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+					value = value.slice(1, -1);
+				}
+				if (!(key in process.env)) process.env[key] = value;
+			}
+		} catch {}
+	}
+}
+
 async function main() {
+	await loadEnv();
 	if (!process.env.BLOB_READ_WRITE_TOKEN) {
 		console.error("BLOB_READ_WRITE_TOKEN is required in env");
 		process.exit(1);
 	}
 
 	const { PrismaClient } = await import("../src/generated/prisma/index.js");
-	const prisma = new PrismaClient();
+	const { PrismaLibSQL } = await import("@prisma/adapter-libsql");
+	const tursoUrl = process.env.TURSO_DATABASE_URL;
+	const tursoToken = process.env.TURSO_AUTH_TOKEN;
+	if (!tursoUrl || !tursoToken) {
+		console.error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required in env");
+		process.exit(1);
+	}
+	const adapter = new PrismaLibSQL({ url: tursoUrl, authToken: tursoToken });
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const prisma = new PrismaClient({ adapter });
 
 	const top100Dir = join(__dirname, "public", "uploads", "audio", "top 100");
 	try {
@@ -62,8 +93,8 @@ async function main() {
 		const { artist, title } = parseArtistAndTitle(fileName);
 
 		const audioKey = `audio/top-100/${sanitizeFileName(fileName)}`;
-		const audioStream = createReadStream(path);
-		const audioBlob = await put(audioKey, audioStream, { access: "public" });
+		const audioBuffer = await readFile(path);
+		const audioBlob = await put(audioKey, audioBuffer, { access: "public", contentType: "audio/mpeg" });
 
 		let imageUrl = "/uploads/images/helix-1.jpg";
 		try {
