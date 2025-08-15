@@ -17,11 +17,7 @@ export default async function Home() {
   return (
     <div className="px-6 py-8 max-w-7xl mx-auto">
       <div className="mb-6" />
-      {songs.length === 0 ? (
-        <div className="opacity-70">No songs found in Top 100.</div>
-      ) : (
-        <SongGrid songs={songs} />
-      )}
+      <SongGrid songs={songs} />
       <div className="h-24" />
     </div>
   );
