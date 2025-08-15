@@ -35,30 +35,37 @@ async function main() {
 
   const client = createClient({ url: tursoUrl, authToken: tursoToken });
 
-  // Use the SQL that Prisma generated for the initial migration
-  const sqlPath = join(process.cwd(), "prisma", "migrations", "20250812220123_init", "migration.sql");
-  const sql = await readFile(sqlPath, "utf8");
-
-  // Split into statements on semicolons while preserving order
-  const statements = sql
-    .split(/;\s*\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  for (const stmt of statements) {
+  // Read and apply all Prisma migration SQL files in order
+  const migrationsDir = join(process.cwd(), "prisma", "migrations");
+  const entriesRaw = await import("node:fs/promises").then((m) => m.readdir(migrationsDir, { withFileTypes: true }));
+  const dirs = entriesRaw.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  for (const dir of dirs) {
+    const sqlPath = join(migrationsDir, dir, "migration.sql");
+    let sql = "";
     try {
-      await client.execute(stmt);
-    } catch (err) {
-      // Ignore 'table already exists' and 'index already exists' errors to make script idempotent
-      const msg = String(err?.message || err);
-      const ignorable =
-        msg.includes("already exists") ||
-        msg.includes("duplicate column") ||
-        msg.includes("UNIQUE constraint failed") ||
-        msg.includes("no such table: _prisma_migrations");
-      if (!ignorable) {
-        console.error("Failed statement:\n", stmt);
-        throw err;
+      sql = await readFile(sqlPath, "utf8");
+    } catch {
+      continue;
+    }
+    const statements = sql
+      .split(/;\s*\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const stmt of statements) {
+      try {
+        await client.execute(stmt);
+      } catch (err) {
+        const msg = String(err?.message || err);
+        const ignorable =
+          msg.includes("already exists") ||
+          msg.includes("duplicate column") ||
+          msg.includes("UNIQUE constraint failed") ||
+          msg.includes("no such table: _prisma_migrations");
+        if (!ignorable) {
+          console.error(`Failed in migration ${dir}. Statement:`);
+          console.error(stmt);
+          throw err;
+        }
       }
     }
   }

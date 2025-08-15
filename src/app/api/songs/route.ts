@@ -58,8 +58,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
   }
 
-  const userId = s.user.id;
-  const song = await prisma.song.create({ data: { title, artist, imageUrl, audioUrl, userId } });
+  const song = await prisma.song.create({ data: { title, artist, imageUrl, audioUrl, userId: s.user.id } });
 
   return NextResponse.json(song, { status: 201 });
 }

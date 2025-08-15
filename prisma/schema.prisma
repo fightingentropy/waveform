@@ -74,8 +74,8 @@ model Song {
   artist    String
   imageUrl  String
   audioUrl  String
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   likes     Like[]
   playlists PlaylistSong[]
   createdAt DateTime @default(now())
