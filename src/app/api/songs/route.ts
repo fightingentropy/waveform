@@ -16,6 +16,13 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  // In production on Vercel the filesystem is read-only. Disable uploads in demo deploys.
+  if (process.env.VERCEL || process.env.NODE_ENV === "production") {
+    return NextResponse.json(
+      { error: "Uploads are disabled in the demo deployment. Configure cloud storage (e.g. Vercel Blob/S3) to enable uploads." },
+      { status: 501 }
+    );
+  }
   const session = await getServerSession(authOptions);
   type AppSession = Session & { user: NonNullable<Session["user"]> & { id: string } };
   const s = session as AppSession | null;
