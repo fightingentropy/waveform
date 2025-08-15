@@ -25,35 +25,96 @@ function PlayerBar(): React.ReactElement | null {
     setSong,
     setQueue,
     pause,
+    crossfadeEnabled,
+    crossfadeSeconds,
+    setCrossfadeEnabled,
+    setCrossfadeSeconds,
   } = usePlayerStore();
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Dual audio elements for real crossfade
+  const audioARef = useRef<HTMLAudioElement | null>(null);
+  const audioBRef = useRef<HTMLAudioElement | null>(null);
+  const [activeIdx, setActiveIdx] = useState<0 | 1>(0);
+  const getActiveAudio = () => (activeIdx === 0 ? audioARef.current : audioBRef.current);
+  const getInactiveAudio = () => (activeIdx === 0 ? audioBRef.current : audioARef.current);
+
+  const crossfadingRef = useRef<boolean>(false);
+  const suppressAutoLoadRef = useRef<boolean>(false);
+  const volumeRef = useRef<number>(volume);
+  const mutedRef = useRef<boolean>(isMuted);
+
   const savedSeekRef = useRef<number | null>(null);
   const [duration, setDuration] = useState<number>(0);
   const [currentTime, setCurrentTime] = useState<number>(0);
 
   const src = currentSong?.audioUrl ?? null;
 
+  // Client hydration of crossfade settings to ensure feature works without visiting /settings
   useEffect(() => {
-    if (!audioRef.current) return;
-    audioRef.current.muted = isMuted;
+    try {
+      const enabled = localStorage.getItem("wf_crossfade_enabled") === "1";
+      const secs = Math.max(0, Math.min(12, Number(localStorage.getItem("wf_crossfade_seconds") ?? 0)));
+      if (enabled !== crossfadeEnabled) setCrossfadeEnabled(enabled);
+      if (secs !== crossfadeSeconds) setCrossfadeSeconds(secs);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep mute state in sync on both elements
+  useEffect(() => {
+    const a = audioARef.current;
+    const b = audioBRef.current;
+    if (a) a.muted = isMuted;
+    if (b) b.muted = isMuted;
   }, [isMuted]);
 
-  useEffect(() => {
-    if (!audioRef.current) return;
-    audioRef.current.volume = volume;
-  }, [volume]);
+  // Track latest volume/mute for fades without re-running effects
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+  useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
 
-  // Restore last played queue/song and time on mount
+  // Keep volume on the active element (crossfade code manages both during fades)
+  useEffect(() => {
+    if (crossfadingRef.current) return;
+    const audio = getActiveAudio();
+    if (!audio) return;
+    audio.volume = isMuted ? 0 : volume;
+  }, [volume, isMuted, activeIdx]);
+
+  // Ensure play/pause controls affect both elements during an active crossfade
+  useEffect(() => {
+    const a = audioARef.current;
+    const b = audioBRef.current;
+    if (crossfadingRef.current) {
+      if (isPlaying) {
+        a?.play().catch(() => {});
+        b?.play().catch(() => {});
+      } else {
+        try { a?.pause(); } catch {}
+        try { b?.pause(); } catch {}
+      }
+    } else {
+      const active = getActiveAudio();
+      const inactive = getInactiveAudio();
+      if (isPlaying) active?.play().catch(() => {});
+      else try { active?.pause(); } catch {}
+      // Keep inactive paused when not crossfading
+      if (inactive && inactive !== active) {
+        try { inactive.pause(); } catch {}
+        inactive.currentTime = inactive.currentTime; // noop to avoid iOS suspending issues
+      }
+    }
+  }, [isPlaying, activeIdx]);
+
+  // Restore last played queue/song and time on client mount to avoid SSR mismatches
   useEffect(() => {
     try {
       const raw = localStorage.getItem("wf_player_state");
       if (!raw) return;
       const data = JSON.parse(raw) as
         | {
-            queue?: any[];
+            queue?: import("@/store/player").PlayerSong[];
             currentIndex?: number;
-            song?: any;
+            song?: import("@/store/player").PlayerSong;
             currentTime?: number;
             isPlaying?: boolean;
           }
@@ -78,33 +139,152 @@ function PlayerBar(): React.ReactElement | null {
     } catch {}
   }, [setSong, setQueue, pause]);
 
-  function handleEnded() {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (repeatMode === "one") {
-      audio.currentTime = 0;
-      audio.play().catch(() => {});
-      return;
-    }
-    next();
-  }
-
+  // Load current song into the ACTIVE element when not crossfading
   useEffect(() => {
-    const audio = audioRef.current;
+    if (suppressAutoLoadRef.current) return;
+    const audio = getActiveAudio();
+    const other = getInactiveAudio();
     if (!audio) return;
     if (!src) {
       audio.pause();
+      if (other) other.pause();
       setCurrentTime(0);
       setDuration(0);
       return;
     }
     const absolute = location.origin + src;
-    if (audio.src !== absolute) {
-      audio.src = absolute;
+    if (audio.src !== absolute) audio.src = absolute;
+    if (other && other !== audio) {
+      // Ensure the inactive element is quiet and not playing
+      try { other.pause(); } catch {}
+      other.volume = 0;
     }
     if (isPlaying) audio.play().catch(() => { pause(); });
     else audio.pause();
-  }, [src, isPlaying, pause]);
+  }, [src, isPlaying, pause, activeIdx]);
+
+  // Crossfade: if enabled, monitor active element time and overlap next track
+  useEffect(() => {
+    if (!crossfadeEnabled) return;
+    const audio = getActiveAudio();
+    if (!audio) return;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    const fadeWindow = Math.min(crossfadeSeconds, Math.max(0, duration / 2));
+    if (fadeWindow <= 0) return;
+
+    let raf: number | null = null;
+    let started = false;
+
+    function step() {
+      const current = getActiveAudio();
+      if (!current) return;
+      const remaining = (duration || 0) - (current.currentTime || 0);
+      if (!started && remaining <= fadeWindow + 0.05 && isPlaying && repeatMode !== "one") {
+        started = true;
+        crossfadingRef.current = true;
+
+        const fromAudio = current;
+        const toAudio = getInactiveAudio();
+        if (!toAudio) {
+          crossfadingRef.current = false;
+          return;
+        }
+        const incoming = toAudio as HTMLAudioElement;
+        
+        // Compute upcoming track based on current queue snapshot
+        let nextIdx = currentIndex;
+        let nextSong = undefined as undefined | import("@/store/player").PlayerSong;
+        if (Array.isArray(queue) && queue.length > 0) {
+          if (shuffle) {
+            if (queue.length === 1) {
+              crossfadingRef.current = false;
+              return;
+            }
+            let idx = currentIndex;
+            while (idx === currentIndex) {
+              idx = Math.floor(Math.random() * queue.length);
+            }
+            nextIdx = idx;
+          } else {
+            const atEnd = currentIndex >= queue.length - 1;
+            if (atEnd) {
+              if (repeatMode === "all") nextIdx = 0;
+              else {
+                crossfadingRef.current = false;
+                return;
+              }
+            } else {
+              nextIdx = currentIndex + 1;
+            }
+          }
+          nextSong = queue[nextIdx];
+        } else {
+          crossfadingRef.current = false;
+          return;
+        }
+        if (!nextSong) { crossfadingRef.current = false; return; }
+
+        // Prepare incoming track
+        suppressAutoLoadRef.current = true;
+        const absoluteNext = location.origin + nextSong.audioUrl;
+        if (incoming.src !== absoluteNext) incoming.src = absoluteNext;
+        incoming.currentTime = 0;
+        incoming.volume = 0;
+
+        // Do not switch UI yet; we will switch after fade completes to keep time/progress stable
+
+        const fadeMs = fadeWindow * 1000;
+        const startTs = performance.now();
+        const targetVol = mutedRef.current ? 0 : volumeRef.current;
+        const fromStartTime = fromAudio.currentTime || 0;
+        // Lock the total duration snapshot used for remaining calculations during fade
+        const totalDurationSnapshot = Number.isFinite(fromAudio.duration) ? fromAudio.duration : duration;
+
+        // Start incoming playback, ensure it's running while we fade
+        incoming.play().catch(() => {});
+
+        function fade() {
+          const now = performance.now();
+          const elapsed = Math.min(fadeMs, now - startTs);
+          const t = elapsed / fadeMs;
+          // Ease linear
+          const fromVol = Math.max(0, (mutedRef.current ? 0 : volumeRef.current) * (1 - t));
+          const toVol = Math.max(0, targetVol * t);
+          // Apply volumes only if still the same segment (avoid jumps after seeks)
+          if ((fromAudio.currentTime || 0) >= fromStartTime) {
+            fromAudio.volume = fromVol;
+          }
+          incoming.volume = toVol;
+
+          if (elapsed < fadeMs && isPlaying) {
+            raf = requestAnimationFrame(fade);
+          } else {
+            // Finish: pause outgoing, keep incoming playing, then switch UI to the new track
+            try { fromAudio.pause(); } catch {}
+            if (!isPlaying) { try { incoming.pause(); } catch {} }
+            // Keep previous track silent to avoid bleed-through
+            fromAudio.volume = 0;
+            // Switch UI/active element now that audio is already running
+            setQueue(queue, nextIdx);
+            setActiveIdx(activeIdx === 0 ? 1 : 0);
+            // Update duration from incoming element if known
+            if (Number.isFinite(incoming.duration)) {
+              setDuration(incoming.duration || 0);
+            }
+            suppressAutoLoadRef.current = false;
+            crossfadingRef.current = false;
+          }
+        }
+        raf = requestAnimationFrame(fade);
+      }
+      if (!started) raf = requestAnimationFrame(step);
+    }
+
+    raf = requestAnimationFrame(step);
+    // Ensure we don't pause or change volume elsewhere during fade
+    return () => { if (raf) cancelAnimationFrame(raf); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crossfadeEnabled, crossfadeSeconds, duration, isPlaying, repeatMode]);
 
   // Save queue/song and playback position right before page unload
   useEffect(() => {
@@ -114,7 +294,7 @@ function PlayerBar(): React.ReactElement | null {
           localStorage.removeItem("wf_player_state");
           return;
         }
-        const audio = audioRef.current;
+        const audio = getActiveAudio();
         const time = audio?.currentTime ?? currentTime;
         const payload = {
           queue,
@@ -144,7 +324,7 @@ function PlayerBar(): React.ReactElement | null {
     }
 
     function seekBy(seconds: number) {
-      const audio = audioRef.current;
+      const audio = getActiveAudio();
       if (!audio) return;
       const total = Number.isFinite(audio.duration) ? audio.duration : duration;
       if (!total || Number.isNaN(total)) return;
@@ -190,17 +370,22 @@ function PlayerBar(): React.ReactElement | null {
     }
 
     window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", onKeyDown, { capture: true } as any);
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true } as AddEventListenerOptions);
   }, [next, previous, duration, toggle]);
 
   if (!currentSong) return null;
-  const progress = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  // const progress = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
   function onSeek(value: number) {
-    const audio = audioRef.current;
-    if (!audio || !duration) return;
+    const active = getActiveAudio();
+    const inactive = getInactiveAudio();
+    if (!active || !duration) return;
     const nextTime = Math.max(0, Math.min(duration, value));
-    audio.currentTime = nextTime;
+    active.currentTime = nextTime;
+    // Keep inactive in sync during crossfade seek to avoid jump when roles swap
+    if (crossfadingRef.current && inactive) {
+      try { inactive.currentTime = Math.max(0, Math.min(inactive.duration || nextTime, nextTime)); } catch {}
+    }
     setCurrentTime(nextTime);
   }
 
@@ -209,13 +394,13 @@ function PlayerBar(): React.ReactElement | null {
   return (
     <div className="fixed bottom-0 inset-x-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <audio
-        ref={audioRef}
+        ref={audioARef}
         hidden
         playsInline
-        preload="metadata"
-        onLoadedMetadata={() => {
-          const audio = audioRef.current;
-          if (!audio) return;
+        preload="auto"
+        onLoadedMetadata={(e) => {
+          const audio = e.currentTarget;
+          if (audio !== getActiveAudio()) return;
           setDuration(audio.duration || 0);
           const pending = savedSeekRef.current;
           if (typeof pending === "number") {
@@ -224,9 +409,55 @@ function PlayerBar(): React.ReactElement | null {
             setCurrentTime(clamped);
             savedSeekRef.current = null;
           }
+          audio.volume = isMuted ? 0 : volume;
         }}
-        onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
-        onEnded={handleEnded}
+        onTimeUpdate={(e) => {
+          if (e.currentTarget === getActiveAudio()) setCurrentTime(e.currentTarget.currentTime || 0);
+        }}
+        onEnded={(e) => {
+          if (e.currentTarget !== getActiveAudio()) return;
+          if (crossfadingRef.current) return;
+          const audio = e.currentTarget;
+          if (repeatMode === "one") {
+            audio.currentTime = 0;
+            audio.play().catch(() => {});
+            return;
+          }
+          next();
+        }}
+      />
+      <audio
+        ref={audioBRef}
+        hidden
+        playsInline
+        preload="auto"
+        onLoadedMetadata={(e) => {
+          const audio = e.currentTarget;
+          if (audio !== getActiveAudio()) return;
+          setDuration(audio.duration || 0);
+          const pending = savedSeekRef.current;
+          if (typeof pending === "number") {
+            const clamped = Math.max(0, Math.min(audio.duration || 0, pending));
+            audio.currentTime = clamped;
+            setCurrentTime(clamped);
+            savedSeekRef.current = null;
+          }
+          audio.volume = isMuted ? 0 : volume;
+        }}
+        onTimeUpdate={(e) => {
+          if (e.currentTarget === getActiveAudio()) setCurrentTime(e.currentTarget.currentTime || 0);
+        }}
+        onEnded={(e) => {
+          if (e.currentTarget !== getActiveAudio()) return;
+          if (crossfadingRef.current) return;
+          const audio = e.currentTarget;
+          if (repeatMode === "one") {
+            audio.currentTime = 0;
+            audio.play().catch(() => {});
+            return;
+          }
+          next();
+        }}
       />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
         <div className="flex items-center gap-3 sm:gap-4">

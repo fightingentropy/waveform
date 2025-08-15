@@ -19,6 +19,8 @@ type PlayerState = {
   isMuted: boolean;
   shuffle: boolean;
   repeatMode: "off" | "one" | "all";
+  crossfadeEnabled: boolean;
+  crossfadeSeconds: number; // 0..12
   setQueue: (songs: PlayerSong[], startIndex: number) => void;
   setSong: (song: PlayerSong | null) => void;
   play: () => void;
@@ -30,6 +32,8 @@ type PlayerState = {
   toggleMute: () => void;
   toggleShuffle: () => void;
   cycleRepeatMode: () => void;
+  setCrossfadeEnabled: (enabled: boolean) => void;
+  setCrossfadeSeconds: (seconds: number) => void;
 };
 
 export const usePlayerStore = create<PlayerState>((set) => ({
@@ -41,6 +45,9 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   isMuted: false,
   shuffle: false,
   repeatMode: "off",
+  // Initialize deterministic values to avoid SSR/CSR hydration mismatch; rehydrate from localStorage on client mount
+  crossfadeEnabled: false,
+  crossfadeSeconds: 0,
   setQueue: (songs, startIndex) =>
     set(() => ({
       queue: songs,
@@ -111,6 +118,15 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle })),
   cycleRepeatMode: () =>
     set((s) => ({ repeatMode: s.repeatMode === "off" ? "all" : s.repeatMode === "all" ? "one" : "off" })),
+  setCrossfadeEnabled: (enabled) => {
+    try { if (typeof window !== "undefined") localStorage.setItem("wf_crossfade_enabled", enabled ? "1" : "0"); } catch {}
+    set({ crossfadeEnabled: enabled });
+  },
+  setCrossfadeSeconds: (seconds) => {
+    const clamped = Math.max(0, Math.min(12, seconds));
+    try { if (typeof window !== "undefined") localStorage.setItem("wf_crossfade_seconds", String(clamped)); } catch {}
+    set({ crossfadeSeconds: clamped });
+  },
 }));
 
 
