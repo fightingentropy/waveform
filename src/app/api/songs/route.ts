@@ -22,34 +22,44 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const form = await req.formData();
-  const title = String(form.get("title") ?? "").trim();
-  const artist = String(form.get("artist") ?? "").trim();
-  const image = form.get("image") as File | null;
-  const audio = form.get("audio") as File | null;
+  let title = "";
+  let artist = "";
+  let imageUrl = "";
+  let audioUrl = "";
+  const contentType = req.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const data = await req.json();
+    title = String(data?.title ?? "").trim();
+    artist = String(data?.artist ?? "").trim();
+    imageUrl = String(data?.imageUrl ?? "").trim();
+    audioUrl = String(data?.audioUrl ?? "").trim();
+  } else {
+    const form = await req.formData();
+    title = String(form.get("title") ?? "").trim();
+    artist = String(form.get("artist") ?? "").trim();
+    const image = form.get("image") as File | null;
+    const audio = form.get("audio") as File | null;
+    if (!image || !audio) {
+      return NextResponse.json({ error: "Missing files" }, { status: 400 });
+    }
+    const imgId = uuidv4();
+    const audId = uuidv4();
+    const imageFileName = `${imgId}-${image.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
+    const audioFileName = `${audId}-${audio.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
+    const [imageRes, audioRes] = await Promise.all([
+      put(`images/${imageFileName}`, image, { access: "public" }),
+      put(`audio/${audioFileName}`, audio, { access: "public" }),
+    ]);
+    imageUrl = imageRes.url;
+    audioUrl = audioRes.url;
+  }
 
-  if (!title || !artist || !image || !audio) {
+  if (!title || !artist || !imageUrl || !audioUrl) {
     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
   }
 
-  const imgId = uuidv4();
-  const audId = uuidv4();
-  const imageFileName = `${imgId}-${image.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
-  const audioFileName = `${audId}-${audio.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
-
-  // Upload to Vercel Blob (requires BLOB_READ_WRITE_TOKEN in env)
-  const [imageRes, audioRes] = await Promise.all([
-    put(`images/${imageFileName}`, image, { access: "public" }),
-    put(`audio/${audioFileName}`, audio, { access: "public" }),
-  ]);
-
-  const imageUrl = imageRes.url;
-  const audioUrl = audioRes.url;
-
   const userId = s.user.id;
-  const song = await prisma.song.create({
-    data: { title, artist, imageUrl, audioUrl, userId },
-  });
+  const song = await prisma.song.create({ data: { title, artist, imageUrl, audioUrl, userId } });
 
   return NextResponse.json(song, { status: 201 });
 }
