@@ -32,7 +32,7 @@ export function SongCard({ song, onPlay }: { song: PlayerSong; onPlay?: () => vo
         isActive && "ring-2 ring-emerald-500"
       )}
     >
-      <img src={song.imageUrl} alt={song.title} className="aspect-square w-full object-cover" />
+      {song.imageUrl && <img src={song.imageUrl} alt={song.title} className="aspect-square w-full object-cover" />}
       <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
       <div className="absolute bottom-2 left-2 right-2 flex items-end justify-between">
         <div className="text-left">

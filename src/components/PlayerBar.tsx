@@ -461,7 +461,7 @@ function PlayerBar(): React.ReactElement | null {
       />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
         <div className="flex items-center gap-3 sm:gap-4">
-          <img src={currentSong.imageUrl} alt="cover" className="hidden sm:block w-12 h-12 rounded object-cover" />
+          {currentSong.imageUrl && <img src={currentSong.imageUrl} alt="cover" className="hidden sm:block w-12 h-12 rounded object-cover" />}
           <div className="min-w-0">
             <div className="text-sm font-medium truncate">{currentSong.title}</div>
             <div className="text-xs opacity-70 truncate">{currentSong.artist}</div>
