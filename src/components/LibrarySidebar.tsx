@@ -9,6 +9,11 @@ import { join } from "node:path";
 export default async function LibrarySidebar() {
   const session = await getServerSession(authOptions);
 
+  // Don't show sidebar if user is not signed in
+  if (!session) {
+    return null;
+  }
+
   // Count local library files as "Liked Songs"
   let likesCount = 0;
   try {
@@ -19,7 +24,7 @@ export default async function LibrarySidebar() {
     likesCount = 0;
   }
 
-  const userId = (session?.user as { id?: string } | undefined)?.id;
+  const userId = (session.user as { id?: string }).id;
   const playlists = userId
     ? await prisma.playlist.findMany({
         where: { userId },
@@ -56,8 +61,7 @@ export default async function LibrarySidebar() {
             </div>
           </Link>
 
-          {userId ? (
-            playlists.length > 0 && (
+          {playlists.length > 0 && (
             <div className="mt-3 pt-3 border-t border-black/10 dark:border-white/10">
               <div className="px-2 mb-2 text-xs uppercase tracking-wide opacity-60">Playlists</div>
               <div className="space-y-1">
@@ -76,14 +80,6 @@ export default async function LibrarySidebar() {
                     </div>
                   </Link>
                 ))}
-              </div>
-            </div>
-            )
-          ) : (
-            <div className="mt-3 pt-3 border-t border-black/10 dark:border-white/10">
-              <div className="px-2 mb-2 text-xs uppercase tracking-wide opacity-60">Playlists</div>
-              <div className="px-2 text-sm opacity-70">
-                <Link className="underline" href="/signin">Sign in</Link> to manage playlists.
               </div>
             </div>
           )}

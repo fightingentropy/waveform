@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
+import { upload } from "@vercel/blob/client";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
@@ -12,6 +13,7 @@ export default function UploadPage() {
   const [artist, setArtist] = useState("");
   const [image, setImage] = useState<File | null>(null);
   const [audio, setAudio] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -36,16 +38,19 @@ export default function UploadPage() {
     }
     setLoading(true);
     try {
-      const form = new FormData();
-      form.append("title", title);
-      form.append("artist", artist);
-      form.append("image", image);
-      form.append("audio", audio);
-      const res = await fetch("/api/songs", { method: "POST", body: form });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data?.error ?? "Upload failed");
-      }
+      // 1) Upload files directly to Blob using presigned token handler
+      const [imageBlob, audioBlob] = await Promise.all([
+        upload(image.name, image, { access: "public", handleUploadUrl: "/api/songs/upload-url" }),
+        upload(audio.name, audio, { access: "public", handleUploadUrl: "/api/songs/upload-url" }),
+      ]);
+
+      // 2) Create DB row using the returned Blob URLs
+      const res = await fetch("/api/songs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, artist, imageUrl: imageBlob.url, audioUrl: audioBlob.url }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error ?? "Upload failed");
       router.push("/");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload failed";
@@ -83,7 +88,7 @@ export default function UploadPage() {
         </div>
         <div>
           <label className="block text-sm mb-1">Audio file</label>
-          <input type="file" accept="audio/*" onChange={(e) => setAudio(e.target.files?.[0] ?? null)} />
+          <input type="file" accept="audio/*" onChange={(e) => setAudio(e.target.files?.[0] ?? null)} ref={fileInputRef} />
         </div>
         {error && <div className="text-sm text-red-600">{error}</div>}
         <button

@@ -1,0 +1,7 @@
+public/uploads/audio/top 100/**
+public/uploads/audio/**/*.mp3
+
+npm-debug.log*
+.yarn*
+.env
+.env.*

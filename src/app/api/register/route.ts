@@ -3,6 +3,13 @@ import { prisma } from "@/lib/prisma";
 import { hash } from "bcryptjs";
 
 export async function POST(req: Request) {
+  // In production demo, prevent writes on read-only SQLite
+  if (process.env.VERCEL || process.env.NODE_ENV === "production") {
+    return NextResponse.json(
+      { error: "Registration is disabled in the demo deployment." },
+      { status: 501 }
+    );
+  }
   const { name, email, password } = await req.json();
   if (!email || !password) {
     return NextResponse.json({ error: "Email and password are required" }, { status: 400 });

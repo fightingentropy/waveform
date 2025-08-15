@@ -1,11 +1,25 @@
 import { PrismaClient } from "@/generated/prisma";
+import { PrismaLibSQL } from "@prisma/adapter-libsql";
 
 declare global {
-  // eslint-disable-next-line no-var
   var prismaGlobal: PrismaClient | undefined;
 }
 
-const prismaClient = globalThis.prismaGlobal ?? new PrismaClient();
+function createPrisma(): PrismaClient {
+  const tursoUrl = process.env.TURSO_DATABASE_URL;
+  const tursoToken = process.env.TURSO_AUTH_TOKEN;
+  const useTurso = Boolean(tursoUrl && tursoToken);
+
+  if (useTurso) {
+    const adapter = new PrismaLibSQL({ url: tursoUrl!, authToken: tursoToken! });
+    // We intentionally cast here because the adapter option is not yet in our local Prisma types
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return new PrismaClient({ adapter } as any);
+  }
+  return new PrismaClient();
+}
+
+const prismaClient = globalThis.prismaGlobal ?? createPrisma();
 
 if (process.env.NODE_ENV !== "production") {
   globalThis.prismaGlobal = prismaClient;

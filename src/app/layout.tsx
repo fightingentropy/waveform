@@ -6,6 +6,8 @@ import { Providers } from "@/components/Providers";
 import { AuthButtons } from "@/components/AuthButtons";
 import { PlayerBar } from "@/components/PlayerBar";
 import LibrarySidebar from "@/components/LibrarySidebar";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/auth";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -25,11 +27,12 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const session = await getServerSession(authOptions);
   return (
     <html lang="en">
       <body suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}>
@@ -42,13 +45,15 @@ export default function RootLayout({
               </Link>
               <nav className="flex items-center gap-6">
                 <Link href="/" className="opacity-80 hover:opacity-100">Home</Link>
-                <Link href="/upload" className="opacity-80 hover:opacity-100">Upload</Link>
+                {session && (
+                  <Link href="/upload" className="opacity-80 hover:opacity-100">Upload</Link>
+                )}
                 <AuthButtons />
               </nav>
             </div>
           </header>
           <LibrarySidebar />
-          <main className="lg:pl-64">{children}</main>
+          <main className={session ? "lg:pl-64" : ""}>{children}</main>
           <PlayerBar />
         </Providers>
       </body>

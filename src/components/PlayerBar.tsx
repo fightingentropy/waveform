@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import { usePlayerStore } from "@/store/player";
 import { cn, formatTime } from "@/lib/utils";
 import { Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
 
 function PlayerBar(): React.ReactElement | null {
+  const { data: session } = useSession();
   const {
     queue,
     currentIndex,
@@ -29,6 +31,7 @@ function PlayerBar(): React.ReactElement | null {
     crossfadeSeconds,
     setCrossfadeEnabled,
     setCrossfadeSeconds,
+    clearPlayer,
   } = usePlayerStore();
 
   // Dual audio elements for real crossfade
@@ -59,6 +62,13 @@ function PlayerBar(): React.ReactElement | null {
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Clear player when user signs out
+  useEffect(() => {
+    if (!session && currentSong) {
+      clearPlayer();
+    }
+  }, [session, currentSong, clearPlayer]);
 
   // Keep mute state in sync on both elements
   useEffect(() => {
@@ -152,8 +162,12 @@ function PlayerBar(): React.ReactElement | null {
       setDuration(0);
       return;
     }
-    const absolute = location.origin + src;
-    if (audio.src !== absolute) audio.src = absolute;
+    function resolveAudioUrl(url: string): string {
+      if (/^https?:\/\//i.test(url) || url.startsWith("//")) return url;
+      return url.startsWith("/") ? location.origin + url : new URL(url, location.origin).toString();
+    }
+    const finalSrc = resolveAudioUrl(src);
+    if (audio.src !== finalSrc) audio.src = finalSrc;
     if (other && other !== audio) {
       // Ensure the inactive element is quiet and not playing
       try { other.pause(); } catch {}
@@ -226,8 +240,12 @@ function PlayerBar(): React.ReactElement | null {
 
         // Prepare incoming track
         suppressAutoLoadRef.current = true;
-        const absoluteNext = location.origin + nextSong.audioUrl;
-        if (incoming.src !== absoluteNext) incoming.src = absoluteNext;
+        function resolveAudioUrl(url: string): string {
+          if (/^https?:\/\//i.test(url) || url.startsWith("//")) return url;
+          return url.startsWith("/") ? location.origin + url : new URL(url, location.origin).toString();
+        }
+        const nextSrc = resolveAudioUrl(nextSong.audioUrl);
+        if (incoming.src !== nextSrc) incoming.src = nextSrc;
         incoming.currentTime = 0;
         incoming.volume = 0;
 
