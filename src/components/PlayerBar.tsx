@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import { usePlayerStore } from "@/store/player";
 import { cn, formatTime } from "@/lib/utils";
 import { Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
 
 function PlayerBar(): React.ReactElement | null {
+  const { data: session } = useSession();
   const {
     queue,
     currentIndex,
@@ -29,6 +31,7 @@ function PlayerBar(): React.ReactElement | null {
     crossfadeSeconds,
     setCrossfadeEnabled,
     setCrossfadeSeconds,
+    clearPlayer,
   } = usePlayerStore();
 
   // Dual audio elements for real crossfade
@@ -59,6 +62,13 @@ function PlayerBar(): React.ReactElement | null {
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Clear player when user signs out
+  useEffect(() => {
+    if (!session && currentSong) {
+      clearPlayer();
+    }
+  }, [session, currentSong, clearPlayer]);
 
   // Keep mute state in sync on both elements
   useEffect(() => {

@@ -7,10 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "prisma generate",
-    "db:apply:turso": "node scripts/apply-sql-to-turso.mjs",
-    "migrate:blob": "node scripts/migrate-to-blob.mjs",
-    "sync:blob": "node scripts/sync-blob-to-db.mjs"
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@vercel/blob": "^0.27.0",

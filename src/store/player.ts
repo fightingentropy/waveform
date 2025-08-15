@@ -34,6 +34,7 @@ type PlayerState = {
   cycleRepeatMode: () => void;
   setCrossfadeEnabled: (enabled: boolean) => void;
   setCrossfadeSeconds: (seconds: number) => void;
+  clearPlayer: () => void;
 };
 
 export const usePlayerStore = create<PlayerState>((set) => ({
@@ -126,6 +127,19 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     const clamped = Math.max(0, Math.min(12, seconds));
     try { if (typeof window !== "undefined") localStorage.setItem("wf_crossfade_seconds", String(clamped)); } catch {}
     set({ crossfadeSeconds: clamped });
+  },
+  clearPlayer: () => {
+    try {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("wf_player_state");
+      }
+    } catch {}
+    set({
+      queue: [],
+      currentIndex: -1,
+      currentSong: null,
+      isPlaying: false,
+    });
   },
 }));
 
