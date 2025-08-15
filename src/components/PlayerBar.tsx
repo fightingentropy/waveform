@@ -477,7 +477,9 @@ function PlayerBar(): React.ReactElement | null {
                 step={0.1}
                 value={currentTime}
                 onChange={(e) => onSeek(Number(e.target.value))}
-                className="w-full h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500"
+                tabIndex={-1}
+                onFocus={(e) => e.currentTarget.blur()}
+                className="w-full h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500 focus:outline-none focus-visible:outline-none"
               />
               <span className="text-xs tabular-nums opacity-70 w-10">{formatTime(duration)}</span>
             </div>
@@ -511,7 +513,9 @@ function PlayerBar(): React.ReactElement | null {
                 step={0.01}
                 value={isMuted ? 0 : volume}
                 onChange={(e) => setVolume(Number(e.target.value))}
-                className="w-28 h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500"
+                tabIndex={-1}
+                onFocus={(e) => e.currentTarget.blur()}
+                className="w-28 h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500 focus:outline-none focus-visible:outline-none"
               />
             </div>
           </div>
