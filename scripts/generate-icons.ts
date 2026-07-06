@@ -2,31 +2,46 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import sharp from "sharp";
 
+// All web icons derive from the app-icon master (the real Spotify mark: black
+// tile, green circle, black waves) so web and iOS share one identity. The
+// header logo + favicon use a circle-only cutout (transparent corners) so the
+// mark fills the frame; tile-backed contexts (apple-touch-icon, PWA icon, the
+// CoverImage fallback) keep the full square art.
 const root = join(import.meta.dir, "..");
-const svgPath = join(root, "public/icon.svg");
-const appleSvgPath = join(root, "public/apple-icon.svg");
-const svg = readFileSync(svgPath);
-const appleSvg = readFileSync(appleSvgPath);
+const masterPath = join(root, "mobile/assets/images/icon.png");
+const master = readFileSync(masterPath);
 
-async function pngFromSvg(source: Buffer, size: number) {
-  return sharp(source).resize(size, size).png().toBuffer();
+const MASTER_SIZE = 1024;
+// The green circle spans x 80→943 on the 1024 tile (measured), centered.
+const CIRCLE_DIAMETER = 864;
+const CIRCLE_OFFSET = Math.round((MASTER_SIZE - CIRCLE_DIAMETER) / 2);
+
+// Cut the green circle out of the tile: crop to its bounding square, resize,
+// then punch the corners transparent with a circular alpha mask. Two sharp
+// passes — a single pipeline composites after resize, so the full-size mask
+// wouldn't fit the resized image.
+async function circleOnly(size: number): Promise<Buffer> {
+  const cropped = await sharp(master)
+    .extract({ left: CIRCLE_OFFSET, top: CIRCLE_OFFSET, width: CIRCLE_DIAMETER, height: CIRCLE_DIAMETER })
+    .resize(size, size)
+    .png()
+    .toBuffer();
+  const mask = Buffer.from(
+    `<svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="#fff"/></svg>`,
+  );
+  return sharp(cropped)
+    .composite([{ input: mask, blend: "dest-in" }])
+    .png()
+    .toBuffer();
 }
 
-async function png(size: number) {
-  return pngFromSvg(svg, size);
+async function tile(size: number): Promise<Buffer> {
+  return sharp(master).resize(size, size).png().toBuffer();
 }
 
-async function applePng(size: number) {
-  return pngFromSvg(appleSvg, size);
-}
-
-const png16 = await png(16);
-const png32 = await png(32);
-const png48 = await png(48);
-const png512 = await png(512);
-
-writeFileSync(join(root, "public/apple-icon.png"), await applePng(180));
-writeFileSync(join(root, "public/icon-512.png"), png512);
+writeFileSync(join(root, "public/logo.png"), await circleOnly(256));
+writeFileSync(join(root, "public/apple-icon.png"), await tile(180));
+writeFileSync(join(root, "public/icon-512.png"), await tile(512));
 
 // ICO: PNG entries in a minimal ICO container (Windows Vista+ format).
 function buildIco(images: Array<{ size: number; data: Buffer }>) {
@@ -60,10 +75,10 @@ function buildIco(images: Array<{ size: number; data: Buffer }>) {
 writeFileSync(
   join(root, "public/favicon.ico"),
   buildIco([
-    { size: 16, data: png16 },
-    { size: 32, data: png32 },
-    { size: 48, data: png48 },
+    { size: 16, data: await circleOnly(16) },
+    { size: 32, data: await circleOnly(32) },
+    { size: 48, data: await circleOnly(48) },
   ]),
 );
 
-console.log("Generated public/favicon.ico, public/apple-icon.png, public/icon-512.png");
+console.log("Generated public/logo.png, public/favicon.ico, public/apple-icon.png, public/icon-512.png");
