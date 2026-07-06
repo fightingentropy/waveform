@@ -650,7 +650,7 @@ async function sha256Hex(value: string): Promise<string> {
 }
 
 const VERIFY_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24;
-const DEFAULT_EMAIL_FROM = "noreply@fightingentropy.org";
+const DEFAULT_EMAIL_FROM = "noreply@streamarena.xyz";
 
 // Cloudflare Email Service binding (public beta). Optional: the feature
 // gracefully no-ops when the binding is not configured, so registration still
@@ -986,7 +986,7 @@ async function fetchWithTimeout(
       ...init,
       signal: controller.signal,
       headers: {
-        "user-agent": "spotify/1.0 (+https://spotify.fightingentropy.org)",
+        "user-agent": "spotify/1.0 (+https://spotify.streamarena.xyz)",
         ...(init?.headers || {}),
       },
     });
@@ -3264,7 +3264,7 @@ function applySecurityHeaders(headers: Headers): void {
 // only when it's one of our own surfaces — never an arbitrary site.
 const CORS_ALLOWED_ORIGINS = new Set<string>([
   "capacitor://localhost",
-  "https://spotify.fightingentropy.org",
+  "https://spotify.streamarena.xyz",
   "https://spotify.erlinhoxha.workers.dev",
 ]);
 

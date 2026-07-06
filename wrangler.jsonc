@@ -42,8 +42,8 @@
 	"vars": {
 		"PLAYLISTS_EDITABLE": "1",
 		"AUTH_TRUST_HOST": "true",
-		"EMAIL_FROM": "noreply@fightingentropy.org",
-		"MAC_MINI_ORIGIN": "https://spotify.fightingentropy.org",
+		"EMAIL_FROM": "noreply@streamarena.xyz",
+		"MAC_MINI_ORIGIN": "https://spotify.streamarena.xyz",
 		"SPOTIFLAC_PROVIDER_ORDER": "qobuz-qobuz_x-qobuz_custom-tidal-tidal_x-tidal_custom-amazon-amazon_x-deezer-deezer_x-deezer_custom-apple",
 		"SPOTIFLAC_TIDAL_APIS": "https://tdl-a.spotbye.qzz.io,https://tdl-b.spotbye.qzz.io,https://tdl-c.spotbye.qzz.io,https://tdl-d.spotbye.qzz.io,https://tdl-e.spotbye.qzz.io",
 		"SPOTIFLAC_ACTIVE_TIDAL_API": "https://tdl-a.spotbye.qzz.io"

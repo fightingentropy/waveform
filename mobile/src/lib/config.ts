@@ -2,7 +2,7 @@ import Constants from "expo-constants";
 
 // Base origin for the UNCHANGED Cloudflare Worker backend. Everything — API data
 // calls and signed media — goes here. Override via app config `extra.apiOrigin`.
-const DEFAULT_API_ORIGIN = "https://spotify.fightingentropy.org";
+const DEFAULT_API_ORIGIN = "https://spotify.streamarena.xyz";
 
 export const API_ORIGIN: string = (
   (Constants.expoConfig?.extra as { apiOrigin?: string } | undefined)?.apiOrigin ||

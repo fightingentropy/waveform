@@ -304,7 +304,7 @@ Constants: `PODCAST_PROGRESS_WRITE_INTERVAL_MS = 5000`, `PODCAST_RESUME_MIN_SECO
 ---
 
 ## 12. Source loading & resolution
-- `resolvePlayableSrc(src)` (L56): blob/data/file/capacitor/http pass through; else `resolveNativeApiUrl` (rewrites `/api/...` to `NATIVE_API_ORIGIN = https://spotify.fightingentropy.org` on native); else `${location.origin}${src}`.
+- `resolvePlayableSrc(src)` (L56): blob/data/file/capacitor/http pass through; else `resolveNativeApiUrl` (rewrites `/api/...` to `NATIVE_API_ORIGIN = https://spotify.streamarena.xyz` on native); else `${location.origin}${src}`.
 - `loadAudioSource` (L835): native → set `audio.src` directly (AVPlayer handles http/HLS/file). Web HLS (`.m3u8`, not natively playable) → lazy-import `hls.js/light`, attach. Capacitor file → `attachNativeOfflineAudioSource` (acquire blob: URL; on failure fall back to the un-seekable scheme URL with a `[2.5s, 8s, 20s]` retry schedule that upgrades the element in place). Else set `crossOrigin` (`use-credentials` for our authed origins `NATIVE_API_ORIGIN` + `spotify.erlinhoxha.workers.dev`, `anonymous` for third-party radio, `null` same-origin) then `audio.src`.
 - `CREDENTIALED_AUDIO_ORIGINS` = our authed audio endpoints that need the session cookie when routed through Web Audio.
 

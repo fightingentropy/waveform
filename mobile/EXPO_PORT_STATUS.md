@@ -1,7 +1,7 @@
 # Spotify → Expo / React Native port — status
 
 This `mobile/` app is a fresh **Expo (SDK 56) / React Native** client for the existing
-self-hosted Spotify backend (`https://spotify.fightingentropy.org`). The backend is
+self-hosted Spotify backend (`https://spotify.streamarena.xyz`). The backend is
 **unchanged**; this is a new native client against the same HTTP API. Built per
 `docs/EXPO_PORT_PROMPT.md`; reconstruction notes for the original app live in
 `docs/port-notes/`.

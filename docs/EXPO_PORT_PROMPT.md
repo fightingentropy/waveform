@@ -5,7 +5,7 @@ You are porting a polished, working, self-hosted Spotify clone to a **fresh Expo
 ## 0. The situation
 
 - The existing app is a **React web app** (Vite + React 19 + Tailwind v4 + Zustand) wrapped in **Capacitor** for iOS. It also runs as a PWA.
-- The **backend does NOT change**. It is a Cloudflare Worker that proxies to a self-hosted Mac-mini Bun server. You are building a **new native client against the exact same HTTP API** (base origin `https://spotify.fightingentropy.org`).
+- The **backend does NOT change**. It is a Cloudflare Worker that proxies to a self-hosted Mac-mini Bun server. You are building a **new native client against the exact same HTTP API** (base origin `https://spotify.streamarena.xyz`).
 - **The existing source is available in this repo** — study it for exact behavior, look, and the API contract:
   - `src/client/` (pages, auth, offline, api client), `src/components/` (PlayerBar, NowPlayingSheet, SongGrid, etc.), `src/store/` (player.ts, likes.ts), `src/lib/` (crossfade-curve, native-audio, player-song, song-utils), `src/types/player.ts`, `src/client/styles.css` (design system), `ios/App/App/AudioEnginePlugin.swift` (the native audio engine to mirror), `src/server/local-music-server.ts` + `src/worker/index.ts` (the API — read-only reference).
 - **Reuse what's portable.** The Zustand stores, the types, the crossfade math, the shuffle/repeat logic, and all the pure-TS API/client logic port almost verbatim. Only the **UI (DOM→RN), the audio engine, the offline storage, and a few native bridges** are rewritten. (See §11 for the store/audio internals that do **not** port cleanly — `window`/`localStorage` probes throughout the stores, a relative `fetch("/api/likes")` + Capacitor haptics inside `likes.ts`, and the Web-Audio-bound fade bodies in `PlayerBar.tsx`.)
@@ -25,7 +25,7 @@ Goal: **pixel-faithful look, identical feature set, same backend.**
 
 2. **Two auth channels, on purpose.** API/data calls (auth, home, likes, playlists, offline, playback-state) authenticate with the **session cookie**. Media streaming authenticates with the **signed URL**. RN's `fetch` keeps cookies in the native cookie store by default (iOS `NSHTTPCookieStorage`, Android `CookieManager`), so `credentials: "include"`-style works for API calls. **Do not assume the audio player shares that cookie jar** — it doesn't; that's why media is signed.
 
-3. **API origin + relative URLs.** Everything goes to `https://spotify.fightingentropy.org`. The web app had a `capacitor://` URL-rewriting shim (`src/lib/native-api.ts`, `src/client/native-network.ts`) — **delete that concept entirely**; in RN just use the absolute base origin. Media URLs come back relative → prepend the base before handing to the player/image.
+3. **API origin + relative URLs.** Everything goes to `https://spotify.streamarena.xyz`. The web app had a `capacitor://` URL-rewriting shim (`src/lib/native-api.ts`, `src/client/native-network.ts`) — **delete that concept entirely**; in RN just use the absolute base origin. Media URLs come back relative → prepend the base before handing to the player/image.
 
 4. **Crossfade is the single hardest feature.** The current app does a **dual-deck (A/B) equal-power crossfade**: the outgoing track plays to its end fading down on `cos(θ)` while the next rises on `sin(θ)` (so `cos²+sin² = 1`, constant loudness). On iOS it uses **two native AVPlayer decks** (`AudioEnginePlugin.swift`). `react-native-track-player` is **single-player** — it can't overlap two tracks. Pick a path (see §7). The fade math (`src/lib/crossfade-curve.ts`) and the **scheduling/target/commit skeleton** in `src/components/PlayerBar.tsx` port; the actual **fade bodies do not** — they're fused to Web Audio / `HTMLMediaElement.volume` and are a rewrite (see §7 + §11).
 
@@ -40,7 +40,7 @@ Goal: **pixel-faithful look, identical feature set, same backend.**
 ## 2. Architecture
 
 ```
-Expo RN app  ──HTTPS──>  Cloudflare Worker (spotify.fightingentropy.org)  ──>  Mac-mini Bun server
+Expo RN app  ──HTTPS──>  Cloudflare Worker (spotify.streamarena.xyz)  ──>  Mac-mini Bun server
   (new)                   (unchanged)                                          (unchanged: music files, signing, discover staging)
 ```
 
@@ -119,7 +119,7 @@ States everywhere: skeletons while loading, signed-out prompts (link to `/signin
 
 ## 6. API contract (the part that stays — implement against this)
 
-Base: `https://spotify.fightingentropy.org`. All data calls use the session cookie (`credentials:"include"`). JSON errors: `{ "error": string }` with standard status codes (401 unauth, 404, 409 duplicate-song with `{code:"DUPLICATE_SONG", existingSong}`, 413, 429 with Retry-After). GETs that go through `jsonCached` send **weak** ETags (`W/"…"`; support `If-None-Match` → 304) — note `playback-state`/`play-events`/`offline-downloads`/likes-mutations are **not** cached and carry no ETag. **Auth paths (verified in `src/client/auth.tsx`)**: `GET /api/auth/session`, `POST /api/auth/signin`, `POST /api/auth/signout` (returns **204**), `POST /api/register`, `POST /api/auth/resend-verification`, `GET /api/auth/verify/:token` (**302-redirects** to `/?verified=…` — it's a browser link, not a fetch). Note: every data GET also gets a `?auth=<userId>` cache-key query param and an `x-spotify-api-refresh` header from `api.ts`; the backend ignores both, but you inherit them if you reuse `api.ts`.
+Base: `https://spotify.streamarena.xyz`. All data calls use the session cookie (`credentials:"include"`). JSON errors: `{ "error": string }` with standard status codes (401 unauth, 404, 409 duplicate-song with `{code:"DUPLICATE_SONG", existingSong}`, 413, 429 with Retry-After). GETs that go through `jsonCached` send **weak** ETags (`W/"…"`; support `If-None-Match` → 304) — note `playback-state`/`play-events`/`offline-downloads`/likes-mutations are **not** cached and carry no ETag. **Auth paths (verified in `src/client/auth.tsx`)**: `GET /api/auth/session`, `POST /api/auth/signin`, `POST /api/auth/signout` (returns **204**), `POST /api/register`, `POST /api/auth/resend-verification`, `GET /api/auth/verify/:token` (**302-redirects** to `/?verified=…` — it's a browser link, not a fetch). Note: every data GET also gets a `?auth=<userId>` cache-key query param and an `x-spotify-api-refresh` header from `api.ts`; the backend ignores both, but you inherit them if you reuse `api.ts`.
 
 Core types (from `src/types/player.ts` + `src/client/api.ts`) — reproduce them:
 ```ts

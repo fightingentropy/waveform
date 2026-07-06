@@ -11,7 +11,7 @@ REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
 PORT="${PORT:-5174}"
 HOST="${HOST:-0.0.0.0}"
 BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
-PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-spotify.fightingentropy.org}"
+PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-spotify.streamarena.xyz}"
 SERVICE_LABEL="${SERVICE_LABEL:-com.fightingentropy.spotify-app}"
 LIBRARY_OWNER_EMAILS="${LIBRARY_OWNER_EMAILS:-${SPOTIFY_LIBRARY_OWNER_EMAILS:-}}"
 LIBRARY_OWNER_USER_IDS="${LIBRARY_OWNER_USER_IDS:-${SPOTIFY_LIBRARY_OWNER_USER_IDS:-}}"
@@ -39,7 +39,7 @@ Environment:
   REMOTE_APP             Default: /Users/hermes/Developer/spotify
   REMOTE_MUSIC_DIR       Default: /Users/hermes/Music
   BUN_BIN                Default: /opt/homebrew/bin/bun
-  PROXY_HOSTNAMES        Default: spotify.fightingentropy.org
+  PROXY_HOSTNAMES        Default: spotify.streamarena.xyz
   LIBRARY_OWNER_EMAILS   Comma-separated account emails allowed to use the Mac mini library.
   LIBRARY_OWNER_USER_IDS Comma-separated account IDs allowed to use the Mac mini library.
   LIBRARY_OWNER_NAMES    Comma-separated display names allowed to use the Mac mini library. Default: Erlin.

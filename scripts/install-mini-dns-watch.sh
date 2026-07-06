@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MINI_HOST="${MINI_HOST:-}"
 MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
-SPOTIFY_DOMAIN="${SPOTIFY_DOMAIN:-spotify.fightingentropy.org}"
+SPOTIFY_DOMAIN="${SPOTIFY_DOMAIN:-spotify.streamarena.xyz}"
 DNS_WATCH_INTERVAL="${DNS_WATCH_INTERVAL:-300}"
 SERVICE_LABEL="${SERVICE_LABEL:-com.fightingentropy.spotify-dns-watch}"
 
@@ -20,7 +20,7 @@ Installs/updates the Mac mini DNS drift watcher:
   - /Users/hermes/.config/spotify/env
 
 Options:
-  --domain <host>        DNS name to watch. Default: spotify.fightingentropy.org.
+  --domain <host>        DNS name to watch. Default: spotify.streamarena.xyz.
   --interval <seconds>   launchd StartInterval. Default: 300.
   -h, --help             Show this help.
 
@@ -176,7 +176,7 @@ validate_origin_ip() {
   [[ "$status" == "200" ]]
 }
 
-name="${SPOTIFY_DNS_WATCH_NAME:-spotify.fightingentropy.org}"
+name="${SPOTIFY_DNS_WATCH_NAME:-spotify.streamarena.xyz}"
 
 candidate_ip="$(detect_public_ip || true)"
 if [[ -z "$candidate_ip" ]]; then

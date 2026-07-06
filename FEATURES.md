@@ -1,7 +1,7 @@
 # Current Spotify App Features
 
 This app is a private Spotify-style music library for the Mac mini. The public
-site is served at `https://spotify.fightingentropy.org` through direct Caddy, and
+site is served at `https://spotify.streamarena.xyz` through direct Caddy, and
 the music files live on the Mac mini at `/Users/hermes/Music`.
 
 ## Playback
@@ -65,14 +65,14 @@ the music files live on the Mac mini at `/Users/hermes/Music`.
 
 ## Production Architecture
 
-- Public app: `https://spotify.fightingentropy.org`
+- Public app: `https://spotify.streamarena.xyz`
 - Mac mini Tailscale app/server: `http://100.121.144.60:5174`
 - Mac mini LAN app/server: `http://192.168.1.240:5174`
 - Operational scripts try the Tailscale SSH alias/IP first, then fall back to
   the LAN SSH alias/IP.
 - Worker backend: `https://spotify.erlinhoxha.workers.dev`
 - Music server launchd service: `com.fightingentropy.spotify-app`
-- Shared Caddy launchd service: `com.fightingentropy.netflix-caddy`
+- Shared Caddy launchd service: `com.fightingentropy.streamarena-caddy`
 - DNS drift watcher launchd service: `com.fightingentropy.spotify-dns-watch`
 
 Caddy serves the frontend and direct media routes from the Mac mini. Browser API

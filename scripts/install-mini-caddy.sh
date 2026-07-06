@@ -6,12 +6,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MINI_HOST="${MINI_HOST:-}"
 MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
-SPOTIFY_DOMAIN="${SPOTIFY_DOMAIN:-spotify.fightingentropy.org}"
+SPOTIFY_DOMAIN="${SPOTIFY_DOMAIN:-spotify.streamarena.xyz}"
 SPOTIFY_WORKER_HOST="${SPOTIFY_WORKER_HOST:-spotify.erlinhoxha.workers.dev}"
 SPOTIFY_UPSTREAM="${SPOTIFY_UPSTREAM:-127.0.0.1:5174}"
 CADDYFILE="${CADDYFILE:-/Users/hermes/.config/caddy/Caddyfile}"
 CADDY_BIN="${CADDY_BIN:-/usr/local/bin/caddy}"
-CADDY_SERVICE_LABEL="${CADDY_SERVICE_LABEL:-com.fightingentropy.netflix-caddy}"
+CADDY_SERVICE_LABEL="${CADDY_SERVICE_LABEL:-com.fightingentropy.streamarena-caddy}"
 
 usage() {
   cat <<'USAGE'
@@ -20,7 +20,7 @@ Usage: scripts/install-mini-caddy.sh [options]
 Installs/updates the shared Mac mini Caddy route for direct Spotify streaming.
 
 Options:
-  --domain <host>        Public Spotify host. Default: spotify.fightingentropy.org.
+  --domain <host>        Public Spotify host. Default: spotify.streamarena.xyz.
   --worker-host <host>   Worker backend host for auth/import APIs. Default: spotify.erlinhoxha.workers.dev.
   --upstream <host:port> Local Spotify server upstream. Default: 127.0.0.1:5174.
   -h, --help             Show this help.
@@ -31,7 +31,7 @@ Environment:
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
   CADDYFILE              Default: /Users/hermes/.config/caddy/Caddyfile
   CADDY_BIN              Default: /usr/local/bin/caddy
-  CADDY_SERVICE_LABEL    Default: com.fightingentropy.netflix-caddy
+  CADDY_SERVICE_LABEL    Default: com.fightingentropy.streamarena-caddy
 
 The script reads SPOTIFY_PROXY_TOKEN from /Users/hermes/.config/spotify/env on
 the Mac mini and injects it only into the remote Caddyfile.

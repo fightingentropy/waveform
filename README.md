@@ -7,17 +7,17 @@ Caddy path.
 
 ## Current Production Setup
 
-- Public app: `https://spotify.fightingentropy.org`
+- Public app: `https://spotify.streamarena.xyz`
 - Mac mini Tailscale app/server: `http://100.121.144.60:5174`
 - Mac mini LAN app/server: `http://192.168.1.240:5174`
 - Worker backend for auth/import APIs: `https://spotify.erlinhoxha.workers.dev`
 - Mac mini music folder: `/Users/hermes/Music`
 - Remote app folder on Mac mini: `/Users/hermes/Developer/spotify`
 - Music server launchd service: `com.fightingentropy.spotify-app`
-- Shared Caddy launchd service: `com.fightingentropy.netflix-caddy`
+- Shared Caddy launchd service: `com.fightingentropy.streamarena-caddy`
 - DNS drift watcher launchd service: `com.fightingentropy.spotify-dns-watch`
 
-`spotify.fightingentropy.org` should be a DNS-only record pointing at the home
+`spotify.streamarena.xyz` should be a DNS-only record pointing at the home
 public IP. Caddy terminates TLS, routes static assets and media directly to the
 Mac mini server, and forwards auth/import API calls to the Worker backend.
 
@@ -25,10 +25,10 @@ Mac mini server, and forwards auth/import API calls to the Worker backend.
 
 ```text
 Phone/browser
-  -> Caddy: spotify.fightingentropy.org
+  -> Caddy: spotify.streamarena.xyz
        -> static app and media ranges: 127.0.0.1:5174
        -> auth/import APIs: spotify.erlinhoxha.workers.dev
-            -> Worker calls MAC_MINI_ORIGIN=https://spotify.fightingentropy.org
+            -> Worker calls MAC_MINI_ORIGIN=https://spotify.streamarena.xyz
                  -> Caddy trusted proxy-token route
                       -> Mac mini local server on 127.0.0.1:5174
                            -> /Users/hermes/Music
@@ -59,7 +59,7 @@ media path.
 - Keep the Mac mini music server launchd service running:
   - `com.fightingentropy.spotify-app`
 - Keep the shared Caddy launchd service running:
-  - `com.fightingentropy.netflix-caddy`
+  - `com.fightingentropy.streamarena-caddy`
 - Keep the DNS drift watcher launchd service running:
   - `com.fightingentropy.spotify-dns-watch`
 - Operational scripts try the Mac mini Tailscale SSH alias `m4mini-ts` first,
@@ -68,7 +68,7 @@ media path.
   `MINI_HOST` to force a single host, or `MINI_HOSTS` to override the fallback
   list.
 - Public traffic should reach the Mac mini through the router's 80/443 port
-  forwards and the direct DNS-only record for `spotify.fightingentropy.org`.
+  forwards and the direct DNS-only record for `spotify.streamarena.xyz`.
 - `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
 - `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
 - `SPOTIFY_LIBRARY_OWNER_EMAILS`, `SPOTIFY_LIBRARY_OWNER_USER_IDS`, or
@@ -102,7 +102,7 @@ media path.
 - `scripts/install-mini-server.sh` - installs/restarts the Mac mini launchd app
   service.
 - `scripts/install-mini-caddy.sh` - installs/updates the direct Caddy route for
-  `spotify.fightingentropy.org`.
+  `spotify.streamarena.xyz`.
 - `scripts/install-mini-dns-watch.sh` - installs/updates the DNS drift watcher
   for the direct home Caddy hostname.
 - `scripts/sync-mini-music.sh` - syncs audio/artwork/lyrics/sidecars to
@@ -191,7 +191,7 @@ The active `wrangler.jsonc` contains:
 
 ```json
 "workers_dev": true,
-"MAC_MINI_ORIGIN": "https://spotify.fightingentropy.org"
+"MAC_MINI_ORIGIN": "https://spotify.streamarena.xyz"
 ```
 
 Set or rotate the Worker secret:
@@ -212,11 +212,11 @@ SPOTIFY_CACHE_DIR=/Users/hermes/Developer/spotify/cache
 SPOTIFY_ARTWORK_LOOKUP=1
 SPOTIFY_ARTWORK_COUNTRY=GB
 SPOTIFY_PROXY_TOKEN=...
-SPOTIFY_PROXY_HOSTNAMES=spotify.fightingentropy.org
+SPOTIFY_PROXY_HOSTNAMES=spotify.streamarena.xyz
 SPOTIFY_LIBRARY_OWNER_EMAILS=
 SPOTIFY_LIBRARY_OWNER_USER_IDS=
 SPOTIFY_LIBRARY_OWNER_NAMES=Erlin
-SPOTIFY_DNS_WATCH_NAME=spotify.fightingentropy.org
+SPOTIFY_DNS_WATCH_NAME=spotify.streamarena.xyz
 ```
 
 ## Verification
@@ -230,7 +230,7 @@ bun run build
 bun run mini:check
 bun run mini:install-caddy
 bun run mini:install-dns-watch
-curl -I https://spotify.fightingentropy.org
+curl -I https://spotify.streamarena.xyz
 curl -sS -o /dev/null -w "%{http_code}\n" https://spotify.erlinhoxha.workers.dev/api/auth/session
 ```
 
