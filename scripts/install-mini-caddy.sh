@@ -11,7 +11,7 @@ SPOTIFY_WORKER_HOST="${SPOTIFY_WORKER_HOST:-spotify.erlinhoxha.workers.dev}"
 SPOTIFY_UPSTREAM="${SPOTIFY_UPSTREAM:-127.0.0.1:5174}"
 CADDYFILE="${CADDYFILE:-/Users/hermes/.config/caddy/Caddyfile}"
 CADDY_BIN="${CADDY_BIN:-/usr/local/bin/caddy}"
-CADDY_SERVICE_LABEL="${CADDY_SERVICE_LABEL:-com.fightingentropy.streamarena-caddy}"
+CADDY_SERVICE_LABEL="${CADDY_SERVICE_LABEL:-xyz.streamarena.caddy}"
 
 usage() {
   cat <<'USAGE'
@@ -31,7 +31,7 @@ Environment:
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
   CADDYFILE              Default: /Users/hermes/.config/caddy/Caddyfile
   CADDY_BIN              Default: /usr/local/bin/caddy
-  CADDY_SERVICE_LABEL    Default: com.fightingentropy.streamarena-caddy
+  CADDY_SERVICE_LABEL    Default: xyz.streamarena.caddy
 
 The script reads SPOTIFY_PROXY_TOKEN from /Users/hermes/.config/spotify/env on
 the Mac mini and injects it only into the remote Caddyfile.

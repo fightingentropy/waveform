@@ -121,7 +121,7 @@ xcodebuild -workspace Spotify.xcworkspace -scheme Spotify -configuration Debug \
 xcrun simctl boot "iPhone 17"
 xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/Spotify.app
 npx expo start                         # (from mobile/) Metro on :8081
-xcrun simctl launch booted org.fightingentropy.spotify
+xcrun simctl launch booted xyz.streamarena.spotify
 ```
 
 Override the backend origin via `app.json` → `expo.extra.apiOrigin` if needed.

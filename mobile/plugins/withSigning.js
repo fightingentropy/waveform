@@ -3,7 +3,7 @@ const { withXcodeProject } = require("expo/config-plugins");
 // Free Apple Developer team that already signed the old Capacitor build on this
 // Mac (security find-identity → "Apple Development: erlin.hx@icloud.com").
 const DEVELOPMENT_TEAM = "T29NU9NCA2";
-const BUNDLE_ID = "org.fightingentropy.spotify";
+const BUNDLE_ID = "xyz.streamarena.spotify";
 
 // Sets the Apple Development team + automatic signing on the app target so that
 // `expo run:ios --device` (and any prebuild) produces a device-installable build

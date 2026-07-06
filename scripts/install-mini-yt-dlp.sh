@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MINI_HOST="${MINI_HOST:-}"
 MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
-SERVICE_LABEL="${SERVICE_LABEL:-com.fightingentropy.spotify-ytdlp-update}"
+SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-ytdlp-update}"
 # Weekly self-update. YouTube breaks extraction frequently; a stale yt-dlp is the
 # usual cause of Smart Shuffle previews failing to resolve.
 UPDATE_INTERVAL="${UPDATE_INTERVAL:-604800}"
@@ -22,7 +22,7 @@ for Smart Shuffle recommendations (the lossless resolver is reserved for the
 Add-to-library path, so the library stays FLAC-only):
   - /Users/hermes/.local/bin/yt-dlp            (standalone macOS binary, `yt-dlp -U`)
   - /Users/hermes/.local/bin/spotify-ytdlp-update  (the weekly updater wrapper)
-  - /Library/LaunchDaemons/com.fightingentropy.spotify-ytdlp-update.plist
+  - /Library/LaunchDaemons/xyz.streamarena.spotify-ytdlp-update.plist
 
 local-music-server's ytDlpPath() probes ~/.local/bin FIRST, so this auto-updated
 copy wins over any Homebrew yt-dlp. ffmpeg is already on the mini (used for
@@ -38,7 +38,7 @@ Environment:
   MINI_HOST              Explicit Mac mini SSH host.
   MINI_HOSTS             Fallback hosts. Default: m4mini-ts, Tailscale IP, m4mini.local, LAN IP.
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
-  SERVICE_LABEL          Default: com.fightingentropy.spotify-ytdlp-update
+  SERVICE_LABEL          Default: xyz.streamarena.spotify-ytdlp-update
   YTDLP_URL              Standalone binary URL. Default: yt-dlp_macos latest release.
 USAGE
 }

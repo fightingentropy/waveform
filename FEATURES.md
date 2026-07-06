@@ -71,9 +71,9 @@ the music files live on the Mac mini at `/Users/hermes/Music`.
 - Operational scripts try the Tailscale SSH alias/IP first, then fall back to
   the LAN SSH alias/IP.
 - Worker backend: `https://spotify.erlinhoxha.workers.dev`
-- Music server launchd service: `com.fightingentropy.spotify-app`
-- Shared Caddy launchd service: `com.fightingentropy.streamarena-caddy`
-- DNS drift watcher launchd service: `com.fightingentropy.spotify-dns-watch`
+- Music server launchd service: `xyz.streamarena.spotify-app`
+- Shared Caddy launchd service: `xyz.streamarena.caddy`
+- DNS drift watcher launchd service: `xyz.streamarena.spotify-dns-watch`
 
 Caddy serves the frontend and direct media routes from the Mac mini. Browser API
 requests for auth/import/library metadata go to the Worker backend, and trusted

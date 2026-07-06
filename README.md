@@ -13,9 +13,9 @@ Caddy path.
 - Worker backend for auth/import APIs: `https://spotify.erlinhoxha.workers.dev`
 - Mac mini music folder: `/Users/hermes/Music`
 - Remote app folder on Mac mini: `/Users/hermes/Developer/spotify`
-- Music server launchd service: `com.fightingentropy.spotify-app`
-- Shared Caddy launchd service: `com.fightingentropy.streamarena-caddy`
-- DNS drift watcher launchd service: `com.fightingentropy.spotify-dns-watch`
+- Music server launchd service: `xyz.streamarena.spotify-app`
+- Shared Caddy launchd service: `xyz.streamarena.caddy`
+- DNS drift watcher launchd service: `xyz.streamarena.spotify-dns-watch`
 
 `spotify.streamarena.xyz` should be a DNS-only record pointing at the home
 public IP. Caddy terminates TLS, routes static assets and media directly to the
@@ -57,11 +57,11 @@ media path.
 ## Important Runtime Notes
 
 - Keep the Mac mini music server launchd service running:
-  - `com.fightingentropy.spotify-app`
+  - `xyz.streamarena.spotify-app`
 - Keep the shared Caddy launchd service running:
-  - `com.fightingentropy.streamarena-caddy`
+  - `xyz.streamarena.caddy`
 - Keep the DNS drift watcher launchd service running:
-  - `com.fightingentropy.spotify-dns-watch`
+  - `xyz.streamarena.spotify-dns-watch`
 - Operational scripts try the Mac mini Tailscale SSH alias `m4mini-ts` first,
   then the raw Tailscale target `hermes@100.121.144.60`, then the LAN alias
   `m4mini.local`, then the raw Ethernet target `hermes@192.168.1.240`. Set

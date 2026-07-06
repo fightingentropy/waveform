@@ -12,7 +12,7 @@ PORT="${PORT:-5174}"
 HOST="${HOST:-0.0.0.0}"
 BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
 PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-spotify.streamarena.xyz}"
-SERVICE_LABEL="${SERVICE_LABEL:-com.fightingentropy.spotify-app}"
+SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-app}"
 LIBRARY_OWNER_EMAILS="${LIBRARY_OWNER_EMAILS:-${SPOTIFY_LIBRARY_OWNER_EMAILS:-}}"
 LIBRARY_OWNER_USER_IDS="${LIBRARY_OWNER_USER_IDS:-${SPOTIFY_LIBRARY_OWNER_USER_IDS:-}}"
 LIBRARY_OWNER_NAMES="${LIBRARY_OWNER_NAMES:-${SPOTIFY_LIBRARY_OWNER_NAMES:-Erlin}}"
@@ -23,7 +23,7 @@ Usage: scripts/install-mini-server.sh [options]
 
 Installs/updates the Mac mini Spotify music server:
   - /Users/hermes/.local/bin/spotify-run-server
-  - /Library/LaunchDaemons/com.fightingentropy.spotify-app.plist
+  - /Library/LaunchDaemons/xyz.streamarena.spotify-app.plist
   - /Users/hermes/.config/spotify/env
 
 Options:
@@ -43,7 +43,7 @@ Environment:
   LIBRARY_OWNER_EMAILS   Comma-separated account emails allowed to use the Mac mini library.
   LIBRARY_OWNER_USER_IDS Comma-separated account IDs allowed to use the Mac mini library.
   LIBRARY_OWNER_NAMES    Comma-separated display names allowed to use the Mac mini library. Default: Erlin.
-  SERVICE_LABEL          Default: com.fightingentropy.spotify-app
+  SERVICE_LABEL          Default: xyz.streamarena.spotify-app
 USAGE
 }
 

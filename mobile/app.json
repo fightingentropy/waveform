@@ -11,14 +11,14 @@
     "backgroundColor": "#0a0a0a",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "org.fightingentropy.spotify",
+      "bundleIdentifier": "xyz.streamarena.spotify",
       "infoPlist": {
         "UIBackgroundModes": ["audio"],
         "NSAppTransportSecurity": { "NSAllowsArbitraryLoads": false }
       }
     },
     "android": {
-      "package": "org.fightingentropy.spotify",
+      "package": "xyz.streamarena.spotify",
       "adaptiveIcon": {
         "backgroundColor": "#0a0a0a",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

@@ -9,7 +9,7 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 REMOTE_APP="${REMOTE_APP:-/Users/hermes/Developer/spotify}"
 PORT="${PORT:-5174}"
 REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
-SERVICE_LABEL="${SERVICE_LABEL:-com.fightingentropy.spotify-app}"
+SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-app}"
 
 SSH_OPTS=(
   -i "$SSH_KEY"

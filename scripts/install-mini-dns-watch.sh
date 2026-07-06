@@ -8,7 +8,7 @@ MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 SPOTIFY_DOMAIN="${SPOTIFY_DOMAIN:-spotify.streamarena.xyz}"
 DNS_WATCH_INTERVAL="${DNS_WATCH_INTERVAL:-300}"
-SERVICE_LABEL="${SERVICE_LABEL:-com.fightingentropy.spotify-dns-watch}"
+SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-dns-watch}"
 
 usage() {
   cat <<'USAGE'
@@ -16,7 +16,7 @@ Usage: scripts/install-mini-dns-watch.sh [options]
 
 Installs/updates the Mac mini DNS drift watcher:
   - /Users/hermes/.local/bin/spotify-dns-watch
-  - /Library/LaunchDaemons/com.fightingentropy.spotify-dns-watch.plist
+  - /Library/LaunchDaemons/xyz.streamarena.spotify-dns-watch.plist
   - /Users/hermes/.config/spotify/env
 
 Options:
@@ -29,7 +29,7 @@ Environment:
   MINI_HOSTS             Fallback hosts. Default: m4mini-ts, Tailscale IP, m4mini.local, LAN IP.
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
   DNS_WATCH_INTERVAL     Default: 300.
-  SERVICE_LABEL          Default: com.fightingentropy.spotify-dns-watch
+  SERVICE_LABEL          Default: xyz.streamarena.spotify-dns-watch
 
 This service detects drift by comparing the public home IP with public DNS. It
 logs mismatches rather than mutating DNS.
