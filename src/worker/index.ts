@@ -3256,16 +3256,15 @@ function applySecurityHeaders(headers: Headers): void {
   }
 }
 
-// Origins allowed to read audio cross-origin WITH credentials. The native app
-// runs at capacitor://localhost and pulls audio from the public origin, so the
-// <audio> element (crossOrigin="use-credentials", needed to route through the
-// Web Audio API for real iOS crossfade) must see a credentialed-CORS-clean
-// response. Credentialed CORS forbids "*", so we echo the exact request Origin
-// only when it's one of our own surfaces — never an arbitrary site.
+// Origins allowed to read audio cross-origin WITH credentials — only our own
+// public site. The <audio> element (crossOrigin="use-credentials", needed to
+// route through the Web Audio API for real iOS crossfade) must see a
+// credentialed-CORS-clean response. Credentialed CORS forbids "*", so we echo
+// the exact request Origin only when it's this surface — never an arbitrary
+// site. The native app uses native fetch / AVPlayer, not browser CORS, so it
+// needs no allowlist entry; loopback dev origins are allowed in corsAllowOrigin.
 const CORS_ALLOWED_ORIGINS = new Set<string>([
-  "capacitor://localhost",
   "https://spotify.streamarena.xyz",
-  "https://spotify.erlinhoxha.workers.dev",
 ]);
 
 function corsAllowOrigin(origin: string | undefined | null): string | null {

@@ -3743,16 +3743,13 @@ async function serveStaticAsset(request: Request, url: URL): Promise<Response> {
   return text(`Missing built frontend at ${distDir}. Run bun run build first.`, 500);
 }
 
-// Credentialed CORS. The native iOS app (capacitor://localhost) must read audio
-// responses through the Web Audio API to crossfade, which makes the <audio>
-// element fetch with crossOrigin set — a credentialed CORS request the browser
-// blocks unless the response echoes the exact Origin (never "*") with
-// Allow-Credentials. Mirrors the Worker's allowlist (worker/index.ts).
+// Credentialed CORS — only our own public site. The <audio> element reads audio
+// responses through the Web Audio API to crossfade, fetching with crossOrigin
+// set — a credentialed request the browser blocks unless the response echoes the
+// exact Origin (never "*") with Allow-Credentials. Mirrors the Worker's allowlist
+// (worker/index.ts). Loopback dev origins are allowed in corsAllowOrigin below.
 const CORS_ALLOWED_ORIGINS = new Set<string>([
-  "capacitor://localhost",
-  "https://localhost",
   "https://spotify.streamarena.xyz",
-  "https://spotify.erlinhoxha.workers.dev",
 ]);
 
 function corsAllowOrigin(origin: string | null): string | null {
