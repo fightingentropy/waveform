@@ -141,7 +141,7 @@ def remove_named_site_blocks(source: str, names: set[str]) -> str:
     return "\n".join(out).strip() + "\n"
 
 text = remove_managed_block(text)
-text = remove_named_site_blocks(text, {domain, f"http://{domain}", "spotify-origin.fightingentropy.org"})
+text = remove_named_site_blocks(text, {domain, f"http://{domain}"})
 
 quoted_token = caddy_quote(token)
 quoted_worker = caddy_quote(worker_host)

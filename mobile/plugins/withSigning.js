@@ -1,7 +1,8 @@
 const { withXcodeProject } = require("expo/config-plugins");
 
-// Free Apple Developer team that already signed the old Capacitor build on this
-// Mac (security find-identity → "Apple Development: erlin.hx@icloud.com").
+// Apple Developer Program team (paid Individual, Team T29NU9NCA2; cert
+// "Apple Development: erlin.hx@icloud.com"). Paid membership → 1-year
+// provisioning profiles (no more 7-day free-team re-sign ritual).
 const DEVELOPMENT_TEAM = "T29NU9NCA2";
 const BUNDLE_ID = "xyz.streamarena.spotify";
 
