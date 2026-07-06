@@ -426,21 +426,11 @@ export type StatsHomePayload = {
 // `staged` is true it's already pre-downloaded into the Mac-mini's hidden
 // .discover cache and plays instantly from `audioUrl` (with stable library id
 // `audioId`); otherwise a tap materializes it on demand via /api/discover/stage.
-export type DiscoverTrack = {
-  id: string;
-  title: string;
-  artist: string;
-  album: string;
-  imageUrl: string;
-  durationMs: number | null;
-  spotifyUrl: string;
-  staged?: boolean;
-  audioId?: string;
-  audioUrl?: string;
-};
-
-export type DiscoverPayload = {
-  tracks: DiscoverTrack[];
+// The Home "Discover" row: clickable, auto-updating playlists (Top 50 + the
+// YouTube Music Discover Mix) instead of a scroll of individual tracks. Each
+// opens /api/playlist/:id like any other playlist.
+export type DiscoverPlaylistsPayload = {
+  playlists: PlaylistEntry[];
 };
 
 export type SearchIndexPayload = {
@@ -474,31 +464,20 @@ export type LibraryPlaylistPayload = {
   likedSongIds: string[] | null;
 };
 
-// A curated Spotify playlist streamed read-through (like Discover). Its tracks
-// aren't library songs — they carry staged status and play via on-demand
-// staging. `songs: []` keeps shared cache helpers that read `songs` happy.
+// An auto-updating playlist streamed read-through (Top 50 / the YouTube Music
+// Discover Mix). Its songs aren't library rows — already-staged tracks arrive
+// fully playable, the rest are placeholders (empty audioUrl + discoverTrackId)
+// that DiscoverQueueStager materializes on demand.
 export type CuratedPlaylistPayload = {
   kind: "curated";
   playlist: {
     id: string;
     name: string;
     imageUrl: string;
-    description: string;
+    description?: string;
   };
-  tracks: DiscoverTrack[];
   songs: PlayerSong[];
   likedSongIds: string[];
 };
 
 export type PlaylistPayload = LibraryPlaylistPayload | CuratedPlaylistPayload;
-
-export type FeaturedPlaylist = {
-  id: string;
-  name: string;
-  description: string;
-  imageUrl: string;
-};
-
-export type FeaturedPlaylistsPayload = {
-  playlists: FeaturedPlaylist[];
-};

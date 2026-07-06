@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { Pause, Play } from "lucide-react";
 import {
@@ -8,12 +8,12 @@ import {
   type PlaylistPayload,
 } from "@/client/api";
 import { useAuth } from "@/client/auth";
-import { discoverTrackToPlayerSong } from "@/client/discover-queue";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { usePlayerStore } from "@/store/player";
 import { CoverImage } from "@/components/CoverImage";
 import { SongGrid } from "@/components/SongGrid";
 import { cn } from "@/lib/utils";
+import type { PlayerSong } from "@/types/player";
 
 function PlaylistLoadingSkeleton() {
   return (
@@ -35,46 +35,54 @@ function PlaylistLoadingSkeleton() {
   );
 }
 
-// Curated playlists aren't backed by library rows — their tracks stream
-// read-through (no library writes). The whole playlist is loaded into the
-// player queue as a mix of playable songs (already staged) and placeholders;
-// DiscoverQueueStager materializes each one just-in-time as it becomes current,
-// so the playlist auto-advances track to track.
+// Discover playlists (Top 50 / the YouTube Music Discover Mix) aren't backed by
+// library rows — their tracks stream read-through (no library writes). The
+// payload's songs are already PlayerSongs: staged ones fully playable, the rest
+// placeholders (empty audioUrl); the whole list is loaded into the player queue
+// and DiscoverQueueStager materializes each placeholder just-in-time as it
+// becomes current, so the playlist auto-advances track to track.
+//
+// A song and the current queue entry are matched by discoverTrackId (falling
+// back to id): staging swaps the placeholder queue entry for the real song (new
+// id), but discoverTrackId survives the swap, so the row highlight holds.
+const songKeyOf = (song: Pick<PlayerSong, "id" | "discoverTrackId"> | null | undefined): string | null =>
+  song ? song.discoverTrackId ?? song.id : null;
+
 function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
-  const { playlist, tracks } = data;
+  const { playlist } = data;
+  const songs = data.songs ?? [];
   const setQueue = usePlayerStore((s) => s.setQueue);
   const play = usePlayerStore((s) => s.play);
   const pause = usePlayerStore((s) => s.pause);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
-  const currentDiscoverTrackId = usePlayerStore((s) => s.currentSong?.discoverTrackId ?? null);
+  const currentSongKey = usePlayerStore((s) => songKeyOf(s.currentSong));
   // The current track is "loading" while it's still a placeholder (no real src).
   const currentHasAudio = usePlayerStore((s) => Boolean(s.currentSong?.audioUrl));
 
-  const queue = useMemo(() => tracks.map(discoverTrackToPlayerSong), [tracks]);
-  const playlistIsActive = tracks.some((track) => track.id === currentDiscoverTrackId);
+  const playlistIsActive = songs.some((song) => songKeyOf(song) === currentSongKey);
 
   const playFromIndex = useCallback(
     (index: number) => {
-      const song = setQueue(queue, index);
+      const song = setQueue(songs, index);
       // Staged tracks have a real src — start them inside the click gesture.
       // Placeholders (empty src) are materialized + played by DiscoverQueueStager.
       if (song?.audioUrl) requestImmediatePlayback(song);
     },
-    [queue, setQueue],
+    [songs, setQueue],
   );
 
   const handleTrackTap = useCallback(
     (index: number) => {
-      const track = tracks[index];
-      if (!track) return;
-      if (track.id === currentDiscoverTrackId) {
+      const song = songs[index];
+      if (!song) return;
+      if (songKeyOf(song) === currentSongKey) {
         if (isPlaying) pause();
         else play();
         return;
       }
       playFromIndex(index);
     },
-    [tracks, currentDiscoverTrackId, isPlaying, pause, play, playFromIndex],
+    [songs, currentSongKey, isPlaying, pause, play, playFromIndex],
   );
 
   const handleHeaderPlay = useCallback(() => {
@@ -83,8 +91,8 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
       else play();
       return;
     }
-    if (tracks.length > 0) playFromIndex(0);
-  }, [playlistIsActive, isPlaying, pause, play, playFromIndex, tracks.length]);
+    if (songs.length > 0) playFromIndex(0);
+  }, [playlistIsActive, isPlaying, pause, play, playFromIndex, songs.length]);
 
   const headerIsPlaying = playlistIsActive && isPlaying;
 
@@ -101,12 +109,12 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
             <p className="mt-2 line-clamp-2 text-sm text-white/[0.62]">{playlist.description}</p>
           ) : null}
           <div className="mt-2 text-sm opacity-70">
-            {tracks.length} {tracks.length === 1 ? "track" : "tracks"}
+            {songs.length} {songs.length === 1 ? "track" : "tracks"}
           </div>
         </div>
       </header>
 
-      {tracks.length === 0 ? (
+      {songs.length === 0 ? (
         <div className="opacity-70">This playlist is empty.</div>
       ) : (
         <>
@@ -125,8 +133,8 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
             </button>
           </div>
           <ol className="space-y-1">
-            {tracks.map((track, index) => {
-              const active = track.id === currentDiscoverTrackId;
+            {songs.map((track, index) => {
+              const active = songKeyOf(track) === currentSongKey;
               const loading = active && !currentHasAudio;
               const activePlaying = active && isPlaying && currentHasAudio;
               return (

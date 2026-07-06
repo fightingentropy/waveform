@@ -43,7 +43,6 @@ import {
   SpotifyPathfinderError,
   fetchSpotifyAlbumTracks as fetchPathfinderAlbumTracks,
   fetchSpotifyLikedTracks,
-  fetchSpotifyPlaylistMetadata,
   fetchSpotifyPlaylistTracks as fetchPathfinderPlaylistTracks,
   fetchSpotifyTrackMetadata,
   scrapeSpotifyTrackIdsFromHtml,
@@ -3794,40 +3793,6 @@ async function youtubeDiscoverMixCard(
   }
 }
 
-type CuratedPlaylist = { id: string; name: string; description: string; imageUrl: string };
-
-// Curated playlists surfaced in the app (the Home "Featured playlists" row and
-// the Library Playlists section). These are public Spotify playlists streamed
-// read-through via the pathfinder — exactly like Discover, nothing is written
-// to the library. Array order is the display order; the first entry shows first.
-const CURATED_PLAYLISTS: CuratedPlaylist[] = [
-  {
-    id: "37i9dQZF1E8MlVyHRy0DWb",
-    name: "River Flows In You Radio",
-    description: "With Yiruma, Daniele Leoni, Benny Garner and more",
-    imageUrl: "",
-  },
-];
-const CURATED_PLAYLIST_BY_ID = new Map(CURATED_PLAYLISTS.map((playlist) => [playlist.id, playlist]));
-// Cap the read-through track count for a curated-playlist detail view.
-const CURATED_PLAYLIST_MAX_TRACKS = 100;
-
-// Enrich a curated entry with live Spotify metadata (name/cover/description),
-// bounded so a slow Spotify response can't stall the Home/Library load. Falls
-// back to the static entry on timeout or failure.
-async function curatedPlaylistCard(env: CloudflareEnv, playlist: CuratedPlaylist): Promise<CuratedPlaylist> {
-  const meta = await Promise.race([
-    fetchSpotifyPlaylistMetadata(playlist.id, envString(env, "SPOTIFY_SP_DC")),
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), 6_000)),
-  ]).catch(() => null);
-  return {
-    id: playlist.id,
-    name: meta?.name || playlist.name,
-    description: meta?.description || playlist.description,
-    imageUrl: meta?.imageUrl || playlist.imageUrl,
-  };
-}
-
 // Cron-driven background fill: stage a batch of not-yet-cached Top-50 tracks and
 // hand the Mac-mini the current chart so it refreshes lastSeen + prunes stale
 // entries. Runs on a Cron Trigger because per-track resolution can take tens of
@@ -3879,9 +3844,11 @@ app.get("/api/discover/playlists", async (c) => {
   const playlists: Array<{ id: string; name: string; imageUrl: string; songsCount: number }> = [];
   // Run the two cards concurrently so the mix's worst-case mini round-trip doesn't
   // stack on top of the Top-50 fetch.
+  // The mix card is the OWNER's personalized YouTube mix (fetched as the owner on
+  // the mini) — like its detail route, only show it to authenticated callers.
   const [top, mix] = await Promise.all([
     fetchTop50DiscoverTracks(c.env).catch(() => [] as DiscoverTrendingTrack[]),
-    isMacMiniMusicConfigured(c.env) ? youtubeDiscoverMixCard(c.env) : Promise.resolve(null),
+    isMacMiniMusicConfigured(c.env) && c.get("user") ? youtubeDiscoverMixCard(c.env) : Promise.resolve(null),
   ]);
   playlists.push({ id: "discover-top50", name: "Top 50", imageUrl: top[0]?.imageUrl || "", songsCount: top.length });
   if (mix) {
@@ -3895,16 +3862,6 @@ app.get("/api/discover/playlists", async (c) => {
     }
   }
   return jsonCached(c, { playlists }, { cacheControl: "private, max-age=600, stale-while-revalidate=3600" });
-});
-
-// Curated playlists for the Home "Featured playlists" row and the Library
-// Playlists section. Cards only — opening one hits /api/playlist/:id, which
-// streams the tracks read-through (see the curated branch there).
-app.get("/api/playlists/featured", async (c) => {
-  const playlists = await Promise.all(CURATED_PLAYLISTS.map((playlist) => curatedPlaylistCard(c.env, playlist)));
-  return jsonCached(c, { playlists }, {
-    cacheControl: "public, max-age=1800, stale-while-revalidate=86400",
-  });
 });
 
 // Tap a not-yet-staged Discover track: resolve + materialize ONE track into the
@@ -4637,39 +4594,10 @@ app.get("/api/liked", async (c) => {
 app.get("/api/playlist/:id", async (c) => {
   const id = c.req.param("id");
 
-  // Curated playlists are public and streamed read-through (like Discover) —
-  // resolve them before the auth gate. They aren't backed by DB rows, so the
-  // payload carries Discover-shaped `tracks` (with staged status) instead of
-  // library songs; `songs: []` keeps older clients that only read `songs` happy.
-  const curated = CURATED_PLAYLIST_BY_ID.get(id);
-  if (curated) {
-    const [meta, base] = await Promise.all([
-      fetchSpotifyPlaylistMetadata(id, envString(c.env, "SPOTIFY_SP_DC")),
-      fetchDiscoverTracksForPlaylist(c.env, id, CURATED_PLAYLIST_MAX_TRACKS),
-    ]);
-    const tracks = await markDiscoverStaged(c.env, base);
-    return jsonCached(
-      c,
-      {
-        kind: "curated",
-        playlist: {
-          id,
-          name: meta?.name || curated.name,
-          imageUrl: meta?.imageUrl || curated.imageUrl || tracks[0]?.imageUrl || "",
-          description: meta?.description || curated.description,
-        },
-        tracks,
-        songs: [],
-        likedSongIds: [],
-      },
-      { cacheControl: "private, max-age=30, stale-while-revalidate=300" },
-    );
-  }
-
   // The Top 50 chart as an openable playlist (the Home "Top 50" card). Same data as
   // /api/discover/trending, shaped as a playlist of player songs so the detail
   // screen renders + plays it like any other playlist (lossless, via discover
-  // staging). Public read-through, before the auth gate — like curated.
+  // staging). Public read-through (the global chart), before the auth gate.
   if (id === "discover-top50") {
     const tracks = await markDiscoverStaged(c.env, await fetchTop50DiscoverTracks(c.env));
     return jsonCached(
@@ -4692,8 +4620,8 @@ app.get("/api/playlist/:id", async (c) => {
   // A YouTube Music mix (the auto-updating "Discover Mix"). Fetched + shaped on the
   // mini (it has yt-dlp + the owner's Premium cookies); stream-only Opus preview.
   // The mini returns an already-playlist-shaped body — proxy it straight through.
-  // Unlike curated / discover-top50 (genuinely public: a public Spotify playlist /
-  // the global chart), this mix is the OWNER's personalized recommendations and the
+  // Unlike discover-top50 (genuinely public: the global chart), this mix is the
+  // OWNER's personalized recommendations and the
   // proxy fetches it AS the owner — so it MUST require an authenticated caller, else
   // any anonymous request would receive the owner's mix + replayable signed media.
   if (id.startsWith("yt-mix-")) {

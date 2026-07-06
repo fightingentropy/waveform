@@ -5,15 +5,12 @@ import { CoverImage } from "@/components/CoverImage";
 import {
   useApiData,
   withAccountScope,
-  type DiscoverPayload,
-  type DiscoverTrack,
-  type FeaturedPlaylistsPayload,
+  type DiscoverPlaylistsPayload,
   type HomePayload,
   type StatsHomePayload,
 } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
-import { useDiscoverPlayback } from "@/client/use-discover-playback";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
@@ -57,33 +54,25 @@ export default function HomePage() {
       keepPreviousData: true,
     },
   );
-  // Globally trending tracks (Spotify Top 50). Not account-scoped — it's the same
-  // worldwide chart for everyone.
-  const { data: discoverData } = useApiData<DiscoverPayload>(
-    "/api/discover/trending",
-    { tracks: [] },
-    {
-      enabled: status !== "loading",
-      keepPreviousData: true,
-    },
-  );
-  // Curated playlists, surfaced as cover cards. Also global — same for everyone.
-  const { data: featuredData } = useApiData<FeaturedPlaylistsPayload>(
-    "/api/playlists/featured",
+  // The Discover row: auto-updating PLAYLIST cards (Top 50 + the YouTube Music
+  // Discover Mix), not individual tracks — same as the iOS app. Each card opens
+  // its playlist detail page. Scoped by account: the mix card is only returned
+  // for signed-in callers.
+  const { data: discoverData } = useApiData<DiscoverPlaylistsPayload>(
+    withAccountScope("/api/discover/playlists", user?.id ?? status),
     { playlists: [] },
     {
       enabled: status !== "loading",
       keepPreviousData: true,
     },
   );
+  const discoverPlaylists = discoverData.playlists;
 
   const setQueue = usePlayerStore((state) => state.setQueue);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
   const currentSongId = usePlayerStore((state) => state.currentSong?.id ?? null);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
-  // Discover tiles play through the shared staging hook (no library writes).
-  const discover = useDiscoverPlayback();
 
   const resolveHomeSong = useCallback((song: HomeSong): HomeSong => song, []);
 
@@ -175,66 +164,7 @@ export default function HomePage() {
     );
   };
 
-  const renderDiscoverTile = (track: DiscoverTrack) => {
-    const importing = discover.importingId === track.id;
-    const active = discover.isActive(track);
-    const activePlaying = active && discover.isPlaying;
-    return (
-      <div
-        key={track.id}
-        onClick={() => discover.toggle(track)}
-        className={cn(
-          "wf-song-card group w-36 shrink-0 cursor-pointer rounded-md p-3 transition touch-manipulation sm:w-40",
-          active || importing ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
-        )}
-      >
-        <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
-          <CoverImage
-            src={track.imageUrl}
-            alt={track.title}
-            fill
-            sizes="160px"
-            className="wf-song-cover object-cover"
-            loading="lazy"
-          />
-          {importing ? (
-            <div className="absolute inset-0 grid place-items-center bg-black/55">
-              <div className="h-7 w-7 animate-spin rounded-full border-[3px] border-white/25 border-t-white" />
-            </div>
-          ) : null}
-          <button
-            type="button"
-            aria-label={activePlaying ? `Pause ${track.title}` : `Play ${track.title}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              discover.toggle(track);
-            }}
-            disabled={importing}
-            className={cn(
-              "absolute bottom-3 right-3 grid h-11 w-11 place-items-center rounded-full bg-[#1ed760] text-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212] wf-control-button",
-              active || importing ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-            )}
-          >
-            {importing ? (
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-black/30 border-t-black" />
-            ) : activePlaying ? (
-              <Pause size={21} fill="currentColor" />
-            ) : (
-              <Play size={21} fill="currentColor" className="translate-x-0.5" />
-            )}
-          </button>
-        </div>
-        <div className="mt-3 min-w-0">
-          <div className={cn("truncate text-[16px] font-medium leading-6 text-white", active && "text-[#1ed760]")}>
-            {track.title}
-          </div>
-          <div className="truncate text-[14px] leading-5 text-white/[0.62]">{track.artist || "Unknown Artist"}</div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderFeaturedTile = (playlist: FeaturedPlaylistsPayload["playlists"][number]) => (
+  const renderDiscoverPlaylistTile = (playlist: DiscoverPlaylistsPayload["playlists"][number]) => (
     <Link
       key={playlist.id}
       to={`/playlist/${playlist.id}`}
@@ -252,7 +182,9 @@ export default function HomePage() {
       </div>
       <div className="mt-3 min-w-0">
         <div className="truncate text-[16px] font-medium leading-6 text-white">{playlist.name}</div>
-        <div className="truncate text-[14px] leading-5 text-white/[0.62]">{playlist.description || "Playlist"}</div>
+        <div className="truncate text-[14px] leading-5 text-white/[0.62]">
+          {playlist.songsCount > 0 ? `Playlist • ${playlist.songsCount} songs` : "Playlist"}
+        </div>
       </div>
     </Link>
   );
@@ -276,25 +208,11 @@ export default function HomePage() {
   return (
     <div className="relative min-h-[calc(100vh-3.5rem)] overflow-x-hidden bg-background text-white">
       <div className="relative px-4 pb-10 pt-12 sm:px-6 md:pt-16 lg:px-6 xl:px-8 2xl:px-10">
-        {discoverData.tracks.length > 0 ? (
+        {discoverPlaylists.length > 0 ? (
           <section aria-label="Discover" className="mb-9 md:mb-10">
             <h2 className="mb-4 text-2xl font-bold">Discover</h2>
-            {discover.importError ? (
-              <div role="alert" className="mb-3 text-sm text-red-400">
-                {discover.importError}
-              </div>
-            ) : null}
             <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
-              {discoverData.tracks.map((track) => renderDiscoverTile(track))}
-            </div>
-          </section>
-        ) : null}
-
-        {featuredData.playlists.length > 0 ? (
-          <section aria-label="Featured playlists" className="mb-9 md:mb-10">
-            <h2 className="mb-4 text-2xl font-bold">Featured playlists</h2>
-            <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
-              {featuredData.playlists.map((playlist) => renderFeaturedTile(playlist))}
+              {discoverPlaylists.map((playlist) => renderDiscoverPlaylistTile(playlist))}
             </div>
           </section>
         ) : null}
