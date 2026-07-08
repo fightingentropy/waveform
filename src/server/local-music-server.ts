@@ -1928,7 +1928,7 @@ async function materializeEncryptedLicensedSourceStream(
         method: "GET",
         headers: licensedMediaRequestHeaders(
           stream.headers,
-          userAgent || "spotify/1.0 (+https://spotify.streamarena.xyz)",
+          userAgent || "spotify/1.0 (+https://music.streamarena.xyz)",
         ),
       },
       120_000,
@@ -2077,7 +2077,7 @@ async function handleLicensedSourceMaterialize(request: Request): Promise<Respon
 const DISCOVER_STAGING_DIRNAME = ".discover";
 const DISCOVER_STAGING_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 2 weeks after leaving the Top 50
 const DISCOVER_MANIFEST_VERSION = 1;
-const DISCOVER_DEFAULT_USER_AGENT = "spotify/1.0 (+https://spotify.streamarena.xyz)";
+const DISCOVER_DEFAULT_USER_AGENT = "spotify/1.0 (+https://music.streamarena.xyz)";
 
 // Mirrors the Worker's ResolvedAudioDownload, shipped over the proxy as JSON.
 type DiscoverResolvedCandidate = {
@@ -3013,7 +3013,7 @@ async function handlePatchSong(source: LibrarySource, id: string, request: Reque
 // next to the audio file so the normal library scan exposes `lyricsUrl`. Lyric
 // text only ever flows provider -> sidecar file; it is never logged.
 const LRCLIB_API = "https://lrclib.net/api";
-const LRCLIB_USER_AGENT = "spotify-streamarena/1.0 (+https://spotify.streamarena.xyz)";
+const LRCLIB_USER_AGENT = "spotify-streamarena/1.0 (+https://music.streamarena.xyz)";
 
 type ResolvedLyrics = { synced: string | null; plain: string | null };
 
@@ -3749,7 +3749,7 @@ async function serveStaticAsset(request: Request, url: URL): Promise<Response> {
 // exact Origin (never "*") with Allow-Credentials. Mirrors the Worker's allowlist
 // (worker/index.ts). Loopback dev origins are allowed in corsAllowOrigin below.
 const CORS_ALLOWED_ORIGINS = new Set<string>([
-  "https://spotify.streamarena.xyz",
+  "https://music.streamarena.xyz",
 ]);
 
 function corsAllowOrigin(origin: string | null): string | null {

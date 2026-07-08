@@ -1,13 +1,12 @@
-# Spotify
+# Music
 
-Spotify is a Vite React music app served directly from the Mac mini through
-Caddy. Cloudflare Workers are still available on `workers.dev` for lightweight
-auth/import API work, but the public app and FLAC media stream through the home
-Caddy path.
+Private personal music app served from the Mac mini through Caddy. Cloudflare
+Workers handle auth/import APIs; the app UI and FLAC media stream through the
+home Caddy path. Access requires a signed-in account.
 
 ## Current Production Setup
 
-- Public app: `https://spotify.streamarena.xyz`
+- Public app: `https://music.streamarena.xyz` (login required)
 - Mac mini Tailscale app/server: `http://100.121.144.60:5174`
 - Mac mini LAN app/server: `http://192.168.1.240:5174`
 - Worker backend for auth/import APIs: `https://spotify.erlinhoxha.workers.dev`
@@ -17,7 +16,7 @@ Caddy path.
 - Shared Caddy launchd service: `xyz.streamarena.caddy`
 - DNS drift watcher launchd service: `xyz.streamarena.spotify-dns-watch`
 
-`spotify.streamarena.xyz` should be a DNS-only record pointing at the home
+`music.streamarena.xyz` should be a DNS-only record pointing at the home
 public IP. Caddy terminates TLS, routes static assets and media directly to the
 Mac mini server, and forwards auth/import API calls to the Worker backend.
 
@@ -25,10 +24,10 @@ Mac mini server, and forwards auth/import API calls to the Worker backend.
 
 ```text
 Phone/browser
-  -> Caddy: spotify.streamarena.xyz
+  -> Caddy: music.streamarena.xyz
        -> static app and media ranges: 127.0.0.1:5174
        -> auth/import APIs: spotify.erlinhoxha.workers.dev
-            -> Worker calls MAC_MINI_ORIGIN=https://spotify.streamarena.xyz
+            -> Worker calls MAC_MINI_ORIGIN=https://music.streamarena.xyz
                  -> Caddy trusted proxy-token route
                       -> Mac mini local server on 127.0.0.1:5174
                            -> /Users/hermes/Music
@@ -68,7 +67,7 @@ media path.
   `MINI_HOST` to force a single host, or `MINI_HOSTS` to override the fallback
   list.
 - Public traffic should reach the Mac mini through the router's 80/443 port
-  forwards and the direct DNS-only record for `spotify.streamarena.xyz`.
+  forwards and the direct DNS-only record for `music.streamarena.xyz`.
 - `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
 - `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
 - `SPOTIFY_LIBRARY_OWNER_EMAILS`, `SPOTIFY_LIBRARY_OWNER_USER_IDS`, or
@@ -102,7 +101,7 @@ media path.
 - `scripts/install-mini-server.sh` - installs/restarts the Mac mini launchd app
   service.
 - `scripts/install-mini-caddy.sh` - installs/updates the direct Caddy route for
-  `spotify.streamarena.xyz`.
+  `music.streamarena.xyz`.
 - `scripts/install-mini-dns-watch.sh` - installs/updates the DNS drift watcher
   for the direct home Caddy hostname.
 - `scripts/sync-mini-music.sh` - syncs audio/artwork/lyrics/sidecars to
@@ -191,7 +190,7 @@ The active `wrangler.jsonc` contains:
 
 ```json
 "workers_dev": true,
-"MAC_MINI_ORIGIN": "https://spotify.streamarena.xyz"
+"MAC_MINI_ORIGIN": "https://music.streamarena.xyz"
 ```
 
 Set or rotate the Worker secret:
@@ -212,11 +211,11 @@ SPOTIFY_CACHE_DIR=/Users/hermes/Developer/spotify/cache
 SPOTIFY_ARTWORK_LOOKUP=1
 SPOTIFY_ARTWORK_COUNTRY=GB
 SPOTIFY_PROXY_TOKEN=...
-SPOTIFY_PROXY_HOSTNAMES=spotify.streamarena.xyz
+SPOTIFY_PROXY_HOSTNAMES=music.streamarena.xyz
 SPOTIFY_LIBRARY_OWNER_EMAILS=
 SPOTIFY_LIBRARY_OWNER_USER_IDS=
 SPOTIFY_LIBRARY_OWNER_NAMES=Erlin
-SPOTIFY_DNS_WATCH_NAME=spotify.streamarena.xyz
+SPOTIFY_DNS_WATCH_NAME=music.streamarena.xyz
 ```
 
 ## Verification
@@ -230,7 +229,7 @@ bun run build
 bun run mini:check
 bun run mini:install-caddy
 bun run mini:install-dns-watch
-curl -I https://spotify.streamarena.xyz
+curl -I https://music.streamarena.xyz
 curl -sS -o /dev/null -w "%{http_code}\n" https://spotify.erlinhoxha.workers.dev/api/auth/session
 ```
 

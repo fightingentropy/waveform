@@ -73,7 +73,7 @@ describe("recordPlayEvent", () => {
   test("strips the render-only networkImageUrl from snapshots", () => {
     const requests = installFetchSpy();
     recordPlayEvent(
-      makeSong({ networkImageUrl: "https://spotify.streamarena.xyz/api/files/local/cover.jpg" }),
+      makeSong({ networkImageUrl: "https://music.streamarena.xyz/api/files/local/cover.jpg" }),
       120_000,
     );
     expect(requests.length).toBe(1);

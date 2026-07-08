@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
-import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
 import EmailVerificationBanner from "@/components/EmailVerificationBanner";
@@ -25,7 +25,6 @@ const loadPlaylistPage = () => import("@/client/pages/PlaylistPage");
 const loadUploadPage = () => import("@/client/pages/UploadPage");
 const loadSettingsPage = () => import("@/client/pages/SettingsPage");
 const loadSignInPage = () => import("@/client/pages/SignInPage");
-const loadRegisterPage = () => import("@/client/pages/RegisterPage");
 type RoutePrefetcher = () => Promise<unknown>;
 const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
   loadSearchPage,
@@ -38,7 +37,6 @@ const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
   loadUploadPage,
   loadSettingsPage,
   loadSignInPage,
-  loadRegisterPage,
 ];
 const prefetchedRouteModules = new Set<RoutePrefetcher>();
 const ROUTE_PREFETCH_IDLE_TIMEOUT_MS = 2_000;
@@ -54,7 +52,6 @@ const PlaylistPage = lazy(loadPlaylistPage);
 const UploadPage = lazy(loadUploadPage);
 const SettingsPage = lazy(loadSettingsPage);
 const SignInPage = lazy(loadSignInPage);
-const RegisterPage = lazy(loadRegisterPage);
 
 function RouteLoading({ label = "Loading..." }: { label?: string }) {
   return (
@@ -183,6 +180,8 @@ function useIdleRoutePrefetch() {
   }, []);
 }
 
+const AUTH_PUBLIC_PATHS = new Set(["/signin"]);
+
 function Shell() {
   const { user, status } = useAuth();
   const location = useLocation();
@@ -190,6 +189,7 @@ function Shell() {
   const [initialSidebarCollapsed] = useState(
     () => localStorage.getItem("spotify_left_sidebar_collapsed") === "1",
   );
+  const isAuthPublicPath = AUTH_PUBLIC_PATHS.has(location.pathname);
   const { data: library } = useApiData<LibraryPayload>(
     withAccountScope("/api/library", user?.id ?? status),
     {
@@ -197,7 +197,7 @@ function Shell() {
       userId: null,
     },
     {
-      enabled: status !== "loading",
+      enabled: status === "authenticated",
       keepPreviousData: true,
     },
   );
@@ -216,6 +216,36 @@ function Shell() {
       ? library
       : { playlists: [], userId: user?.id ?? null };
 
+  if (status === "loading") {
+    return (
+      <div className="min-h-dvh bg-background px-4 py-16 text-center text-white/[0.7]">
+        Checking session...
+      </div>
+    );
+  }
+
+  if (!user && !isAuthPublicPath) {
+    return (
+      <Navigate to="/signin" replace state={{ from: `${location.pathname}${location.search}` }} />
+    );
+  }
+
+  if (user && isAuthPublicPath) {
+    return <Navigate to="/" replace />;
+  }
+
+  if (!user) {
+    return (
+      <main className="wf-main min-h-dvh bg-background pt-[env(safe-area-inset-top)]">
+        <div key={location.pathname} className="wf-route-surface">
+          <Routes location={location}>
+            <Route path="/signin" element={lazyRoute(<SignInPage />, "Loading sign in...")} />
+          </Routes>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <>
       <PwaRegister />
@@ -228,7 +258,7 @@ function Shell() {
             to="/"
             className="font-semibold inline-flex shrink-0 items-center touch-manipulation lg:absolute lg:left-4 lg:top-1/2 lg:-translate-y-1/2"
           >
-            <img src="/logo.png" alt="Spotify" width={40} height={40} className="h-10 w-10 lg:h-7 lg:w-7" />
+            <img src="/logo.png" alt="Music" width={40} height={40} className="h-10 w-10 lg:h-7 lg:w-7" />
           </Link>
           <HomeSearchCommandPalette
             className="hidden w-[22rem] lg:col-start-2 lg:block lg:justify-self-center xl:w-[30rem]"
@@ -266,7 +296,7 @@ function Shell() {
           <Route path="/settings" element={lazyRoute(<SettingsPage />, "Loading settings...")} />
           <Route path="/profile" element={lazyRoute(<ProfilePage />, "Loading profile...")} />
           <Route path="/signin" element={lazyRoute(<SignInPage />, "Loading sign in...")} />
-          <Route path="/register" element={lazyRoute(<RegisterPage />, "Loading registration...")} />
+          <Route path="/register" element={<Navigate to="/signin" replace />} />
           <Route
             path="*"
             element={

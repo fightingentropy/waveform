@@ -6,7 +6,7 @@ import { fetchPublicHttpUrl } from "./safe-fetch";
 // UA (not the Chrome string the public-API providers spoof) and its
 // fetchWithTimeout takes a RequestInit + timeout rather than the option bag the
 // other providers use. Both stay local on purpose.
-const DEFAULT_USER_AGENT = "spotify/1.0 (+https://spotify.streamarena.xyz)";
+const DEFAULT_USER_AGENT = "spotify/1.0 (+https://music.streamarena.xyz)";
 const LICENSED_SOURCE_REQUEST_TIMEOUT_MS = 30_000;
 const LICENSED_SOURCE_MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 // A malicious DASH manifest can request billions of segments (e.g. a single

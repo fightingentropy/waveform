@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Spotify",
-  "short_name": "Spotify",
-  "description": "Local-first music player for your library",
+  "name": "Music",
+  "short_name": "Music",
+  "description": "Private personal music library",
   "lang": "en",
   "dir": "ltr",
   "start_url": "/",

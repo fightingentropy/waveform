@@ -1,7 +1,7 @@
 # Current Spotify App Features
 
 This app is a private Spotify-style music library for the Mac mini. The public
-site is served at `https://spotify.streamarena.xyz` through direct Caddy, and
+site is served at `https://music.streamarena.xyz` through direct Caddy, and
 the music files live on the Mac mini at `/Users/hermes/Music`.
 
 ## Playback
@@ -65,7 +65,7 @@ the music files live on the Mac mini at `/Users/hermes/Music`.
 
 ## Production Architecture
 
-- Public app: `https://spotify.streamarena.xyz`
+- Public app: `https://music.streamarena.xyz`
 - Mac mini Tailscale app/server: `http://100.121.144.60:5174`
 - Mac mini LAN app/server: `http://192.168.1.240:5174`
 - Operational scripts try the Tailscale SSH alias/IP first, then fall back to

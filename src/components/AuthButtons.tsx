@@ -95,10 +95,6 @@ export function AuthButtons({ compact = false }: { compact?: boolean }) {
         <Link className="text-white/[0.76] underline underline-offset-2 transition hover:text-white" to="/signin">
           Sign in
         </Link>
-        <span className="text-white/[0.38]">/</span>
-        <Link className="text-white/[0.76] underline underline-offset-2 transition hover:text-white" to="/register">
-          Register
-        </Link>
       </div>
     );
   }

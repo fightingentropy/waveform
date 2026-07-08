@@ -7,7 +7,7 @@ backends:
 
 | File | Runtime | Backend | Role |
 |---|---|---|---|
-| `src/worker/index.ts` | Cloudflare Worker (Hono) | D1 (SQLite) + R2 (MEDIA) + IMAGES + ASSETS | The PUBLIC origin the RN app talks to (`https://spotify.streamarena.xyz` / `…workers.dev`). Owns auth (cookie sessions), the per-user D1 song library, likes, playlists, offline-downloads, play-events, podcasts, Spotify import, and Discover orchestration. |
+| `src/worker/index.ts` | Cloudflare Worker (Hono) | D1 (SQLite) + R2 (MEDIA) + IMAGES + ASSETS | The PUBLIC origin the RN app talks to (`https://music.streamarena.xyz` / `…workers.dev`). Owns auth (cookie sessions), the per-user D1 song library, likes, playlists, offline-downloads, play-events, podcasts, Spotify import, and Discover orchestration. |
 | `src/server/local-music-server.ts` | Bun (`Bun.serve`) on the Mac mini | local filesystem (`~/Music`) | The MUSIC ORIGIN. Serves the owner's on-disk FLAC library + per-user folders, local artwork, local likes, Discover staging. NOT called directly by the RN app — the Worker REVERSE-PROXIES a subset of routes here. |
 
 CRITICAL ARCHITECTURE FACT: the RN app should treat the **Worker** as its only

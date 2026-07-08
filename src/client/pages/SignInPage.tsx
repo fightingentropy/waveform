@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/client/auth";
 
 function resolveRedirectTarget(
@@ -87,8 +87,8 @@ export default function SignInPage() {
           {loading ? "Signing in..." : "Sign in"}
         </button>
       </form>
-      <p className="mt-4 text-sm">
-        Don&apos;t have an account? <Link className="underline" to="/register">Register</Link>
+      <p className="mt-4 text-sm text-white/[0.62]">
+        Private personal library. Sign-in only.
       </p>
     </div>
   );

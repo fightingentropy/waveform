@@ -174,7 +174,7 @@ function isIosLikePlatform(): boolean {
 // node outputs silence). Third-party hosts (radio) use anonymous CORS instead;
 // same-origin / blob / capacitor sources need no crossOrigin at all.
 const CREDENTIALED_AUDIO_ORIGINS = new Set<string>([
-  "https://spotify.streamarena.xyz",
+  "https://music.streamarena.xyz",
 ]);
 
 // The crossOrigin mode the <audio> element must use for a resolved src so that,

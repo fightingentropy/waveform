@@ -985,7 +985,7 @@ async function fetchWithTimeout(
       ...init,
       signal: controller.signal,
       headers: {
-        "user-agent": "spotify/1.0 (+https://spotify.streamarena.xyz)",
+        "user-agent": "spotify/1.0 (+https://music.streamarena.xyz)",
         ...(init?.headers || {}),
       },
     });
@@ -3263,8 +3263,24 @@ function applySecurityHeaders(headers: Headers): void {
 // site. The native app uses native fetch / AVPlayer, not browser CORS, so it
 // needs no allowlist entry; loopback dev origins are allowed in corsAllowOrigin.
 const CORS_ALLOWED_ORIGINS = new Set<string>([
-  "https://spotify.streamarena.xyz",
+  "https://music.streamarena.xyz",
 ]);
+
+// Auth endpoints that must stay reachable without a session. Everything else
+// under /api requires a signed-in user so the personal library is not public.
+const AUTH_OPEN_API_PATHS = new Set([
+  "/api/auth/session",
+  "/api/auth/signin",
+  "/api/auth/signout",
+  "/api/auth/resend-verification",
+  // Kept open only so anonymous callers get an explicit 403 instead of 401.
+  "/api/register",
+]);
+
+function isAuthOpenApiPath(pathname: string): boolean {
+  if (AUTH_OPEN_API_PATHS.has(pathname)) return true;
+  return pathname.startsWith("/api/auth/verify/");
+}
 
 function corsAllowOrigin(origin: string | undefined | null): string | null {
   if (!origin) return null;
@@ -3317,6 +3333,25 @@ app.use("*", async (c, next) => {
 });
 
 app.use("/api/*", async (c, next) => {
+  await ensureSchema(c.env);
+  const db = createD1SqlTag(c.env.DB);
+  c.set("db", db);
+  const resolvedUser = (await getCurrentUser(c.req.raw, db)) ?? getLocalMacMiniAuthUser(c);
+  // The synthetic local-owner identity only ever resolves on local-preview hosts
+  // (never prod). Back it with a real User row so its editable-playlist writes
+  // satisfy the Playlist.userId -> User foreign key D1 enforces. No-op in prod.
+  if (resolvedUser && resolvedUser.id === LOCAL_MAC_MINI_AUTH_USER.id) {
+    await ensureLocalOwnerUser(db);
+  }
+  c.set("user", resolvedUser);
+  const pathname = new URL(c.req.url).pathname;
+  if (!resolvedUser && !isAuthOpenApiPath(pathname)) {
+    return jsonError("Unauthorized", 401);
+  }
+  await next();
+});
+
+app.use("/api/*", async (c, next) => {
   // When editable playlists are on, the worker (not the mini) owns two GET reads:
   // the /api/library merge, and the detail read for any folder that's been
   // converted to D1. Skip the proxy and fall through to the D1 handlers; an
@@ -3337,26 +3372,11 @@ app.use("/api/*", async (c, next) => {
   }
   if (shouldProxyMusicRequest(c)) {
     const needsUser = isMacMiniMutation(c) || shouldForwardMacMiniUser(c);
-    const user = needsUser ? await getMacMiniProxyUser(c) : null;
+    const user = needsUser ? (c.get("user") ?? (await getMacMiniProxyUser(c))) : null;
     const unauthorized = authorizeMacMiniMutation(c, user);
     if (unauthorized) return unauthorized;
     return proxyToMacMini(c, user);
   }
-  await next();
-});
-
-app.use("/api/*", async (c, next) => {
-  await ensureSchema(c.env);
-  const db = createD1SqlTag(c.env.DB);
-  c.set("db", db);
-  const resolvedUser = (await getCurrentUser(c.req.raw, db)) ?? getLocalMacMiniAuthUser(c);
-  // The synthetic local-owner identity only ever resolves on local-preview hosts
-  // (never prod). Back it with a real User row so its editable-playlist writes
-  // satisfy the Playlist.userId -> User foreign key D1 enforces. No-op in prod.
-  if (resolvedUser && resolvedUser.id === LOCAL_MAC_MINI_AUTH_USER.id) {
-    await ensureLocalOwnerUser(db);
-  }
-  c.set("user", resolvedUser);
   await next();
 });
 
@@ -3518,49 +3538,8 @@ app.post("/api/profile/image", async (c) => {
 });
 
 app.post("/api/register", async (c) => {
-  const db = c.get("db");
-  const limited = await rateLimit(db, c.req.raw, "register", 5, 10 * 60 * 1000);
-  if (!limited.allowed) return c.json({ error: "Too many requests" }, { status: 429, headers: limited.headers });
-  const body = await readJson<{ name?: unknown; email?: unknown; password?: unknown }>(c.req.raw);
-  const email = toStringValue(body?.email).toLowerCase();
-  const password = toStringValue(body?.password);
-  const name = toStringValue(body?.name);
-  if (!email || !password) return jsonError("Email and password are required", 400);
-  if (password.length < 8 || password.length > 128) return jsonError("Password must be 8-128 characters", 400);
-  // Impersonation guard: never let a registrant claim a configured owner display name.
-  const ownerNames = envStringList(c.env, "SPOTIFY_LIBRARY_OWNER_NAMES");
-  const configuredOwnerNames = ownerNames.length > 0 ? ownerNames : ["Erlin"];
-  const normalizedName = name.trim().toLowerCase();
-  if (normalizedName && configuredOwnerNames.some((owner) => owner.trim().toLowerCase() === normalizedName)) {
-    return jsonError("Display name is not available", 400);
-  }
-  // Always hash so registration timing does not reveal whether the email exists.
-  const passwordHash = await hash(password, 10);
-  const existing = await db<UserRow>`
-    SELECT "id"
-    FROM "User"
-    WHERE "email" = ${email}
-    LIMIT 1
-  `;
-  if (existing[0]) {
-    // Return the same generic shape as a successful registration to avoid
-    // user enumeration; do not distinguish duplicates with a 409.
-    return c.json({ ok: true }, 201);
-  }
-  const image = defaultUserImage(email, name);
-  await db`
-    INSERT INTO "User" ("id", "email", "name", "passwordHash", "image", "emailVerified", "createdAt", "updatedAt")
-    VALUES (${crypto.randomUUID()}, ${email}, ${name || null}, ${passwordHash}, ${image}, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-  `;
-  // Best-effort: send a verification email for genuinely new accounts only (the
-  // duplicate-email branch above never reaches here, preserving anti-enumeration).
-  try {
-    const rawToken = await createEmailVerificationToken(db, email);
-    await sendVerificationEmail(c.env, c.req.url, email, rawToken);
-  } catch (error) {
-    console.error("verification token/send failed:", error instanceof Error ? error.message : String(error));
-  }
-  return c.json({ ok: true }, 201);
+  // Private personal deployment: public self-registration is disabled.
+  return jsonError("Registration is disabled", 403);
 });
 
 app.get("/api/home", async (c) => {

@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MINI_HOST="${MINI_HOST:-}"
 MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
-SPOTIFY_DOMAIN="${SPOTIFY_DOMAIN:-spotify.streamarena.xyz}"
+SPOTIFY_DOMAIN="${SPOTIFY_DOMAIN:-music.streamarena.xyz}"
 SPOTIFY_WORKER_HOST="${SPOTIFY_WORKER_HOST:-spotify.erlinhoxha.workers.dev}"
 SPOTIFY_UPSTREAM="${SPOTIFY_UPSTREAM:-127.0.0.1:5174}"
 CADDYFILE="${CADDYFILE:-/Users/hermes/.config/caddy/Caddyfile}"
@@ -20,7 +20,7 @@ Usage: scripts/install-mini-caddy.sh [options]
 Installs/updates the shared Mac mini Caddy route for direct Spotify streaming.
 
 Options:
-  --domain <host>        Public Spotify host. Default: spotify.streamarena.xyz.
+  --domain <host>        Public music host. Default: music.streamarena.xyz.
   --worker-host <host>   Worker backend host for auth/import APIs. Default: spotify.erlinhoxha.workers.dev.
   --upstream <host:port> Local Spotify server upstream. Default: 127.0.0.1:5174.
   -h, --help             Show this help.
@@ -141,7 +141,13 @@ def remove_named_site_blocks(source: str, names: set[str]) -> str:
     return "\n".join(out).strip() + "\n"
 
 text = remove_managed_block(text)
-text = remove_named_site_blocks(text, {domain, f"http://{domain}"})
+text = remove_named_site_blocks(text, {
+    domain,
+    f"http://{domain}",
+    "spotify.streamarena.xyz",
+    "http://spotify.streamarena.xyz",
+    "https://spotify.streamarena.xyz",
+})
 
 quoted_token = caddy_quote(token)
 quoted_worker = caddy_quote(worker_host)
