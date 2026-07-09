@@ -275,7 +275,7 @@ function Shell() {
         </div>
       </header>
       <LibrarySidebarClient
-        userId={status === "loading" ? visibleLibrary.userId : user?.id ?? null}
+        userId={user?.id ?? null}
         playlists={visibleLibrary.playlists}
         initialCollapsed={initialSidebarCollapsed}
       />
