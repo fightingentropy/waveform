@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
-import { compare, hash } from "bcryptjs";
+import { compare } from "bcryptjs";
 import { basename, extname, join } from "node:path";
 import { D1_SCHEMA_STATEMENTS } from "@/lib/db-schema";
 import type { PlaybackStateRow, PlaylistRow, SongRow, UserRow } from "@/lib/db-types";
@@ -53,6 +53,7 @@ import {
 import { fetchLastFmSimilarTracks } from "@/lib/recommendations";
 import { normalizeSongPart } from "@/lib/song-dedupe";
 import { resolveTidalTrackIdByIsrc } from "@/lib/tidal-isrc";
+import { createStreamingMultipartBody, peekAndReplayStream } from "./streaming-multipart";
 
 type Variables = {
   user: AuthUser | null;
@@ -248,7 +249,6 @@ const AUDIO_MIME_TYPES = new Set([
 const DUMMY_PASSWORD_HASH = "$2b$10$7tXHcDkbjQu2CAfr8lewqezc3JeBLP4fnqpxolFBCCxzclVG0si.K";
 
 let schemaPromise: Promise<void> | null = null;
-let songColumnsPromise: Promise<void> | null = null;
 let localOwnerUserPromise: Promise<void> | null = null;
 
 // Ensures the synthetic local-preview owner ("local-mac-mini") has a backing
@@ -366,44 +366,6 @@ async function ensureSchema(env: CloudflareEnv): Promise<void> {
     throw error;
   });
   await schemaPromise;
-}
-
-async function ensureSongColumns(db: SqlTag): Promise<void> {
-  songColumnsPromise ??= (async () => {
-    for (const statement of [
-      'ALTER TABLE "Song" ADD COLUMN "lyricsUrl" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "audioBitDepth" INTEGER',
-      'ALTER TABLE "Song" ADD COLUMN "audioSampleRate" INTEGER',
-      'ALTER TABLE "Song" ADD COLUMN "duration" REAL',
-      'ALTER TABLE "Song" ADD COLUMN "album" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "albumArtist" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "releaseDate" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "trackNumber" INTEGER',
-      'ALTER TABLE "Song" ADD COLUMN "totalTracks" INTEGER',
-      'ALTER TABLE "Song" ADD COLUMN "discNumber" INTEGER',
-      'ALTER TABLE "Song" ADD COLUMN "totalDiscs" INTEGER',
-      'ALTER TABLE "Song" ADD COLUMN "genre" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "isrc" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "upc" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "composer" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "publisher" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "copyright" TEXT',
-      `ALTER TABLE "Song" ADD COLUMN "outputFormat" TEXT DEFAULT 'flac'`,
-    ]) {
-      try {
-        await db([statement] as unknown as TemplateStringsArray);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.toLowerCase().includes("duplicate column")) {
-          throw error;
-        }
-      }
-    }
-  })().catch((error) => {
-    songColumnsPromise = null;
-    throw error;
-  });
-  await songColumnsPromise;
 }
 
 function toStringValue(value: unknown): string {
@@ -914,7 +876,6 @@ function parseStorageKeyFromApiPath(pathname: string): string {
 }
 
 async function storageKeyBelongsToUser(db: SqlTag, key: string, userId: string): Promise<boolean> {
-  await ensureSongColumns(db);
   const fileUrl = toApiFileUrl(key);
   const userRows = await db<{ id: string }>`
     SELECT "id"
@@ -1918,86 +1879,49 @@ function audioCodecLabel(info: AudioCodecInfo): string {
   return info.codec || "unknown codec";
 }
 
-// Buffer a response body into memory while enforcing a byte budget as chunks
-// arrive. A provider that omits or understates Content-Length can otherwise slip
-// a multi-hundred-MB body past the header-only size check and OOM the isolate
-// before the post-buffer guard runs. Returns null (and cancels the stream) once
-// the budget is exceeded.
-async function readResponseBodyWithLimit(
-  response: Response,
-  maxBytes: number,
-  onProgress?: (received: number) => void,
-): Promise<ArrayBuffer | null> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength > maxBytes) return null;
-    onProgress?.(buffer.byteLength);
-    return buffer;
-  }
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      received += value.byteLength;
-      if (received > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        return null;
-      }
-      chunks.push(value);
-      onProgress?.(received);
-    }
-  } finally {
-    reader.releaseLock?.();
-  }
-  const out = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out.buffer;
-}
-
 async function validateMinimumQualityResponse(
   response: Response,
   candidate: ResolvedAudioDownloadCandidate,
   onProgress?: (received: number, total: number) => void,
 ): Promise<Response | string> {
-  if (candidate.minimumQuality !== "lossless") return response;
   const contentType = `${response.headers.get("content-type") || candidate.contentType || ""}`.toLowerCase();
   const contentTypeInfo = classifyAudioContentType(contentType);
-  if (contentTypeInfo.quality === "lossy") {
+  if (candidate.minimumQuality === "lossless" && contentTypeInfo.quality === "lossy") {
+    await response.body?.cancel().catch(() => undefined);
     return `${candidate.service} returned a lossy ${audioCodecLabel(contentTypeInfo)} stream`;
   }
 
   const length = Number(response.headers.get("content-length") || "0");
-  if (Number.isFinite(length) && length > MAX_AUDIO_BYTES) return "Audio file is too large";
-
-  // Lossless validation must drain the body to sniff magic bytes, so this read is
-  // the real provider→Worker download. Surface its progress so the streaming
-  // import shows a true % even though the returned Response is then in-memory.
-  const total = Number.isFinite(length) && length > 0 ? length : 0;
-  const buffer = await readResponseBodyWithLimit(
-    response,
-    MAX_AUDIO_BYTES,
-    onProgress ? (received) => onProgress(received, total) : undefined,
-  );
-  if (!buffer) return "Audio file is too large";
-  const byteInfo = classifyAudioBytes(buffer);
-  if (byteInfo.quality === "lossless") {
-    return new Response(buffer, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: new Headers(response.headers),
-    });
+  if (Number.isFinite(length) && length > MAX_AUDIO_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    return "Audio file is too large";
   }
-  return byteInfo.quality === "lossy"
-    ? `${candidate.service} returned a lossy ${audioCodecLabel(byteInfo)} stream`
-    : `${candidate.service} returned an unverified ${audioCodecLabel(byteInfo)} stream for a lossless request`;
+  if (!response.body) return "Audio server returned an empty response";
+
+  // Sniff only a bounded prefix, then replay it into a size-limited stream. This
+  // keeps a lossless import off the Worker's heap while preserving validation,
+  // progress reporting, and the 100 MB guard for responses without a trustworthy
+  // Content-Length header.
+  const total = Number.isFinite(length) && length > 0 ? length : 0;
+  const replay = await peekAndReplayStream(response.body, {
+    maxBytes: MAX_AUDIO_BYTES,
+    peekBytes: candidate.minimumQuality === "lossless" ? 64 * 1024 : 1,
+    onProgress: onProgress ? (received) => onProgress(received, total) : undefined,
+  });
+  if (candidate.minimumQuality === "lossless") {
+    const byteInfo = classifyAudioBytes(replay.prefix);
+    if (byteInfo.quality !== "lossless") {
+      await replay.body.cancel().catch(() => undefined);
+      return byteInfo.quality === "lossy"
+        ? `${candidate.service} returned a lossy ${audioCodecLabel(byteInfo)} stream`
+        : `${candidate.service} returned an unverified ${audioCodecLabel(byteInfo)} stream for a lossless request`;
+    }
+  }
+  return new Response(replay.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(response.headers),
+  });
 }
 
 function licensedSourceProviderEndpoint(env: CloudflareEnv): string {
@@ -2624,7 +2548,6 @@ async function listPlaylists(db: SqlTag, userId: string | null) {
 }
 
 async function listSongs(db: SqlTag, userId: string | null) {
-  await ensureSongColumns(db);
   if (!userId) return [];
   return db<SongRow>`
     SELECT "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
@@ -2636,7 +2559,6 @@ async function listSongs(db: SqlTag, userId: string | null) {
 }
 
 async function ensureLegacyLikedSongsForUser(db: SqlTag, userId: string): Promise<void> {
-  await ensureSongColumns(db);
   const backfilled = await db<{ userId: string }>`
     SELECT "userId"
     FROM "LikeBackfill"
@@ -2704,7 +2626,6 @@ async function listLikedSongs(db: SqlTag, userId: string): Promise<SongRow[]> {
 }
 
 async function listSearchSongs(db: SqlTag, userId: string | null) {
-  await ensureSongColumns(db);
   if (!userId) return [];
   const rows = await db<Pick<SongRow, "id" | "title" | "artist" | "imageUrl" | "audioUrl" | "createdAt">>`
     SELECT "id", "title", "artist", "imageUrl", "audioUrl", "createdAt"
@@ -2860,7 +2781,7 @@ function isMacMiniMutation(c: Context<AppEnv>): boolean {
 }
 
 async function getMacMiniProxyUser(c: Context<AppEnv>): Promise<AuthUser | null> {
-  await ensureSchema(c.env);
+  if (isLocalPreviewHost(new URL(c.req.url).hostname)) await ensureSchema(c.env);
   const db = createD1SqlTag(c.env.DB);
   return (await getCurrentUser(c.req.raw, db)) ?? getLocalMacMiniAuthUser(c);
 }
@@ -2921,9 +2842,64 @@ async function postJsonToMacMini(c: Context<AppEnv>, user: AuthUser, payload: Re
   });
 }
 
-async function postFormToMacMini(c: Context<AppEnv>, user: AuthUser, form: FormData): Promise<Response> {
+function macMiniSongFields(
+  payload: SongPayload,
+  values: {
+    title: string;
+    artist: string;
+    album: string;
+    duration: number | null;
+    replaceExisting: boolean;
+  },
+  resolved?: ResolvedAudioDownload,
+): Record<string, string> {
+  const fields: Record<string, string> = {
+    title: values.title,
+    artist: values.artist,
+  };
+  if (values.album) fields.album = values.album;
+  const durationMs = toNumberValue(payload.durationMs) ?? (values.duration ? values.duration * 1000 : undefined);
+  if (typeof durationMs === "number") fields.durationMs = String(durationMs);
+  const imageUrl = toStringValue(payload.imageUrl) || coverUrlFromResolvedDownload(resolved);
+  if (imageUrl) fields.imageUrl = imageUrl;
+  const lyricsText = toStringValue(payload.lyricsText) || lyricsTextFromResolvedDownload(resolved);
+  if (lyricsText) fields.lyricsText = lyricsText;
+  if (values.replaceExisting) fields.replaceExisting = "true";
+  return fields;
+}
+
+async function postAudioStreamToMacMini(
+  c: Context<AppEnv>,
+  user: AuthUser,
+  payload: SongPayload,
+  values: {
+    title: string;
+    artist: string;
+    album: string;
+    duration: number | null;
+    replaceExisting: boolean;
+  },
+  resolved: ResolvedAudioDownload,
+  response: Response,
+): Promise<Response> {
+  if (!response.body) throw new ApiError("Audio server returned an empty response", 502);
   const targetUrl = new URL("/api/songs", getMacMiniOrigin(c.env));
-  const headers = new Headers({ accept: "application/json" });
+  const responseType = response.headers.get("content-type") || resolved.contentType || "audio/flac";
+  const ext = extensionFromResponse(response, resolved.streamUrl);
+  const fileName = `${sanitizeFileName(`${values.artist} - ${values.title}`)}${ext}`;
+  const multipart = createStreamingMultipartBody({
+    fields: macMiniSongFields(payload, values, resolved),
+    file: {
+      fieldName: "audio",
+      fileName,
+      contentType: responseType,
+      body: response.body,
+    },
+  });
+  const headers = new Headers({
+    accept: "application/json",
+    "content-type": multipart.contentType,
+  });
   const token = getMacMiniProxyToken(c.env);
   if (token) headers.set("x-spotify-proxy-token", token);
   headers.set("x-spotify-user-id", user.id);
@@ -2932,7 +2908,7 @@ async function postFormToMacMini(c: Context<AppEnv>, user: AuthUser, form: FormD
   return fetch(targetUrl.toString(), {
     method: "POST",
     headers,
-    body: form,
+    body: multipart.body,
   });
 }
 
@@ -3039,101 +3015,6 @@ function coverUrlFromResolvedDownload(resolved?: ResolvedAudioDownload): string 
   return "";
 }
 
-function appendMacMiniSongFields(
-  form: FormData,
-  payload: SongPayload,
-  values: {
-    title: string;
-    artist: string;
-    album: string;
-    duration: number | null;
-    replaceExisting: boolean;
-  },
-  resolved?: ResolvedAudioDownload,
-) {
-  form.set("title", values.title);
-  form.set("artist", values.artist);
-  if (values.album) form.set("album", values.album);
-  const durationMs = toNumberValue(payload.durationMs) ?? (values.duration ? values.duration * 1000 : undefined);
-  if (typeof durationMs === "number") form.set("durationMs", String(durationMs));
-  const imageUrl = toStringValue(payload.imageUrl) || coverUrlFromResolvedDownload(resolved);
-  if (imageUrl) form.set("imageUrl", imageUrl);
-  const lyricsText = toStringValue(payload.lyricsText) || lyricsTextFromResolvedDownload(resolved);
-  if (lyricsText) form.set("lyricsText", lyricsText);
-  if (values.replaceExisting) form.set("replaceExisting", "true");
-}
-
-async function audioFileFromResolvedResponse(
-  response: Response,
-  resolved: ResolvedAudioDownload,
-  title: string,
-  artist: string,
-): Promise<File> {
-  const length = Number(response.headers.get("content-length") || "0");
-  if (Number.isFinite(length) && length > MAX_AUDIO_BYTES) {
-    throw new ApiError("Audio file is too large", 413);
-  }
-  const responseType = response.headers.get("content-type") || resolved.contentType || "audio/flac";
-  const ext = extensionFromResponse(response, resolved.streamUrl);
-  const buffer = await readResponseBodyWithLimit(response, MAX_AUDIO_BYTES);
-  if (!buffer) {
-    throw new ApiError("Audio file is too large", 413);
-  }
-  const fileName = `${sanitizeFileName(`${artist} - ${title}`)}${ext}`;
-  return new File([buffer], fileName, { type: responseType });
-}
-
-// Like audioFileFromResolvedResponse but reports byte progress as the provider
-// body streams in, so the single-track import can show a real download %.
-async function audioFileFromResolvedResponseWithProgress(
-  response: Response,
-  resolved: ResolvedAudioDownload,
-  title: string,
-  artist: string,
-  onProgress: (received: number, total: number) => void,
-): Promise<File> {
-  const length = Number(response.headers.get("content-length") || "0");
-  if (Number.isFinite(length) && length > MAX_AUDIO_BYTES) {
-    throw new ApiError("Audio file is too large", 413);
-  }
-  const total = Number.isFinite(length) && length > 0 ? length : 0;
-  const responseType = response.headers.get("content-type") || resolved.contentType || "audio/flac";
-  const ext = extensionFromResponse(response, resolved.streamUrl);
-  const fileName = `${sanitizeFileName(`${artist} - ${title}`)}${ext}`;
-  const reader = response.body?.getReader();
-  if (!reader) {
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength > MAX_AUDIO_BYTES) throw new ApiError("Audio file is too large", 413);
-    onProgress(buffer.byteLength, total || buffer.byteLength);
-    return new File([buffer], fileName, { type: responseType });
-  }
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      received += value.byteLength;
-      if (received > MAX_AUDIO_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new ApiError("Audio file is too large", 413);
-      }
-      chunks.push(value);
-      onProgress(received, total);
-    }
-  } finally {
-    reader.releaseLock?.();
-  }
-  const out = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new File([out], fileName, { type: responseType });
-}
-
 // Opt-in: the single-track Upload page sets this header to receive an NDJSON
 // progress stream instead of a one-shot JSON response.
 function wantsImportProgressStream(c: Context<AppEnv>): boolean {
@@ -3177,14 +3058,13 @@ function streamMacMiniSpotifyImport(
         emit({ stage: "resolving" });
         const resolved = await resolveStreamUrl(c.env, payload);
         emit({ stage: "downloading", received: 0, total: 0 });
-        // One throttled reporter shared across the (lossless) validation read and
-        // the file read, so progress is real whether the body streams live or is
-        // pre-buffered by quality validation. ~96KB granularity keeps the NDJSON
-        // small (a 30MB file is ~300 lines). lastEmitted persists across both
-        // reads so the buffered re-read can't reset the bar.
+        // The reporter follows the provider stream as it is forwarded directly
+        // to the Mac mini. ~96 KB granularity keeps the NDJSON response compact.
         let lastEmitted = 0;
         let lastTotal = 0;
+        let receivedBytes = 0;
         const reportDownload = (received: number, total: number) => {
+          receivedBytes = received;
           if (total > 0) lastTotal = total;
           if (received - lastEmitted >= 98_304 || (lastTotal > 0 && received >= lastTotal)) {
             lastEmitted = received;
@@ -3197,19 +3077,9 @@ function streamMacMiniSpotifyImport(
           finish();
           return;
         }
-        const file = await audioFileFromResolvedResponseWithProgress(
-          response,
-          resolved,
-          values.title,
-          values.artist,
-          reportDownload,
-        );
-        emit({ stage: "downloading", received: file.size, total: lastTotal || file.size });
+        const miniResp = await postAudioStreamToMacMini(c, user, payload, values, resolved, response);
+        emit({ stage: "downloading", received: receivedBytes, total: lastTotal || receivedBytes });
         emit({ stage: "saving" });
-        const form = new FormData();
-        appendMacMiniSongFields(form, payload, values, resolved);
-        form.set("audio", file);
-        const miniResp = await postFormToMacMini(c, user, form);
         const data = (await miniResp.json().catch(() => ({}))) as Record<string, unknown>;
         if (miniResp.status === 409 && data?.code === "DUPLICATE_SONG") {
           emit({ stage: "duplicate", existingSong: data.existingSong ?? null });
@@ -3333,7 +3203,9 @@ app.use("*", async (c, next) => {
 });
 
 app.use("/api/*", async (c, next) => {
-  await ensureSchema(c.env);
+  // Production schema changes are applied explicitly with Wrangler migrations.
+  // The runtime bootstrap remains only for disposable local-preview databases.
+  if (isLocalPreviewHost(new URL(c.req.url).hostname)) await ensureSchema(c.env);
   const db = createD1SqlTag(c.env.DB);
   c.set("db", db);
   const resolvedUser = (await getCurrentUser(c.req.raw, db)) ?? getLocalMacMiniAuthUser(c);
@@ -3537,7 +3409,7 @@ app.post("/api/profile/image", async (c) => {
   return c.json({ user: publicUser(rows[0] ?? { ...user, image: imageUrl }) });
 });
 
-app.post("/api/register", async (c) => {
+app.post("/api/register", async (_c) => {
   // Private personal deployment: public self-registration is disabled.
   return jsonError("Registration is disabled", 403);
 });
@@ -4430,7 +4302,8 @@ function mapTicketmasterEvent(ev: TicketmasterEvent): LiveEventDto | null {
   return { id: ev.id, artists, venue: venueLabel, date, imageUrl, genre: ev.classifications?.[0]?.genre?.name };
 }
 
-const artistKey = (e: LiveEventDto): string => e.artists.trim().toLowerCase();
+const artistKey = (e: LiveEventDto): string =>
+  (e.artists.split(",")[0] || e.artists).trim().toLowerCase();
 
 // Ticketmaster lists one event per tour date, so a multi-night stadium run
 // (e.g. Harry Styles × 6 nights at Wembley) floods a section with the same
@@ -4466,17 +4339,17 @@ app.get("/api/events", async (c) => {
     }
   };
 
-  const [forYou, popular] = await Promise.all([fetchEvents("sort=date,asc"), fetchEvents("sort=relevance,desc")]);
+  const [upcoming, popular] = await Promise.all([fetchEvents("sort=date,asc"), fetchEvents("sort=relevance,desc")]);
   // Cap each row at 12 distinct acts. Popular leads and is the canonical list
-  // (first pick of acts); "Just for you" then excludes acts *visible* in Popular
+  // (first pick of acts); "Coming up" then excludes acts *visible* in Popular
   // — not its hidden tail — so a trending act soon on the calendar still leads.
   const popularDedup = dedupeByArtist(popular, new Set<string>()).slice(0, 12);
   const seen = new Set(popularDedup.map(artistKey));
-  const forYouDedup = dedupeByArtist(forYou, seen).slice(0, 12);
+  const upcomingDedup = dedupeByArtist(upcoming, seen).slice(0, 12);
 
   const sections: { key: string; eyebrow: string; title: string; events: LiveEventDto[] }[] = [];
   if (popularDedup.length) sections.push({ key: "popular", eyebrow: "What’s trending right now", title: `Popular in ${city}`, events: popularDedup });
-  if (forYouDedup.length) sections.push({ key: "for-you", eyebrow: "Concerts we think you’ll like", title: "Just for you", events: forYouDedup });
+  if (upcomingDedup.length) sections.push({ key: "upcoming", eyebrow: `More concerts in ${city}`, title: "Coming up", events: upcomingDedup });
 
   return jsonCached(c, { sections });
 });
@@ -4620,7 +4493,6 @@ app.get("/api/playlist/:id", async (c) => {
   const db = c.get("db");
   const user = c.get("user");
   if (!user) return jsonError("Unauthorized", 401);
-  await ensureSongColumns(db);
   const playlists = await db<PlaylistRow & { source: string | null }>`
     SELECT "id", "name", "imageUrl", "userId", "createdAt", "source"
     FROM "Playlist"
@@ -4923,7 +4795,6 @@ app.get("/api/songs", async (c) => {
 app.post("/api/songs", async (c) => {
   const user = requireUser(c.get("user"));
   const db = c.get("db");
-  await ensureSongColumns(db);
   const contentType = c.req.header("content-type") || "";
   let title = "";
   let artist = "";
@@ -4957,10 +4828,14 @@ app.post("/api/songs", async (c) => {
       if (resolved) {
         const response = await fetchResolvedAudioDownloadForRequest(c, user, resolved);
         if (!response.ok || !response.body) throw new ApiError(`Audio server returned ${response.status}`, 502);
-        const form = new FormData();
-        appendMacMiniSongFields(form, payload, { title, artist, album, duration, replaceExisting }, resolved);
-        form.set("audio", await audioFileFromResolvedResponse(response, resolved, title, artist));
-        return postFormToMacMini(c, user, form);
+        return postAudioStreamToMacMini(
+          c,
+          user,
+          payload,
+          { title, artist, album, duration, replaceExisting },
+          resolved,
+          response,
+        );
       }
       if (!remoteAudioUrl) return jsonError("Audio URL is required", 400);
       return postJsonToMacMini(c, user, {
@@ -5088,7 +4963,6 @@ app.post("/api/songs", async (c) => {
 
 app.get("/api/songs/:id", async (c) => {
   const user = requireUser(c.get("user"));
-  await ensureSongColumns(c.get("db"));
   const rows = await c.get("db")<SongRow>`
     SELECT "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
     FROM "Song"
@@ -5385,7 +5259,6 @@ async function convertedFolderIds(env: CloudflareEnv): Promise<Set<string>> {
   const now = Date.now();
   if (convertedFolderCache && now - convertedFolderCache.at < 30_000) return convertedFolderCache.ids;
   try {
-    await ensureSchema(env);
     const result = await env.DB.prepare(
       `SELECT "id" FROM "Playlist" WHERE "source" = 'local-folder' AND "convertedAt" IS NOT NULL`,
     ).all<{ id: string }>();
@@ -5625,8 +5498,6 @@ app.post("/api/admin/convert-folders", async (c) => {
   if (!isLibraryOwner(c, user)) return jsonError("Forbidden", 403);
   if (!canUseMacMiniProxy(c.env)) return jsonError("Mac mini not configured", 503);
   const db = c.get("db");
-  await ensureSchema(c.env);
-
   const lib = await fetchMacMiniJson<{
     playlists?: { id: string; name: string; imageUrl?: string | null; createdAt?: string }[];
   }>(c, user, "/api/library");

@@ -8,6 +8,8 @@ const eslintConfig = [
       "android/app/src/main/assets/public/**",
       "dist/**",
       "ios/App/App/public/**",
+      "mobile/.expo/**",
+      "mobile/ios/**",
       "node_modules/**",
       "cloudflare-env.d.ts",
       "public/sw.js",
@@ -25,6 +27,25 @@ const eslintConfig = [
         "warn",
         { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" },
       ],
+    },
+  },
+  {
+    files: [
+      "mobile/babel.config.js",
+      "mobile/metro.config.js",
+      "mobile/tailwind.config.js",
+      "mobile/plugins/**/*.js",
+    ],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        __dirname: "readonly",
+        module: "readonly",
+        require: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
 ];

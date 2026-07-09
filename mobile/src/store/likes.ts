@@ -265,3 +265,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     }
   },
 }));
+
+// Canonical ids arrive asynchronously. Re-expand the raw server set as soon as
+// the map changes so every retired copy reflects the same liked state.
+onIdMapChange(() => useLikesStore.getState().reexpand());

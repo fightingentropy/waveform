@@ -102,7 +102,7 @@ fi
 
 DIRECT_HOST="${MINI_HOST_ADDRESS:-${MINI_HOST#*@}}"
 direct_status="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "http://$DIRECT_HOST:$PORT/api/music/source" || true)"
-[[ "$direct_status" == "200" ]] && pass "direct URL http://$DIRECT_HOST:$PORT is reachable" || bad "direct URL returned HTTP $direct_status"
+[[ "$direct_status" == "401" ]] && pass "direct LAN API requires authentication" || bad "direct LAN API returned HTTP $direct_status (expected 401)"
 
 if [[ "$lan_ip" != "missing" && -n "$lan_ip" ]]; then
   pass "mini LAN IP is $lan_ip"

@@ -25,7 +25,7 @@ type HomeSong = PlayerSong & {
 
 export default function HomePage() {
   const { user, status } = useAuth();
-  const { data: homeData, loading, error } = useApiData<HomePayload>(
+  const { data: homeData, loading, error, retry } = useApiData<HomePayload>(
     withAccountScope("/api/home", user?.id ?? status),
     {
       songs: [],
@@ -200,7 +200,17 @@ export default function HomePage() {
   if (error) {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] bg-background px-4 py-8 text-white sm:px-6 lg:px-12">
-        <div className="text-red-400">{error}</div>
+        <div role="alert" className="max-w-md rounded-lg border border-white/10 bg-white/[0.04] p-6">
+          <h1 className="text-xl font-semibold">Your library couldn’t load</h1>
+          <p className="mt-2 text-sm leading-6 text-white/65">{error}</p>
+          <button
+            type="button"
+            onClick={retry}
+            className="mt-5 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:scale-[1.02] hover:bg-white/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }

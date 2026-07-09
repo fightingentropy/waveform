@@ -240,7 +240,7 @@ return <div className={className} style={{ width: `${pct}%` }} />;
 ### Porting hazards (mini player)
 - **HUGE**: this component owns the audio engine — `HTMLAudioElement` x2, Web Audio `AudioContext`/`GainNode` crossfade, `hls.js`, `navigator.serviceWorker` media cache, `MediaSession`, Capacitor native AVPlayer adapter, `blob:`/`capacitor:`/`file:` URL handling, `localStorage` playback-state, `window`/`document` event listeners. **None of this ports** — rebuild on `expo-av`/`expo-audio` or `react-native-track-player` (handles lock-screen controls, background audio, queue, crossfade-ish).
 - `resolvePlayableSrc` uses `location.origin` + relative `/api/...` URLs → must become absolute base-URL fetches in RN.
-- `fixed`/`z-40`/`bottom-[var(...)]` positioning → RN absolute-positioned bar above the tab navigator, or part of a custom tab bar.
+- `fixed`/`z-40`/custom-bottom-offset positioning → RN absolute-positioned bar above the tab navigator, or part of a custom tab bar.
 - `MarqueeText` is a web auto-scrolling text component → reimplement (e.g. `react-native-text-ticker`).
 - `lucide-react` icons (`Heart`, `Play`, `Pause`) → `lucide-react-native`.
 - Haptics via `@capacitor/haptics` → `expo-haptics`.

@@ -1,4 +1,7 @@
-export const D1_SCHEMA_SQL = `
+-- Canonical D1 baseline. All statements are safe on the existing production
+-- database and fully initialize a new database. Future schema changes belong in
+-- later numbered migrations, not request middleware.
+
 CREATE TABLE IF NOT EXISTS "User" (
   "id" TEXT NOT NULL PRIMARY KEY,
   "email" TEXT NOT NULL UNIQUE,
@@ -133,19 +136,6 @@ CREATE TABLE IF NOT EXISTS "PlayEvent" (
   FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS "idx_song_title" ON "Song" ("title");
-CREATE INDEX IF NOT EXISTS "idx_song_createdAt" ON "Song" ("createdAt" DESC);
-CREATE INDEX IF NOT EXISTS "idx_song_userId_createdAt" ON "Song" ("userId", "createdAt" DESC);
-CREATE INDEX IF NOT EXISTS "idx_playlist_userId_createdAt" ON "Playlist" ("userId", "createdAt" DESC);
-CREATE INDEX IF NOT EXISTS "idx_playlistsong_playlist_order" ON "PlaylistSong" ("playlistId", "order");
-CREATE INDEX IF NOT EXISTS "idx_like_userId_createdAt" ON "Like" ("userId", "createdAt" DESC);
-CREATE INDEX IF NOT EXISTS "idx_playbackstate_userId_updatedAt" ON "PlaybackState" ("userId", "updatedAt" DESC);
-CREATE INDEX IF NOT EXISTS "idx_session_userId" ON "Session" ("userId");
-CREATE INDEX IF NOT EXISTS "idx_ratelimit_resetAt" ON "RateLimit" ("resetAt");
-CREATE INDEX IF NOT EXISTS "idx_playevent_userId_createdAt" ON "PlayEvent" ("userId", "createdAt" DESC);
-CREATE INDEX IF NOT EXISTS "idx_playevent_userId_songId" ON "PlayEvent" ("userId", "songId");
-CREATE INDEX IF NOT EXISTS "idx_account_userId" ON "Account" ("userId");
-
 CREATE TABLE IF NOT EXISTS "SongRef" (
   "id" TEXT NOT NULL PRIMARY KEY,
   "title" TEXT NOT NULL,
@@ -162,10 +152,17 @@ CREATE TABLE IF NOT EXISTS "SongRef" (
   "createdAt" TEXT,
   "updatedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS "idx_songref_userId" ON "SongRef" ("userId");
-`;
 
-export const D1_SCHEMA_STATEMENTS = D1_SCHEMA_SQL
-  .split(";")
-  .map((statement) => statement.trim())
-  .filter(Boolean);
+CREATE INDEX IF NOT EXISTS "idx_song_title" ON "Song" ("title");
+CREATE INDEX IF NOT EXISTS "idx_song_createdAt" ON "Song" ("createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_song_userId_createdAt" ON "Song" ("userId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_playlist_userId_createdAt" ON "Playlist" ("userId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_playlistsong_playlist_order" ON "PlaylistSong" ("playlistId", "order");
+CREATE INDEX IF NOT EXISTS "idx_like_userId_createdAt" ON "Like" ("userId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_playbackstate_userId_updatedAt" ON "PlaybackState" ("userId", "updatedAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_account_userId" ON "Account" ("userId");
+CREATE INDEX IF NOT EXISTS "idx_session_userId" ON "Session" ("userId");
+CREATE INDEX IF NOT EXISTS "idx_ratelimit_resetAt" ON "RateLimit" ("resetAt");
+CREATE INDEX IF NOT EXISTS "idx_playevent_userId_createdAt" ON "PlayEvent" ("userId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_playevent_userId_songId" ON "PlayEvent" ("userId", "songId");
+CREATE INDEX IF NOT EXISTS "idx_songref_userId" ON "SongRef" ("userId");

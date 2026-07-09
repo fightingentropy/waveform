@@ -105,8 +105,11 @@ function apiErrorMessage(error: unknown): string {
   if (/request timed out|abort/i.test(message)) {
     return "Taking too long to load — please retry.";
   }
-  if (/failed to fetch|load failed/i.test(message)) {
+  if (/failed to fetch|load failed|network connection.*lost|network error/i.test(message)) {
     return "Couldn't load — check your connection and retry.";
+  }
+  if (/internal server error|request failed with 5\d\d/i.test(message)) {
+    return "Something went wrong while loading this page. Please retry.";
   }
   return message;
 }
@@ -324,6 +327,7 @@ export function useApiData<T>(
   const [data, setDataState] = useState<T>(cachedInitial ?? initialValue);
   const [loading, setLoading] = useState(enabled && !cachedInitial);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const dataUrlRef = useRef(cachedInitial !== undefined ? url : "");
   const initialValueRef = useRef(initialValue);
 
@@ -390,7 +394,12 @@ export function useApiData<T>(
 
   useEffect(() => {
     return startLoad(false);
-  }, [startLoad]);
+  }, [startLoad, reloadKey]);
+
+  const retry = useCallback(() => {
+    invalidateApiCache(url);
+    setReloadKey((value) => value + 1);
+  }, [url]);
 
   useEffect(() => {
     if (!enabled || !refreshOnReconnect || typeof window === "undefined") return;
@@ -406,7 +415,7 @@ export function useApiData<T>(
     };
   }, [enabled, startLoad, refreshOnReconnect]);
 
-  return { data, loading, error };
+  return { data, loading, error, retry };
 }
 
 export type HomePayload = {

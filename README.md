@@ -70,6 +70,9 @@ media path.
   forwards and the direct DNS-only record for `music.streamarena.xyz`.
 - `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
 - `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
+- Direct LAN and Tailscale API requests require that token by default. Set
+  `SPOTIFY_TRUST_LOCAL_NETWORK=1` only when every device on the network should be
+  treated as the library owner; loopback health checks remain trusted.
 - `SPOTIFY_LIBRARY_OWNER_EMAILS`, `SPOTIFY_LIBRARY_OWNER_USER_IDS`, or
   `SPOTIFY_LIBRARY_OWNER_NAMES` controls which app accounts can see and mutate
   the Mac mini music folder. This private deployment defaults owner names to
@@ -183,8 +186,13 @@ one host or `MINI_HOSTS="host1 host2"` for a custom ordered list.
 Deploy the Worker backend:
 
 ```bash
+bun run db:migrate:remote
 bun run deploy
 ```
+
+D1 changes live in `db/d1-migrations`. Apply them explicitly before deploying;
+the production request path never runs schema DDL. Use
+`bun run db:migrate:local` when initializing a local Wrangler database.
 
 The active `wrangler.jsonc` contains:
 
@@ -212,6 +220,7 @@ SPOTIFY_ARTWORK_LOOKUP=1
 SPOTIFY_ARTWORK_COUNTRY=GB
 SPOTIFY_PROXY_TOKEN=...
 SPOTIFY_PROXY_HOSTNAMES=music.streamarena.xyz
+SPOTIFY_TRUST_LOCAL_NETWORK=0
 SPOTIFY_LIBRARY_OWNER_EMAILS=
 SPOTIFY_LIBRARY_OWNER_USER_IDS=
 SPOTIFY_LIBRARY_OWNER_NAMES=Erlin

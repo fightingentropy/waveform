@@ -38,6 +38,10 @@ import {
   resolveYouTubePreviewMatch,
   type YouTubePreviewConfig,
 } from "./youtube-preview";
+import {
+  allowsImplicitLocalAccess,
+  requestRequiresProxyToken,
+} from "./local-access";
 
 const execFileAsync = promisify(execFile);
 
@@ -189,6 +193,7 @@ const idleTimeoutSeconds = Number.isFinite(configuredIdleTimeoutSeconds)
 const remoteArtworkLookupEnabled = process.env.SPOTIFY_ARTWORK_LOOKUP !== "0";
 const artworkLookupCountry = process.env.SPOTIFY_ARTWORK_COUNTRY || "GB";
 const proxyToken = process.env.SPOTIFY_PROXY_TOKEN || "";
+const trustLocalNetwork = process.env.SPOTIFY_TRUST_LOCAL_NETWORK === "1";
 const proxyHostnames = new Set(
   (process.env.SPOTIFY_PROXY_HOSTNAMES || "")
     .split(",")
@@ -332,43 +337,6 @@ function requestHostname(request: Request): string {
   }
 }
 
-function isLoopbackHost(host: string): boolean {
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
-}
-
-function parseIpv4Host(host: string): number[] | null {
-  const octets = host.split(".").map((part) => Number(part));
-  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return null;
-  }
-  return octets;
-}
-
-function isPrivateIpv4Host(host: string): boolean {
-  const octets = parseIpv4Host(host);
-  if (!octets) return false;
-  return (
-    octets[0] === 10 ||
-    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
-    (octets[0] === 192 && octets[1] === 168)
-  );
-}
-
-function isTailscaleIpv4Host(host: string): boolean {
-  const octets = parseIpv4Host(host);
-  return Boolean(octets && octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127);
-}
-
-function isLocalNetworkHost(host: string): boolean {
-  return (
-    isLoopbackHost(host) ||
-    host === "m4mini.local" ||
-    host.endsWith(".local") ||
-    isPrivateIpv4Host(host) ||
-    isTailscaleIpv4Host(host)
-  );
-}
-
 function timingSafeEqualStr(a: string, b: string): boolean {
   const bufferA = Buffer.from(a, "utf8");
   const bufferB = Buffer.from(b, "utf8");
@@ -385,43 +353,25 @@ function rememberRequestPeer(request: Request, address: string | null): void {
   requestPeerAddresses.set(request, address);
 }
 
-// A peer is "local" only when its actual socket address is loopback, RFC1918
-// private, or Tailscale CGNAT (100.64.0.0/10). When the peer address is unknown
-// (e.g. in tests where requestIP was not threaded), fall back to trusting it so
-// existing LAN/Tailscale/loopback behavior is preserved.
-function isLocalPeerAddress(request: Request): boolean {
-  if (!requestPeerAddresses.has(request)) return true;
-  const address = requestPeerAddresses.get(request) ?? "";
-  if (!address) return true;
-  const normalized = address.toLowerCase().startsWith("::ffff:")
-    ? address.slice("::ffff:".length)
-    : address;
-  return (
-    isLoopbackHost(normalized) ||
-    isPrivateIpv4Host(normalized) ||
-    isTailscaleIpv4Host(normalized)
-  );
-}
-
 function hasValidProxyToken(request: Request): boolean {
   const token = request.headers.get("x-spotify-proxy-token") || "";
   return Boolean(proxyToken && timingSafeEqualStr(token, proxyToken));
 }
 
 function requestNeedsProxyToken(request: Request): boolean {
-  if (!proxyToken) return false;
-  const host = requestHostname(request);
-  if (proxyHostnames.has(host)) return true;
-  if (isLocalNetworkHost(host)) return false;
-  return true;
+  return requestRequiresProxyToken({
+    hostname: requestHostname(request),
+    proxyHostnames,
+    trustLocalNetwork,
+  });
 }
 
 function allowsImplicitLocalUser(request: Request): boolean {
-  return (
-    !requestNeedsProxyToken(request) &&
-    isLocalNetworkHost(requestHostname(request)) &&
-    isLocalPeerAddress(request)
-  );
+  return allowsImplicitLocalAccess({
+    hostname: requestHostname(request),
+    peerAddress: requestPeerAddresses.get(request),
+    trustLocalNetwork,
+  });
 }
 
 function isMutationRequest(request: Request): boolean {

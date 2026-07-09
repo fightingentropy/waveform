@@ -3,7 +3,7 @@
 	"main": "src/worker/index.ts",
 	"name": "spotify",
 	"workers_dev": true,
-	"compatibility_date": "2026-05-23",
+	"compatibility_date": "2026-07-09",
 	"compatibility_flags": [
 		"nodejs_compat",
 		"global_fetch_strictly_public"
@@ -19,7 +19,8 @@
 		{
 			"binding": "DB",
 			"database_name": "spotify-db",
-			"database_id": "88a7aea6-ab87-43e9-a728-bca750986ccc"
+			"database_id": "88a7aea6-ab87-43e9-a728-bca750986ccc",
+			"migrations_dir": "db/d1-migrations"
 		}
 	],
 	"r2_buckets": [
@@ -37,7 +38,15 @@
 		}
 	],
 	"observability": {
-		"enabled": true
+		"enabled": true,
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1
+		},
+		"traces": {
+			"enabled": true,
+			"head_sampling_rate": 0.01
+		}
 	},
 	"vars": {
 		"PLAYLISTS_EDITABLE": "1",

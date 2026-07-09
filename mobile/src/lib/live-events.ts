@@ -42,9 +42,9 @@ export const LIVE_EVENT_SECTIONS: LiveEventSection[] = [
     ],
   },
   {
-    key: "for-you",
-    eyebrow: "Concerts we think you’ll like",
-    title: "Just for you",
+    key: "upcoming",
+    eyebrow: "More concerts near you",
+    title: "Coming up",
     events: [
       { id: "harry", artists: "Harry Styles, Shania Twain", venue: "Wembley Stadium, London", date: "2026-06-17", imageUrl: dz("1151dba9b3edc0633adf35b64c21713f"), genre: "Pop" },
       { id: "fatboy", artists: "Fatboy Slim, Eliza Rose, Lizzie", venue: "High Lodge, Thetford Forest", date: "2026-06-19", imageUrl: dz("f6ea7bd64ec1902feff17935fdfea263"), genre: "Electronic" },
