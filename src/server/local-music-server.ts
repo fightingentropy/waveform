@@ -554,12 +554,7 @@ async function serveFile(
   const headers = new Headers();
   headers.set("accept-ranges", "bytes");
   headers.set("cache-control", cacheControl);
-  headers.set("content-security-policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
   headers.set("content-type", contentTypeForPath(path));
-  headers.set("permissions-policy", "camera=(), microphone=(), geolocation=()");
-  headers.set("referrer-policy", "strict-origin-when-cross-origin");
-  headers.set("x-content-type-options", "nosniff");
-  headers.set("x-frame-options", "DENY");
   headers.set("last-modified", mtime.toUTCString());
   headers.set("etag", `W/"${size.toString(16)}-${Math.floor(mtimeMs).toString(16)}"`);
 
