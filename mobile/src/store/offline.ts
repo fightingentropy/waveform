@@ -14,7 +14,7 @@ import {
   type DownloadRow,
 } from "@/lib/offline-db";
 import { apiFetch } from "@/lib/http";
-import { getIsOnline, subscribeOnline } from "@/lib/connectivity";
+import { getIsOnline, markOffline, subscribeOnline } from "@/lib/connectivity";
 import { resetPlaybackEngaged } from "@/audio/publish-gate";
 import { storage } from "@/lib/storage";
 import type { PlayerSong } from "@/types/player";
@@ -25,7 +25,13 @@ import type { PlayerSong } from "@/types/player";
 // playback resolution. The blob: materialization is gone — RN plays file://
 // directly with Range support (§6/§8).
 
-export type DownloadScope = "home" | "liked" | `playlist:${string}` | `song:${string}`;
+export const PLAYBACK_CACHE_SCOPE = "playback-cache" as const;
+export type DownloadScope =
+  | "home"
+  | "liked"
+  | typeof PLAYBACK_CACHE_SCOPE
+  | `playlist:${string}`
+  | `song:${string}`;
 export type DownloadStatus = "queued" | "downloading" | "ready" | "error";
 
 // Mirrors the web store's OfflineSyncStatus / OfflineVerificationStatus so the
@@ -212,6 +218,9 @@ type OfflineState = {
   progress: Record<string, number>;
   setAutoDownloadLiked: (enabled: boolean) => void;
   queueDownloads: (songs: PlayerSong[], scope: DownloadScope) => Promise<void>;
+  // Maintain a hidden, bounded queue-ahead cache. Unlike a user download, this
+  // scope is replaced as playback advances and is not shown as "Downloaded".
+  syncPlaybackCache: (songs: PlayerSong[]) => Promise<void>;
   unpinScope: (songId: string, scope: DownloadScope) => Promise<void>;
   isDownloaded: (songId: string) => boolean;
   hydrate: () => Promise<void>;
@@ -323,9 +332,14 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         // would be re-launched straight into iOS suspension. Stop on either; the
         // connectivity + AppState handlers re-kick the pump on recovery.
         if (!getIsOnline() || !isForeground) break;
-        const queued = Object.values(get().records).find(
-          (r) => r.accountScope === accountScope && r.status === "queued",
+        const queuedRecords = Object.values(get().records).filter(
+          (record) => record.accountScope === accountScope && record.status === "queued",
         );
+        // The two tracks protecting active playback get the next download slot;
+        // bulk playlist/liked downloads continue immediately behind them.
+        const queued =
+          queuedRecords.find((record) => record.scopes.includes(PLAYBACK_CACHE_SCOPE)) ??
+          queuedRecords[0];
         if (!queued) break;
         const key = keyFor(accountScope, queued.songId);
         const resumeData = queued.resumeData;
@@ -355,7 +369,16 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           // resumeAsync() continues from the saved partial (server replies 206);
           // downloadAsync() starts fresh. Either resolves to undefined when a
           // pauseAsync() cancels it — that's our deliberate-pause signal below.
-          const result = resumeData ? await resumable.resumeAsync() : await resumable.downloadAsync();
+          let result: FileSystem.FileSystemDownloadResult | undefined;
+          try {
+            result = resumeData ? await resumable.resumeAsync() : await resumable.downloadAsync();
+          } catch (error) {
+            // A queue-ahead download is also our end-to-end reachability probe.
+            // When it cannot reach the media URL, prefer cached/downloaded tracks
+            // immediately instead of trusting iOS's still-present cellular route.
+            if (pausedKey !== key) markOffline();
+            throw error;
+          }
           activeDownload = null;
           if (!result) {
             // Cancelled by pauseActiveDownload (offline/background). It has already
@@ -523,6 +546,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           if (addScope || requeue) {
             persist({
               ...existing,
+              song,
               scopes: addScope ? [...existing.scopes, scope] : existing.scopes,
               status: requeue ? "queued" : existing.status,
               error: requeue ? undefined : existing.error,
@@ -541,6 +565,28 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         });
       }
       void runPump();
+    },
+
+    syncPlaybackCache: async (songs) => {
+      if (!get().hydrated) return;
+      const targets = new Map<string, PlayerSong>();
+      for (const song of songs) {
+        if (song?.id && song.audioUrl) targets.set(song.id, song);
+      }
+
+      const cached = Object.values(get().records).filter(
+        (record) =>
+          record.accountScope === accountScope &&
+          record.scopes.includes(PLAYBACK_CACHE_SCOPE),
+      );
+      for (const record of cached) {
+        if (!targets.has(record.songId)) {
+          await get().unpinScope(record.songId, PLAYBACK_CACHE_SCOPE);
+        }
+      }
+      for (const song of targets.values()) {
+        await get().queueDownloads([song], PLAYBACK_CACHE_SCOPE);
+      }
     },
 
     unpinScope: async (songId, scope) => {
@@ -948,6 +994,10 @@ export function resolveOfflinePlaybackSong(song: PlayerSong): PlayerSong {
   };
 }
 
+export function hasUserDownloadScope(record: Pick<OfflineDownloadRecord, "scopes"> | null | undefined): boolean {
+  return Boolean(record?.scopes.some((scope) => scope !== PLAYBACK_CACHE_SCOPE));
+}
+
 export type BatchDownloadState = {
   total: number;
   ready: number;
@@ -960,7 +1010,7 @@ export type BatchDownloadState = {
 // Aggregate download state for a set of songs (a playlist / Liked Songs) —
 // drives the fill ring on the "Download all" controls. Recomputes only when the
 // records or live progress change (songs ref is stable per screen).
-export function useBatchDownload(songs: PlayerSong[]): BatchDownloadState {
+export function useBatchDownload(songs: PlayerSong[], scope?: DownloadScope): BatchDownloadState {
   const records = useOfflineStore((s) => s.records);
   const progress = useOfflineStore((s) => s.progress);
   return useMemo(() => {
@@ -972,7 +1022,7 @@ export function useBatchDownload(songs: PlayerSong[]): BatchDownloadState {
     for (const song of songs) {
       const key = keyFor(accountScope, song.id);
       const rec = records[key];
-      if (!rec) continue;
+      if (!rec || (scope && !rec.scopes.includes(scope))) continue;
       if (rec.status === "ready") {
         ready += 1;
         sum += 1;
@@ -988,7 +1038,7 @@ export function useBatchDownload(songs: PlayerSong[]): BatchDownloadState {
     const status: BatchDownloadState["status"] =
       total > 0 && ready === total ? "ready" : active > 0 ? "downloading" : failed > 0 ? "error" : "idle";
     return { total, ready, active, failed, progress: total > 0 ? sum / total : 0, status };
-  }, [records, progress, songs]);
+  }, [records, progress, scope, songs]);
 }
 
 // Enabling auto-download backfills existing likes (the web behavior).

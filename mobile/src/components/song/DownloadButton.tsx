@@ -32,8 +32,10 @@ export function DownloadButton({
   // be downloaded (a placeholder has no audioUrl; a staged copy is lossy/transient).
   if (isRadioSong(song) || isDiscoverTrack(song)) return null;
 
-  const status = record?.status;
   const songScope: DownloadScope = scope ?? `song:${song.id}`;
+  // Playback-ahead cache entries are intentionally invisible here. Tapping the
+  // idle icon simply pins that already-cached file under the user's scope.
+  const status = record?.scopes.includes(songScope) ? record.status : undefined;
   const active = status === "downloading" || status === "queued";
 
   const onPress = () => {

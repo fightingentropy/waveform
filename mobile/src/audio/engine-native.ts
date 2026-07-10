@@ -10,7 +10,9 @@ import AudioEngine, {
   type WaitingEvent,
 } from "../../modules/audio-engine";
 import { toAbsoluteApiUrl } from "@/lib/config";
+import { getIsOnline, markOffline, subscribeOnline } from "@/lib/connectivity";
 import { isUnstagedDiscoverSong } from "@/lib/discover-queue";
+import { isLikelyNetworkPlaybackError } from "@/lib/playback-continuity";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { createPlayListen, flushPlayListen, type PlayListenEntry } from "@/lib/play-events";
 import {
@@ -37,7 +39,7 @@ import type { PlayerSong } from "@/types/player";
 // when to fade, and committing the queue advance. Mirrors the original web
 // PlayerBar crossfade state machine. Android uses engine-rntp.ts instead.
 
-const PREFETCH_LEAD_S = 8; // start warming the next track this far before the fade
+const PREFETCH_LEAD_S = 25; // warm well before the fade, while reception is still usable
 const NOW_PLAYING_THROTTLE_MS = 1000; // lock-screen scrubber refresh cadence
 // A streamed track that can't buffer leaves AVPlayer in .waitingToPlayAtSpecifiedRate
 // indefinitely WITHOUT ever firing an error — so the onError circuit-breaker never
@@ -126,6 +128,7 @@ function onStallTimeout(): void {
     return;
   }
   offlinePlayback = true;
+  markOffline();
   if (skipToDownloaded()) return;
   s.next(); // nothing downloaded — try the next track (may stream, or trips the breaker)
 }
@@ -396,6 +399,7 @@ async function prefetchNext(next: NextTrack): Promise<void> {
   const idle = other(activeDeck);
   const seq = loadSeq;
   const resolved = resolveOfflinePlaybackSong(next.song);
+  if (!getIsOnline() && resolved.source !== "offline") return;
   prefetchDeck = idle;
   prefetchIndex = next.index;
   prefetchFromFuture = next.fromFuture;
@@ -506,12 +510,24 @@ async function onError(e: ErrorEvent): Promise<void> {
   const baseUrl = toAbsoluteApiUrl(song.audioUrl);
   const isHls = /\.m3u8(\?|$)/i.test(baseUrl);
 
+  // A transport error is not a bad media URL. Retrying the same remote source
+  // first adds a long silent pause in a tunnel; move straight to the queue cache.
+  if (!getIsOnline() || isLikelyNetworkPlaybackError(e.message)) {
+    offlinePlayback = true;
+    markOffline();
+    if (!skipToDownloaded()) s.pause();
+    return;
+  }
+
   // Retry the same track ONCE with a cache-busted URL.
   if (!isHls && erroredKeyRetry !== baseUrl) {
     erroredKeyRetry = baseUrl;
     const busted = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}__retry=${Date.now()}`;
     const seq = ++loadSeq;
-    await AudioEngine.prepare({ deck: activeDeck, url: busted, id: song.id, startAt: 0 });
+    // Retry in place. Resetting to 0 sounds like a phantom skip even though the
+    // store never advanced.
+    const retryAt = useAudioProgressStore.getState().position;
+    await AudioEngine.prepare({ deck: activeDeck, url: busted, id: song.id, startAt: retryAt });
     if (seq !== loadSeq) return;
     deckSong[activeDeck] = song;
     deckKey[activeDeck] = `${song.id}|${busted}`;
@@ -534,6 +550,7 @@ async function onError(e: ErrorEvent): Promise<void> {
   // above then ends it at a clean pause instead of looping).
   if (consecutiveErrors >= 2) {
     offlinePlayback = true;
+    markOffline();
     if (skipToDownloaded()) return;
   }
   s.next(); // skip
@@ -547,7 +564,7 @@ function onPlaying(e: PlayingEvent): void {
     // A non-downloaded track actually playing means streaming works again →
     // resume normal full-queue auto-advance.
     const song = usePlayerStore.getState().currentSong;
-    if (song && !useOfflineStore.getState().isDownloaded(song.id)) offlinePlayback = false;
+    if (song && getIsOnline() && !useOfflineStore.getState().isDownloaded(song.id)) offlinePlayback = false;
   }
 }
 
@@ -608,7 +625,7 @@ function subscribeToStore(): void {
     // setQueue can't publish over newer cross-device state.
     if (state.queue !== prev.queue) {
       clearStallWatchdog();
-      offlinePlayback = false;
+      offlinePlayback = !getIsOnline();
       void publishPlaybackState(true);
     }
     prev = state;
@@ -637,6 +654,17 @@ export async function initNativeAudio(): Promise<void> {
   AudioEngine.addListener("seeked", onSeeked);
   AudioEngine.addListener("crossfadeComplete", onCrossfadeComplete);
   AudioEngine.addListener("remote", onRemote);
+
+  subscribeOnline((online) => {
+    offlinePlayback = !online;
+    if (!online) {
+      // Do not kill the active deck: its forward buffer may finish the current
+      // song. Drop only the remote idle-deck transition so the next boundary can
+      // resolve directly to the local queue cache. Keep any active stall timer:
+      // it is what moves a stream that has already stopped onto that cache.
+      void abortCrossfade();
+    }
+  });
 
   subscribeToStore();
   await applyVolume();

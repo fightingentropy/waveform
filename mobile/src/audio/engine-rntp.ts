@@ -1,6 +1,8 @@
-import TrackPlayer, { Event, State } from "react-native-track-player";
+import TrackPlayer, { Event, State, type PlaybackErrorEvent } from "react-native-track-player";
 import { toAbsoluteApiUrl } from "@/lib/config";
+import { getIsOnline, markOffline, subscribeOnline } from "@/lib/connectivity";
 import { isUnstagedDiscoverSong } from "@/lib/discover-queue";
+import { isLikelyNetworkPlaybackError } from "@/lib/playback-continuity";
 import { isPodcastSong } from "@/lib/player-song";
 import {
   createPlayListen,
@@ -15,7 +17,7 @@ import {
   readEpisodeProgress,
   writeEpisodeProgressGuarded,
 } from "@/lib/podcast-progress";
-import { resolveOfflinePlaybackSong } from "@/store/offline";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/store/offline";
 import { usePlayerStore } from "@/store/player";
 import { buildTrack } from "@/audio/track";
 import { setupTrackPlayer } from "@/audio/setup";
@@ -28,6 +30,7 @@ import { enforceSleepTimer } from "@/audio/sleep";
 import {
   PLAYBACK_STATE_PUBLISH_INTERVAL_MS,
   publishPlaybackState,
+  getLastPosition,
   setLastPosition,
   takePendingResumeSeek,
 } from "@/audio/playback-sync";
@@ -47,12 +50,38 @@ let currentListen: PlayListenEntry | null = null;
 // error circuit-breaker
 let consecutiveErrors = 0;
 let erroredSrcRetry: string | null = null;
+let offlinePlayback = false;
+let stallTimer: ReturnType<typeof setTimeout> | null = null;
+const STALL_TIMEOUT_MS = 12_000;
 // throttles
 let lastPodcastWriteMs = 0;
 let lastStatePublishMs = 0;
 
 function trackKey(song: PlayerSong): string {
   return `${song.id}|${toAbsoluteApiUrl(song.audioUrl)}`;
+}
+
+function skipToDownloaded(): boolean {
+  const isDownloaded = useOfflineStore.getState().isDownloaded;
+  return usePlayerStore.getState().skipToPlayable((song) => isDownloaded(song.id));
+}
+
+function clearStallWatchdog(): void {
+  if (stallTimer != null) clearTimeout(stallTimer);
+  stallTimer = null;
+}
+
+function armStallWatchdog(): void {
+  if (stallTimer != null) return;
+  stallTimer = setTimeout(() => {
+    stallTimer = null;
+    const state = usePlayerStore.getState();
+    const song = state.currentSong;
+    if (!song || !state.isPlaying || isOwnHandledSong(song) || isPodcastSong(song)) return;
+    offlinePlayback = true;
+    markOffline();
+    if (!skipToDownloaded()) state.pause();
+  }, STALL_TIMEOUT_MS);
 }
 
 // --- track loading ----------------------------------------------------------
@@ -152,10 +181,14 @@ async function onEnded(): Promise<void> {
     return;
   }
   flushPlayListen(currentListen);
+  if (offlinePlayback || !getIsOnline()) {
+    if (!skipToDownloaded()) s.pause();
+    return;
+  }
   s.next(); // store advances → subscription loads the next track
 }
 
-async function onError(): Promise<void> {
+async function onError(error?: PlaybackErrorEvent): Promise<void> {
   const s = usePlayerStore.getState();
   const song = s.currentSong;
   if (!song) return;
@@ -165,6 +198,15 @@ async function onError(): Promise<void> {
   const baseUrl = toAbsoluteApiUrl(song.audioUrl);
   const isHls = /\.m3u8(\?|$)/i.test(baseUrl);
 
+  // Do not spend a retry cycle on a source we already know is unreachable.
+  // Falling through to a cached queue item immediately avoids a long silent gap.
+  if (!getIsOnline() || isLikelyNetworkPlaybackError(`${error?.code ?? ""} ${error?.message ?? ""}`)) {
+    offlinePlayback = true;
+    markOffline();
+    if (!skipToDownloaded()) s.pause();
+    return;
+  }
+
   // Retry the same track ONCE with a cache-busted URL.
   if (!isHls && erroredSrcRetry !== baseUrl) {
     erroredSrcRetry = baseUrl;
@@ -173,6 +215,8 @@ async function onError(): Promise<void> {
     await TrackPlayer.reset();
     if (seq !== loadSeq) return;
     await TrackPlayer.add({ ...buildTrack(song), url: busted });
+    const retryAt = getLastPosition();
+    if (retryAt > 0.5) await TrackPlayer.seekTo(retryAt);
     if (s.isPlaying) await TrackPlayer.play();
     return;
   }
@@ -185,7 +229,7 @@ async function onError(): Promise<void> {
     return;
   }
   erroredSrcRetry = null;
-  s.next(); // skip
+  s.next();
 }
 
 function onProgress(position: number, duration: number): void {
@@ -237,7 +281,10 @@ function subscribeToStore(): void {
     // Persist a newly-started/edited queue immediately (not just at the end of the
     // async track load) so quitting right after starting a list from a Play button
     // doesn't lose it; gated on "engaged" so a cold-launch restore can't publish.
-    if (state.queue !== prev.queue) void publishPlaybackState(true);
+    if (state.queue !== prev.queue) {
+      offlinePlayback = !getIsOnline();
+      void publishPlaybackState(true);
+    }
     prev = state;
   });
 }
@@ -258,8 +305,8 @@ export async function initRntpAudio(): Promise<void> {
   TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => {
     void onEnded();
   });
-  TrackPlayer.addEventListener(Event.PlaybackError, () => {
-    void onError();
+  TrackPlayer.addEventListener(Event.PlaybackError, (error) => {
+    void onError(error);
   });
   TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, ({ position, duration }) => {
     onProgress(position, duration);
@@ -267,9 +314,19 @@ export async function initRntpAudio(): Promise<void> {
   TrackPlayer.addEventListener(Event.PlaybackState, ({ state }) => {
     // reset the error breaker once the track is actually playing.
     if (state === State.Playing) {
+      clearStallWatchdog();
       consecutiveErrors = 0;
       erroredSrcRetry = null;
+      if (getIsOnline()) offlinePlayback = false;
+    } else if (state === State.Buffering && usePlayerStore.getState().isPlaying) {
+      armStallWatchdog();
     }
+  });
+
+  subscribeOnline((online) => {
+    offlinePlayback = !online;
+    // Preserve an already-armed buffering watchdog while the route disappears;
+    // it is responsible for moving a wedged remote stream onto the local cache.
   });
 
   subscribeToStore();

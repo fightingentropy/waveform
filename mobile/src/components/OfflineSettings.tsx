@@ -14,7 +14,7 @@ import {
 import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { FooterButton } from "@/components/SettingsControls";
 import { formatBytes, getDiskUsage, type DiskUsage } from "@/lib/disk-usage";
-import { useOfflineStore } from "@/store/offline";
+import { hasUserDownloadScope, useOfflineStore } from "@/store/offline";
 import { colors } from "@/theme";
 
 // Offline downloads management (RN port of src/components/OfflineSettings.tsx).
@@ -159,7 +159,7 @@ export function OfflineSettings() {
 
   const { downloaded, active, failed, downloadingKey } = useMemo(() => {
     const entries = Object.entries(records);
-    const list = entries.map(([, r]) => r);
+    const list = entries.map(([, r]) => r).filter(hasUserDownloadScope);
     return {
       downloaded: list.filter((r) => r.status === "ready").length,
       active: list.filter((r) => r.status === "queued" || r.status === "downloading").length,

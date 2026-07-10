@@ -113,6 +113,14 @@ public class AudioEngineModule: Module {
                 }
 
                 let item = AVPlayerItem(url: resolvedUrl)
+                // Buffer enough of progressive HTTP audio to ride through short
+                // signal gaps before the JS queue-ahead file cache takes over at
+                // the next track boundary. Local files need no forward buffer.
+                if resolvedUrl.isFileURL {
+                    item.preferredForwardBufferDuration = 0
+                } else {
+                    item.preferredForwardBufferDuration = 45
+                }
                 deckObj.item = item
                 deckObj.songId = songId
                 deckObj.startAt = startAtValue

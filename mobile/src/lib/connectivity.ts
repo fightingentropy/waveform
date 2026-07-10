@@ -1,13 +1,13 @@
-// Reachability flag used by playback to keep offline play on downloaded songs
-// only, so it never flashes through a track it can't stream.
+// Reachability flag used by playback to prefer cached/downloaded songs when the
+// backend path disappears, so it never flashes through tracks it cannot stream.
 //
-// Two sources, in priority order:
-//   1. expo-network (OS-level) — authoritative and real-time. A listener catches
-//      airplane-mode toggles even while the app stays foregrounded, which is the
-//      exact case the traffic signal below can't see: no fetch fires, so nothing
-//      would otherwise notice the network dropped between two Next presses.
-//   2. API traffic (markOnline/markOffline) — a dependency-free fallback for
-//      builds where the native module isn't linked yet. Ignored once (1) reports.
+// Two complementary signals:
+//   1. expo-network reports whether iOS has an active route. On iOS its
+//      `isInternetReachable` is the same as `isConnected`, so a cellular route in
+//      a Tube tunnel may still read "online" while the backend is unreachable.
+//   2. Real API traffic proves end-to-end reachability. A network rejection or
+//      client timeout therefore overrides the route hint immediately; any later
+//      HTTP response restores online mode.
 //
 // We acquire the native module via requireOptionalNativeModule, which returns
 // null (never throws) when it isn't linked into the running binary — so an older
@@ -15,10 +15,12 @@
 // (The expo-network JS wrapper does `requireNativeModule(...)` at import time,
 // which would throw before any guard could run, so we deliberately bypass it.)
 //
-// Optimistic by default: unknown reachability counts as online, so a
-// connected-but-slow user is never wrongly stranded on downloads-only.
+// Optimistic by default, with a small active probe while offline so recovery
+// does not depend on the user navigating to a page that happens to fetch data.
 
 import { requireOptionalNativeModule } from "expo-modules-core";
+import { API_ORIGIN } from "@/lib/config";
+import { routeHintRestoresOnline } from "@/lib/reachability-policy";
 
 type NetworkLike = { isConnected?: boolean; isInternetReachable?: boolean };
 type ExpoNetworkModule = {
@@ -29,9 +31,44 @@ type ExpoNetworkModule = {
 const ExpoNetwork = requireOptionalNativeModule<ExpoNetworkModule>("ExpoNetwork");
 
 let online = true;
-let nativeActive = false; // expo-network has reported at least once → it owns the flag
 let initStarted = false;
+let routeAvailable: boolean | null = null;
+let lastTransportFailureAt = 0;
+let probeTimer: ReturnType<typeof setTimeout> | null = null;
+let probeDelayMs = 5_000;
 const listeners = new Set<(online: boolean) => void>();
+const MAX_PROBE_DELAY_MS = 30_000;
+const PROBE_TIMEOUT_MS = 4_000;
+
+function clearProbe(): void {
+  if (probeTimer != null) clearTimeout(probeTimer);
+  probeTimer = null;
+  probeDelayMs = 5_000;
+}
+
+function scheduleProbe(): void {
+  if (online || probeTimer != null) return;
+  probeTimer = setTimeout(async () => {
+    probeTimer = null;
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeout = setTimeout(() => controller?.abort(), PROBE_TIMEOUT_MS);
+    try {
+      // Any HTTP response proves the path is back; authentication status is
+      // irrelevant for reachability.
+      await fetch(`${API_ORIGIN}/api/auth/session`, {
+        credentials: "include",
+        cache: "no-store",
+        signal: controller?.signal,
+      });
+      markOnline();
+    } catch {
+      probeDelayMs = Math.min(MAX_PROBE_DELAY_MS, probeDelayMs * 2);
+      scheduleProbe();
+    } finally {
+      clearTimeout(timeout);
+    }
+  }, probeDelayMs);
+}
 
 // Single writer for `online`. Notifies subscribers only on an actual transition,
 // so download pause/resume fires on edges (offline→pause, online→resume) rather
@@ -39,6 +76,8 @@ const listeners = new Set<(online: boolean) => void>();
 function setOnline(next: boolean): void {
   if (next === online) return;
   online = next;
+  if (next) clearProbe();
+  else scheduleProbe();
   for (const cb of listeners) {
     try {
       cb(next);
@@ -47,9 +86,17 @@ function setOnline(next: boolean): void {
 }
 
 function applyNetworkState(state: NetworkLike): void {
-  // Offline only on an explicit negative; `undefined` (unknown) stays online.
-  nativeActive = true;
-  setOnline(state.isConnected !== false && state.isInternetReachable !== false);
+  const nextRouteAvailable = state.isConnected !== false && state.isInternetReachable !== false;
+  const restoreOnline = routeHintRestoresOnline(routeAvailable, nextRouteAvailable, lastTransportFailureAt);
+  routeAvailable = nextRouteAvailable;
+  if (!nextRouteAvailable) {
+    setOnline(false);
+    return;
+  }
+  // A real interface transition from unavailable → available is useful recovery
+  // evidence. The initial "connected" snapshot must not overwrite a transport
+  // failure that raced it during cold start.
+  if (restoreOnline) setOnline(true);
 }
 
 function ensureInit(): void {
@@ -70,12 +117,14 @@ function ensureInit(): void {
 
 export function markOnline(): void {
   ensureInit();
-  if (!nativeActive) setOnline(true);
+  lastTransportFailureAt = 0;
+  setOnline(true);
 }
 
 export function markOffline(): void {
   ensureInit();
-  if (!nativeActive) setOnline(false);
+  lastTransportFailureAt = Date.now();
+  setOnline(false);
 }
 
 export function getIsOnline(): boolean {

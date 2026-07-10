@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import { startDiscoverQueueStager } from "@/audio/discover-stager";
+import { startPlaybackContinuity } from "@/audio/playback-continuity";
 import * as nativeEngine from "@/audio/engine-native";
 import * as rntpEngine from "@/audio/engine-rntp";
 import { startSmartShuffleController } from "@/audio/smart-shuffle-controller";
@@ -21,6 +22,9 @@ export async function initAudio(): Promise<void> {
   // Backend-agnostic: drives just-in-time staging for Discover queue placeholders
   // via a store subscription, so it must be live before any track loads.
   startDiscoverQueueStager();
+  // Preserve one canonical queue across connectivity changes and keep the next
+  // couple of tracks in a hidden local playback cache.
+  startPlaybackContinuity();
   // Smart Shuffle top-up loop — also a store subscription; keeps recommended
   // tracks buffered ahead of the current track while the mode is on.
   startSmartShuffleController();

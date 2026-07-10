@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { markOffline, markOnline } from "@/lib/connectivity";
+import { markOffline } from "@/lib/connectivity";
 import { API_AUTH_REQUIRED_EVENT, API_CACHE_CLEARED_EVENT, emit, on } from "@/lib/events";
 import { apiFetch } from "@/lib/http";
 import {
@@ -222,21 +222,13 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
     const request = apiFetch(url, {
       ...init,
       signal: controller?.signal ?? init?.signal,
-    }).then(
-      (response) => {
-        // A real response (even a 4xx/5xx) proves the network is reachable.
-        markOnline();
-        return response;
-      },
-      (error: unknown) => {
-        // A genuine network rejection means we're offline. An abort (our own
-        // timeout below, or a caller cancel) is not an offline signal.
-        if ((error as { name?: string })?.name !== "AbortError") markOffline();
-        throw error;
-      },
-    );
+    });
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => {
+        // iOS can keep reporting a cellular route in a tunnel. A request that
+        // cannot reach our backend within the client budget is an offline signal
+        // for playback even though the OS route still exists.
+        markOffline();
         controller?.abort();
         reject(new Error("Request timed out"));
       }, API_FETCH_TIMEOUT_MS);

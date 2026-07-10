@@ -3,7 +3,7 @@ import { View } from "react-native";
 import { SongGrid } from "@/components/song/SongGrid";
 import { SongSortBar } from "@/components/song/SongSortBar";
 import { EmptyState } from "@/components/ui/States";
-import { getOfflineAccountScope, useOfflineStore } from "@/store/offline";
+import { getOfflineAccountScope, hasUserDownloadScope, useOfflineStore } from "@/store/offline";
 import { sortSongs, useSongSort } from "@/store/song-sort";
 import { colors } from "@/theme";
 import type { PlayerSong } from "@/types/player";
@@ -22,7 +22,7 @@ export default function DownloadsScreen() {
     const list: PlayerSong[] = [];
     for (const key of Object.keys(records)) {
       const record = records[key];
-      if (record.status !== "ready" || record.accountScope !== scope) continue;
+      if (record.status !== "ready" || record.accountScope !== scope || !hasUserDownloadScope(record)) continue;
       if (seen.has(record.songId)) continue;
       seen.add(record.songId);
       list.push(record.audioPath ? { ...record.song, source: "offline", audioUrl: record.audioPath } : record.song);

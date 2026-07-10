@@ -26,7 +26,7 @@ export function BatchDownloadButton({
   // broken empty-URL / lossy-staging download; if the whole playlist is Discover,
   // render nothing.
   const downloadable = useMemo(() => songs.filter((song) => !isDiscoverTrack(song)), [songs]);
-  const agg = useBatchDownload(downloadable);
+  const agg = useBatchDownload(downloadable, scope);
   const queueDownloads = useOfflineStore((s) => s.queueDownloads);
   const unpinScope = useOfflineStore((s) => s.unpinScope);
 
