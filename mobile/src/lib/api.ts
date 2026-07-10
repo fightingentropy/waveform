@@ -435,6 +435,7 @@ export function useApiData<T>(
   const [data, setDataState] = useState<T>(cachedInitial ?? initialValue);
   const [loading, setLoading] = useState(enabled && !cachedInitial);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const dataUrlRef = useRef(cachedInitial !== undefined ? url : "");
   const initialValueRef = useRef(initialValue);
 
@@ -508,13 +509,18 @@ export function useApiData<T>(
 
   useEffect(() => {
     return startLoad(false);
-  }, [startLoad]);
+  }, [startLoad, reloadKey]);
+
+  const retry = useCallback(() => {
+    invalidateApiCache(url);
+    setReloadKey((value) => value + 1);
+  }, [url]);
 
   // After "Clear cache" wipes the cache layers, re-pull fresh without waiting for
   // a remount so already-mounted screens (Home stays mounted) update in place.
   useEffect(() => on(API_CACHE_CLEARED_EVENT, () => startLoad(false)), [startLoad]);
 
-  return { data, loading, error };
+  return { data, loading, error, retry };
 }
 
 export type HomePayload = {

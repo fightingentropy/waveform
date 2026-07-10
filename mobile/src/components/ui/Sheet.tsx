@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import { BackHandler, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -75,6 +75,15 @@ export function Sheet({
     }
   }, [visible, mounted, progress, dragY, unmount]);
 
+  useEffect(() => {
+    if (!mounted || !visible) return undefined;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      onClose();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [mounted, onClose, visible]);
+
   const backdropStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
 
   const panelStyle = useAnimatedStyle(() => {
@@ -108,6 +117,9 @@ export function Sheet({
     // that froze every control (you could still hear audio but couldn't tap anything).
     <View
       pointerEvents={visible ? "auto" : "none"}
+      accessibilityViewIsModal={visible}
+      importantForAccessibility={visible ? "yes" : "no-hide-descendants"}
+      onAccessibilityEscape={onClose}
       style={[StyleSheet.absoluteFill, { zIndex, elevation: zIndex, justifyContent: "flex-end" }]}
     >
       {/* backdrop: tap to close. A real Pressable (not raw onTouchEnd, which fired for

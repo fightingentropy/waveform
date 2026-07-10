@@ -73,10 +73,9 @@ media path.
 - Direct LAN and Tailscale API requests require that token by default. Set
   `SPOTIFY_TRUST_LOCAL_NETWORK=1` only when every device on the network should be
   treated as the library owner; loopback health checks remain trusted.
-- `SPOTIFY_LIBRARY_OWNER_EMAILS`, `SPOTIFY_LIBRARY_OWNER_USER_IDS`, or
-  `SPOTIFY_LIBRARY_OWNER_NAMES` controls which app accounts can see and mutate
-  the Mac mini music folder. This private deployment defaults owner names to
-  `Erlin`; prefer setting the owner email or user id once known.
+- `SPOTIFY_LIBRARY_OWNER_EMAILS` or `SPOTIFY_LIBRARY_OWNER_USER_IDS` controls
+  which app accounts can see and mutate the Mac mini music folder. Ownership
+  fails closed unless an immutable id or verified email matches.
 - The Mac mini DNS watcher compares public DNS against the current home IP and
   logs drift. It does not store a Cloudflare API token or mutate DNS.
 - The Settings page intentionally only shows user-facing playback/download
@@ -222,8 +221,7 @@ SPOTIFY_PROXY_TOKEN=...
 SPOTIFY_PROXY_HOSTNAMES=music.streamarena.xyz
 SPOTIFY_TRUST_LOCAL_NETWORK=0
 SPOTIFY_LIBRARY_OWNER_EMAILS=
-SPOTIFY_LIBRARY_OWNER_USER_IDS=
-SPOTIFY_LIBRARY_OWNER_NAMES=Erlin
+SPOTIFY_LIBRARY_OWNER_USER_IDS=422ecfe9-bda3-4ac5-9eef-bcaa1176ff42
 SPOTIFY_DNS_WATCH_NAME=music.streamarena.xyz
 ```
 

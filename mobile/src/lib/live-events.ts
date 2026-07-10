@@ -16,6 +16,7 @@ export type LiveEvent = {
   venue: string;
   date: string; // ISO yyyy-mm-dd
   imageUrl: string;
+  url?: string;
   genre?: string;
 };
 

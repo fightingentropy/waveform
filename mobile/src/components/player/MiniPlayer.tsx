@@ -29,11 +29,7 @@ export function MiniPlayer() {
   const bottom = layout.mobileNavHeight + insets.bottom;
 
   return (
-    <PressableScale
-      scaleTo={1}
-      onPress={openNowPlaying}
-      accessibilityRole="button"
-      accessibilityLabel={`Open now playing: ${song.title}`}
+    <View
       className="flex-row items-center gap-3 px-3"
       style={{
         position: "absolute",
@@ -45,15 +41,23 @@ export function MiniPlayer() {
         overflow: "hidden",
       }}
     >
-      <View className="h-11 w-11 overflow-hidden rounded">
-        <CoverImage src={song.imageUrl} networkSrc={song.networkImageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={song.id} />
-      </View>
-      <View className="min-w-0 flex-1">
-        <MarqueeText className="text-sm font-medium text-foreground">{song.title}</MarqueeText>
-        <Text numberOfLines={1} className="text-xs" style={{ color: colors.muted }}>
-          {song.artist || "Unknown Artist"}
-        </Text>
-      </View>
+      <PressableScale
+        scaleTo={1}
+        onPress={openNowPlaying}
+        accessibilityRole="button"
+        accessibilityLabel={`Open now playing: ${song.title}`}
+        className="min-w-0 flex-1 flex-row items-center gap-3"
+      >
+        <View className="h-11 w-11 overflow-hidden rounded">
+          <CoverImage src={song.imageUrl} networkSrc={song.networkImageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={song.id} />
+        </View>
+        <View className="min-w-0 flex-1">
+          <MarqueeText className="text-sm font-medium text-foreground">{song.title}</MarqueeText>
+          <Text numberOfLines={1} className="text-xs" style={{ color: colors.muted }}>
+            {song.artist || "Unknown Artist"}
+          </Text>
+        </View>
+      </PressableScale>
       <HeartButton song={song} size={22} />
       <PressableScale
         onPress={toggle}
@@ -70,6 +74,6 @@ export function MiniPlayer() {
           )}
         </View>
       </PressableScale>
-    </PressableScale>
+    </View>
   );
 }

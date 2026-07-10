@@ -168,7 +168,9 @@ const PROXY_USER_EMAIL_HEADER = "x-spotify-user-email";
 const PROXY_USER_NAME_HEADER = "x-spotify-user-name";
 const MEDIA_USER_SEARCH_PARAM = "spotify_user";
 const MEDIA_SCOPE_SEARCH_PARAM = "spotify_scope";
+const MEDIA_EXPIRY_SEARCH_PARAM = "spotify_exp";
 const MEDIA_SIGNATURE_SEARCH_PARAM = "spotify_sig";
+const MEDIA_SIGNATURE_TTL_SECONDS = 24 * 60 * 60;
 
 const cwd = process.cwd();
 const defaultDistDir = existsSync(resolve(cwd, "dist/client"))
@@ -202,7 +204,6 @@ const proxyHostnames = new Set(
 );
 const libraryOwnerUserIds = parseEnvList(process.env.SPOTIFY_LIBRARY_OWNER_USER_IDS || "");
 const libraryOwnerEmails = parseEnvList(process.env.SPOTIFY_LIBRARY_OWNER_EMAILS || "");
-const libraryOwnerNames = parseEnvList(process.env.SPOTIFY_LIBRARY_OWNER_NAMES || "Erlin");
 
 function localProfileImageUrl(): string {
   for (const ext of [".jpg", ".jpeg", ".png", ".webp", ".gif"]) {
@@ -553,7 +554,12 @@ async function serveFile(
   const headers = new Headers();
   headers.set("accept-ranges", "bytes");
   headers.set("cache-control", cacheControl);
+  headers.set("content-security-policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
   headers.set("content-type", contentTypeForPath(path));
+  headers.set("permissions-policy", "camera=(), microphone=(), geolocation=()");
+  headers.set("referrer-policy", "strict-origin-when-cross-origin");
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("x-frame-options", "DENY");
   headers.set("last-modified", mtime.toUTCString());
   headers.set("etag", `W/"${size.toString(16)}-${Math.floor(mtimeMs).toString(16)}"`);
 
@@ -1182,8 +1188,7 @@ function isLocalLibraryOwner(identity: RequestUserIdentity | null): boolean {
   if (identity.local || identity.id === LOCAL_USER.id) return true;
   return (
     listMatchesValue(libraryOwnerUserIds, identity.id) ||
-    listMatchesValue(libraryOwnerEmails, identity.email) ||
-    listMatchesValue(libraryOwnerNames, identity.name)
+    listMatchesValue(libraryOwnerEmails, identity.email)
   );
 }
 
@@ -1208,13 +1213,15 @@ function mediaScopeForIdentity(identity: RequestUserIdentity): "shared" | "user"
   return isLocalLibraryOwner(identity) ? "shared" : "user";
 }
 
-function mediaSignature(userId: string, scope: string, pathname: string): string {
+function mediaSignature(userId: string, scope: string, pathname: string, expiresAt: string): string {
   return createHmac("sha256", proxyToken)
     .update(userId)
     .update("\0")
     .update(scope)
     .update("\0")
     .update(pathname)
+    .update("\0")
+    .update(expiresAt)
     .digest("hex")
     .slice(0, 40);
 }
@@ -1231,9 +1238,14 @@ function appendMediaSignature(mediaUrl: string | undefined, identity: RequestUse
     return mediaUrl;
   }
   const scope = mediaScopeForIdentity(identity);
+  const expiresAt = String(Math.floor(Date.now() / 1000) + MEDIA_SIGNATURE_TTL_SECONDS);
   parsed.searchParams.set(MEDIA_USER_SEARCH_PARAM, identity.id);
   parsed.searchParams.set(MEDIA_SCOPE_SEARCH_PARAM, scope);
-  parsed.searchParams.set(MEDIA_SIGNATURE_SEARCH_PARAM, mediaSignature(identity.id, scope, parsed.pathname));
+  parsed.searchParams.set(MEDIA_EXPIRY_SEARCH_PARAM, expiresAt);
+  parsed.searchParams.set(
+    MEDIA_SIGNATURE_SEARCH_PARAM,
+    mediaSignature(identity.id, scope, parsed.pathname, expiresAt),
+  );
   return `${parsed.pathname}${parsed.search}`;
 }
 
@@ -1256,12 +1268,18 @@ function hasValidMediaSignature(url: URL): boolean {
   if (!proxyToken) return false;
   const userId = url.searchParams.get(MEDIA_USER_SEARCH_PARAM)?.trim() || "";
   const scope = url.searchParams.get(MEDIA_SCOPE_SEARCH_PARAM)?.trim() || "";
+  const expiresAt = url.searchParams.get(MEDIA_EXPIRY_SEARCH_PARAM)?.trim() || "";
   const signature = url.searchParams.get(MEDIA_SIGNATURE_SEARCH_PARAM)?.trim() || "";
+  const expirySeconds = Number(expiresAt);
+  const nowSeconds = Math.floor(Date.now() / 1000);
   return Boolean(
     userId &&
     (scope === "shared" || scope === "user") &&
+    Number.isSafeInteger(expirySeconds) &&
+    expirySeconds > nowSeconds &&
+    expirySeconds <= nowSeconds + MEDIA_SIGNATURE_TTL_SECONDS + 60 &&
     signature &&
-    timingSafeEqualStr(signature, mediaSignature(userId, scope, url.pathname)),
+    timingSafeEqualStr(signature, mediaSignature(userId, scope, url.pathname, expiresAt)),
   );
 }
 
@@ -1585,21 +1603,16 @@ async function saveResponseBody(response: Response, path: string, maxBytes?: num
   }
 }
 
-async function deleteSongEntryFiles(source: LibrarySource, entry: LocalSongEntry): Promise<void> {
+async function songEntryOwnedPaths(source: LibrarySource, entry: LocalSongEntry): Promise<string[]> {
   const sidecar = await readSidecar(entry.absolutePath);
-  await Promise.all([
-    rm(entry.absolutePath, { force: true }).catch(() => undefined),
-    rm(sidecarPathForAudio(entry.absolutePath), { force: true }).catch(() => undefined),
-  ]);
+  const paths = new Set<string>([entry.absolutePath, sidecarPathForAudio(entry.absolutePath)]);
 
   const directory = dirname(entry.absolutePath);
-  const removed = new Set<string>();
   for (const fileName of [sidecar.coverFile, sidecar.lyricsFile]) {
     if (!fileName) continue;
     const candidate = resolve(directory, fileName);
     if (isPathInside(source.root, candidate)) {
-      await rm(candidate, { force: true }).catch(() => undefined);
-      removed.add(candidate);
+      paths.add(candidate);
     }
   }
 
@@ -1611,13 +1624,69 @@ async function deleteSongEntryFiles(source: LibrarySource, entry: LocalSongEntry
   for (const ext of IMAGE_EXTENSIONS) {
     for (const coverName of [`${stem}.cover${ext}`, `${stem}${ext}`]) {
       const candidate = resolve(directory, coverName);
-      if (removed.has(candidate)) continue;
       if (candidate === entry.absolutePath) continue;
       if (isPathInside(source.root, candidate)) {
-        await rm(candidate, { force: true }).catch(() => undefined);
+        paths.add(candidate);
       }
     }
   }
+  return Array.from(paths).filter((path) => existsSync(path));
+}
+
+async function deleteSongEntryFiles(source: LibrarySource, entry: LocalSongEntry): Promise<void> {
+  const paths = await songEntryOwnedPaths(source, entry);
+  await Promise.all(paths.map((path) => rm(path, { force: true }).catch(() => undefined)));
+}
+
+type SongEntryBackup = {
+  directory: string;
+  files: Array<{ original: string; backup: string }>;
+};
+
+async function backupSongEntryFiles(source: LibrarySource, entry: LocalSongEntry): Promise<SongEntryBackup> {
+  const directory = resolve(
+    dirname(entry.absolutePath),
+    ".spotify-replacements",
+    `${Date.now()}-${process.pid}-${crypto.randomUUID()}`,
+  );
+  const ownedPaths = await songEntryOwnedPaths(source, entry);
+  const files: SongEntryBackup["files"] = [];
+  await mkdir(directory, { recursive: true });
+  try {
+    for (const [index, original] of ownedPaths.entries()) {
+      const backup = resolve(directory, `${index}-${basename(original)}`);
+      await rename(original, backup);
+      files.push({ original, backup });
+    }
+    return { directory, files };
+  } catch (error) {
+    for (const file of files.reverse()) {
+      await mkdir(dirname(file.original), { recursive: true }).catch(() => undefined);
+      await rename(file.backup, file.original).catch(() => undefined);
+    }
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function restoreSongEntryBackup(
+  source: LibrarySource,
+  entry: LocalSongEntry,
+  replacementPath: string,
+  backup: SongEntryBackup,
+): Promise<void> {
+  await deleteSongEntryFiles(source, { ...entry, absolutePath: replacementPath }).catch(() => undefined);
+  for (const file of backup.files.slice().reverse()) {
+    await mkdir(dirname(file.original), { recursive: true }).catch(() => undefined);
+    await rm(file.original, { force: true }).catch(() => undefined);
+    await rename(file.backup, file.original).catch(() => undefined);
+  }
+  await rm(backup.directory, { recursive: true, force: true }).catch(() => undefined);
+  await getLibrary(source, true).catch(() => undefined);
+}
+
+async function discardSongEntryBackup(backup: SongEntryBackup): Promise<void> {
+  await rm(backup.directory, { recursive: true, force: true });
 }
 
 function trackKey(title: string, artist: string): string {
@@ -1770,39 +1839,50 @@ async function handleRemoteSongUpload(payload: {
     }
     throw error;
   }
-  if (existingEntry && replaceExisting) {
-    await deleteSongEntryFiles(source, existingEntry);
-    await mkdir(dirname(audioPath), { recursive: true });
-    await rename(tempAudioPath, audioPath);
+  const replacementBackup = existingEntry && replaceExisting
+    ? await backupSongEntryFiles(source, existingEntry)
+    : null;
+  try {
+    if (replacementBackup) {
+      await mkdir(dirname(audioPath), { recursive: true });
+      await rename(tempAudioPath, audioPath);
+    }
+
+    const sidecar: LocalSidecar = {
+      version: 1,
+      title,
+      artist,
+      album: album || undefined,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (imageUrl) {
+      sidecar.coverFile = await saveRemoteImage(imageUrl, basename(audioPath, extname(audioPath)), audioPath).catch(
+        () => undefined,
+      );
+    }
+
+    if (lyricsText) {
+      const lyricsName = `${basename(audioPath, extname(audioPath))}.lrc`;
+      await writeFile(resolve(dirname(audioPath), lyricsName), `${lyricsText}\n`, "utf8");
+      sidecar.lyricsFile = lyricsName;
+    }
+
+    await writeSidecar(audioPath, sidecar);
+    const nextSnapshot = await getLibrary(source, true);
+    const relativePath = relative(source.root, audioPath).split(sep).join("/");
+    const entry = nextSnapshot.entriesByPath.get(relativePath);
+    if (!entry) throw new Error("Uploaded song could not be scanned");
+    if (replacementBackup) await discardSongEntryBackup(replacementBackup);
+    if (!existingEntry) await markSongLikedForSource(source, nextSnapshot.songs, entry.song.id);
+    return json(entry.song, { status: existingEntry && replaceExisting ? 200 : 201 });
+  } catch (error) {
+    await rm(tempAudioPath, { force: true }).catch(() => undefined);
+    if (replacementBackup && existingEntry) {
+      await restoreSongEntryBackup(source, existingEntry, audioPath, replacementBackup);
+    }
+    throw error;
   }
-
-  const sidecar: LocalSidecar = {
-    version: 1,
-    title,
-    artist,
-    album: album || undefined,
-    updatedAt: new Date().toISOString(),
-  };
-
-  if (imageUrl) {
-    sidecar.coverFile = await saveRemoteImage(imageUrl, basename(audioPath, extname(audioPath)), audioPath).catch(
-      () => undefined,
-    );
-  }
-
-  if (lyricsText) {
-    const lyricsName = `${basename(audioPath, extname(audioPath))}.lrc`;
-    await writeFile(resolve(dirname(audioPath), lyricsName), `${lyricsText}\n`, "utf8");
-    sidecar.lyricsFile = lyricsName;
-  }
-
-  await writeSidecar(audioPath, sidecar);
-  const nextSnapshot = await getLibrary(source, true);
-  const relativePath = relative(source.root, audioPath).split(sep).join("/");
-  const entry = nextSnapshot.entriesByPath.get(relativePath);
-  if (!entry) return json({ error: "Uploaded song could not be scanned" }, { status: 500 });
-  if (!existingEntry) await markSongLikedForSource(source, nextSnapshot.songs, entry.song.id);
-  return json(entry.song, { status: existingEntry && replaceExisting ? 200 : 201 });
 }
 
 function ffmpegPath(): string {
@@ -2893,46 +2973,57 @@ async function handleSongUpload(source: LibrarySource, request: Request): Promis
       ))
     : audioPath;
   await saveFile(audio, tempAudioPath);
-  if (existingEntry && replaceExisting) {
-    await deleteSongEntryFiles(source, existingEntry);
-    await mkdir(dirname(audioPath), { recursive: true });
-    await rename(tempAudioPath, audioPath);
+  const replacementBackup = existingEntry && replaceExisting
+    ? await backupSongEntryFiles(source, existingEntry)
+    : null;
+  try {
+    if (replacementBackup) {
+      await mkdir(dirname(audioPath), { recursive: true });
+      await rename(tempAudioPath, audioPath);
+    }
+
+    const sidecar: LocalSidecar = {
+      version: 1,
+      title,
+      artist,
+      album: album || undefined,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (image instanceof File && image.size > 0) {
+      const imageExt = IMAGE_EXTENSIONS.has(extname(image.name).toLowerCase())
+        ? extname(image.name).toLowerCase()
+        : ".jpg";
+      const coverName = `${basename(audioPath, extname(audioPath))}.cover${imageExt}`;
+      await saveFile(image, resolve(dirname(audioPath), coverName));
+      sidecar.coverFile = coverName;
+    } else if (imageUrl) {
+      sidecar.coverFile = await saveRemoteImage(imageUrl, basename(audioPath, extname(audioPath)), audioPath).catch(
+        () => undefined,
+      );
+    }
+
+    if (lyricsText) {
+      const lyricsName = `${basename(audioPath, extname(audioPath))}.lrc`;
+      await writeFile(resolve(dirname(audioPath), lyricsName), `${lyricsText}\n`, "utf8");
+      sidecar.lyricsFile = lyricsName;
+    }
+
+    await writeSidecar(audioPath, sidecar);
+    const snapshot = await getLibrary(source, true);
+    const relativePath = relative(source.root, audioPath).split(sep).join("/");
+    const entry = snapshot.entriesByPath.get(relativePath);
+    if (!entry) throw new Error("Uploaded song could not be scanned");
+    if (replacementBackup) await discardSongEntryBackup(replacementBackup);
+    if (!existingEntry) await markSongLikedForSource(source, snapshot.songs, entry.song.id);
+    return json(entry.song, { status: existingEntry && replaceExisting ? 200 : 201 });
+  } catch (error) {
+    await rm(tempAudioPath, { force: true }).catch(() => undefined);
+    if (replacementBackup && existingEntry) {
+      await restoreSongEntryBackup(source, existingEntry, audioPath, replacementBackup);
+    }
+    throw error;
   }
-
-  const sidecar: LocalSidecar = {
-    version: 1,
-    title,
-    artist,
-    album: album || undefined,
-    updatedAt: new Date().toISOString(),
-  };
-
-  if (image instanceof File && image.size > 0) {
-    const imageExt = IMAGE_EXTENSIONS.has(extname(image.name).toLowerCase())
-      ? extname(image.name).toLowerCase()
-      : ".jpg";
-    const coverName = `${basename(audioPath, extname(audioPath))}.cover${imageExt}`;
-    await saveFile(image, resolve(dirname(audioPath), coverName));
-    sidecar.coverFile = coverName;
-  } else if (imageUrl) {
-    sidecar.coverFile = await saveRemoteImage(imageUrl, basename(audioPath, extname(audioPath)), audioPath).catch(
-      () => undefined,
-    );
-  }
-
-  if (lyricsText) {
-    const lyricsName = `${basename(audioPath, extname(audioPath))}.lrc`;
-    await writeFile(resolve(dirname(audioPath), lyricsName), `${lyricsText}\n`, "utf8");
-    sidecar.lyricsFile = lyricsName;
-  }
-
-  await writeSidecar(audioPath, sidecar);
-  const snapshot = await getLibrary(source, true);
-  const relativePath = relative(source.root, audioPath).split(sep).join("/");
-  const entry = snapshot.entriesByPath.get(relativePath);
-  if (!entry) return json({ error: "Uploaded song could not be scanned" }, { status: 500 });
-  if (!existingEntry) await markSongLikedForSource(source, snapshot.songs, entry.song.id);
-  return json(entry.song, { status: existingEntry && replaceExisting ? 200 : 201 });
 }
 
 async function handlePatchSong(source: LibrarySource, id: string, request: Request): Promise<Response> {

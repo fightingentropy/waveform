@@ -17,6 +17,7 @@ import { usePlayerStore } from "@/store/player";
 
 const loadSearchPage = () => import("@/client/pages/SearchPage");
 const loadLibraryPage = () => import("@/client/pages/LibraryPage");
+const loadSongsPage = () => import("@/client/pages/SongsPage");
 const loadLikedPage = () => import("@/client/pages/LikedPage");
 const loadRadioPage = () => import("@/client/pages/RadioPage");
 const loadPodcastsPage = () => import("@/client/pages/PodcastsPage");
@@ -29,6 +30,7 @@ type RoutePrefetcher = () => Promise<unknown>;
 const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
   loadSearchPage,
   loadLibraryPage,
+  loadSongsPage,
   loadLikedPage,
   loadRadioPage,
   loadPodcastsPage,
@@ -44,6 +46,7 @@ const ROUTE_PREFETCH_FALLBACK_DELAY_MS = 1_000;
 
 const SearchPage = lazy(loadSearchPage);
 const LibraryPage = lazy(loadLibraryPage);
+const SongsPage = lazy(loadSongsPage);
 const LikedPage = lazy(loadLikedPage);
 const RadioPage = lazy(loadRadioPage);
 const PodcastsPage = lazy(loadPodcastsPage);
@@ -287,6 +290,7 @@ function Shell() {
           <Route path="/" element={<HomePage />} />
           <Route path="/search" element={lazyRoute(<SearchPage />, "Loading search...")} />
           <Route path="/library" element={lazyRoute(<LibraryPage />, "Loading library...")} />
+          <Route path="/songs" element={lazyRoute(<SongsPage />, "Loading songs...")} />
           <Route path="/liked" element={lazyRoute(<LikedPage />, "Loading liked songs...")} />
           <Route path="/radio" element={lazyRoute(<RadioPage />, "Loading radio stations...")} />
           <Route path="/podcasts" element={lazyRoute(<PodcastsPage />, "Loading podcasts...")} />

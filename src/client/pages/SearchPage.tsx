@@ -4,7 +4,7 @@ import { useAuth } from "@/client/auth";
 
 export default function SearchPage() {
   const { user, status } = useAuth();
-  const { data, loading, error } = useApiData<SearchIndexPayload>(
+  const { data, loading, error, retry } = useApiData<SearchIndexPayload>(
     withAccountScope("/api/search-index", user?.id ?? status),
     {
       songs: [],
@@ -36,7 +36,12 @@ export default function SearchPage() {
     );
   }
   if (error) {
-    return <div className="px-4 py-6 max-w-7xl mx-auto text-red-500">{error}</div>;
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-6">
+        <p className="text-red-300">{error}</p>
+        <button type="button" onClick={retry} className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black">Try again</button>
+      </div>
+    );
   }
 
   return (

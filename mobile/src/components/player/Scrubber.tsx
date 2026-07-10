@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { type LayoutChangeEvent, Text, View } from "react-native";
+import { type AccessibilityActionEvent, type LayoutChangeEvent, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { seekTo } from "@/audio/actions";
 import { useAudioProgress } from "@/audio/progress";
@@ -9,7 +9,7 @@ import { colors } from "@/theme";
 
 const TRACK_H = 3; // thin track, Spotify-style
 const THUMB = 12; // small flat thumb (no shadow), unlike the bulky native slider
-const ROW_H = 22; // touch row height
+const ROW_H = 48; // accessible touch target while preserving the thin visual track
 
 // Spotify-style scrubber: a delicate 3px track with a small flat white thumb,
 // elapsed on the left and REMAINING (negative) on the right. Custom (not the
@@ -83,6 +83,20 @@ export function Scrubber({ live = false }: { live?: boolean }) {
         <View
           style={{ height: ROW_H, justifyContent: "center" }}
           onLayout={(e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width)}
+          accessible
+          accessibilityRole="adjustable"
+          accessibilityLabel="Playback position"
+          accessibilityValue={{
+            min: 0,
+            max: Math.round(max),
+            now: Math.round(value),
+            text: `${formatTime(value)} of ${formatTime(max)}`,
+          }}
+          accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+          onAccessibilityAction={(event: AccessibilityActionEvent) => {
+            const delta = event.nativeEvent.actionName === "increment" ? 10 : -10;
+            void seekTo(Math.min(max, Math.max(0, value + delta)));
+          }}
         >
           {/* remaining (faint) track */}
           <View

@@ -11,8 +11,8 @@ import { colors } from "@/theme";
 
 // The "Create" sheet, opened from the Create (+) tab. Mirrors Spotify's create
 // menu: a column of options, each a round icon chip + title (+ optional Beta
-// badge) + one-line description. The actions themselves aren't wired yet — tapping
-// a row just closes the sheet — so this is presentation-only for now.
+// badge) + one-line description. Only actions that are actually implemented are
+// rendered; unfinished controls must not look interactive.
 
 type Option = {
   key: string;
@@ -113,7 +113,9 @@ export function CreateMenuSheet({ visible, onClose }: { visible: boolean; onClos
     });
   };
 
-  const options = OPTIONS.map((o) => (o.key === "playlist" ? { ...o, onPress: handleCreatePlaylist } : o));
+  const options = OPTIONS
+    .map((o) => (o.key === "playlist" ? { ...o, onPress: handleCreatePlaylist } : o))
+    .filter((o) => typeof o.onPress === "function");
 
   return (
     <Sheet visible={visible} onClose={onClose} heightPct={0.8} zIndex={150}>

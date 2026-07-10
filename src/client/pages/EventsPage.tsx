@@ -3,12 +3,12 @@
 import { Ticket } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import { useApiData } from "@/client/api";
-import { formatEventDate, LIVE_EVENT_SECTIONS, type LiveEvent, type LiveEventSection } from "@/lib/live-events";
+import { formatEventDate, type LiveEvent, type LiveEventSection } from "@/lib/live-events";
 
 function EventCard({ event, eager }: { event: LiveEvent; eager: boolean }) {
   const { month, day } = formatEventDate(event.date);
-  return (
-    <div className="group">
+  const content = (
+    <>
       <div className="relative aspect-square overflow-hidden rounded-lg bg-white/[0.05]">
         <CoverImage
           src={event.imageUrl}
@@ -30,7 +30,20 @@ function EventCard({ event, eager }: { event: LiveEvent; eager: boolean }) {
       <div className="mt-1 line-clamp-1 text-[13px] leading-4 text-[#b3b3b3]" title={event.venue}>
         {event.venue}
       </div>
-    </div>
+    </>
+  );
+  return event.url ? (
+    <a
+      className="group rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+      href={event.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`View tickets for ${event.artists}`}
+    >
+      {content}
+    </a>
+  ) : (
+    <div className="group">{content}</div>
   );
 }
 
@@ -49,10 +62,13 @@ function EventsSkeleton() {
 }
 
 export default function EventsPage() {
-  // Public feed (same for everyone) — fetched plain, no account scope. Falls back
-  // to the bundled sample list when the live response carries no sections.
-  const { data, loading } = useApiData<{ sections: LiveEventSection[] }>("/api/events", { sections: [] });
-  const sections = data.sections.length > 0 ? data.sections : LIVE_EVENT_SECTIONS;
+  // Public feed (same for everyone) — fetched plain, no account scope. Do not
+  // silently substitute old sample dates when the live provider is unavailable.
+  const { data, loading, error, retry } = useApiData<{ sections: LiveEventSection[] }>("/api/events", { sections: [] });
+  const today = new Date().toISOString().slice(0, 10);
+  const sections = data.sections
+    .map((section) => ({ ...section, events: section.events.filter((event) => event.date >= today) }))
+    .filter((section) => section.events.length > 0);
   const showSkeleton = loading && data.sections.length === 0;
 
   return (
@@ -64,12 +80,23 @@ export default function EventsPage() {
           </div>
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold">Live Events</h1>
-            <div className="mt-1 text-sm text-white/[0.62]">Concerts &amp; venues near you</div>
+            <div className="mt-1 text-sm text-white/[0.62]">Concerts &amp; venues in London</div>
           </div>
         </div>
 
         {showSkeleton ? (
           <EventsSkeleton />
+        ) : error ? (
+          <div role="alert" className="rounded-lg border border-red-400/20 bg-red-500/10 p-5 text-red-100">
+            <p>{error}</p>
+            <button type="button" onClick={retry} className="mt-4 rounded-full bg-white px-4 py-2 font-semibold text-black">
+              Retry
+            </button>
+          </div>
+        ) : sections.length === 0 ? (
+          <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5 text-white/[0.68]">
+            No upcoming London events are available right now.
+          </div>
         ) : (
           sections.map((section) => (
             <section key={section.key} aria-label={section.title} className="mb-9 md:mb-10">

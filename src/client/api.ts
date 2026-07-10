@@ -446,6 +446,10 @@ export type SearchIndexPayload = {
   songs: PlayerSong[];
 };
 
+export type SearchCatalogPayload = {
+  results: PlayerSong[];
+};
+
 export type LibraryPayload = {
   playlists: PlaylistEntry[];
   userId: string | null;
@@ -466,6 +470,7 @@ export type LibraryPlaylistPayload = {
     imageUrl: string | null;
     userId: string;
     createdAt: string;
+    editable?: boolean;
   } | null;
   songs: PlayerSong[];
   // null when the server couldn't determine the like set (owner's mini unreachable

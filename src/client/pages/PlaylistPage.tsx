@@ -1,6 +1,6 @@
-import { useCallback } from "react";
-import { useParams } from "react-router-dom";
-import { Pause, Play } from "lucide-react";
+import { useCallback, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { ArrowDown, ArrowUp, Pause, Pencil, Play, Trash2, X } from "lucide-react";
 import {
   useApiData,
   withAccountScope,
@@ -14,6 +14,7 @@ import { CoverImage } from "@/components/CoverImage";
 import { SongGrid } from "@/components/SongGrid";
 import { cn } from "@/lib/utils";
 import type { PlayerSong } from "@/types/player";
+import { deletePlaylist, removeSongFromPlaylist, renamePlaylist, reorderPlaylist } from "@/client/playlist-actions";
 
 function PlaylistLoadingSkeleton() {
   return (
@@ -186,8 +187,9 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
 
 export default function PlaylistPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
   const { user, status } = useAuth();
-  const { data, loading, error } = useApiData<PlaylistPayload>(
+  const { data, loading, error, retry } = useApiData<PlaylistPayload>(
     withAccountScope(`/api/playlist/${encodeURIComponent(id)}`, user?.id ?? status),
     {
       playlist: null,
@@ -199,9 +201,32 @@ export default function PlaylistPage() {
       keepPreviousData: true,
     },
   );
+  const [managing, setManaging] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+
+  const runAction = async (key: string, action: () => Promise<unknown>) => {
+    setPendingAction(key);
+    setActionError(null);
+    try {
+      await action();
+      retry();
+      return true;
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "The playlist couldn't be updated.");
+      return false;
+    } finally {
+      setPendingAction(null);
+    }
+  };
 
   if (loading || status === "loading") return <PlaylistLoadingSkeleton />;
-  if (error) return <div className="px-6 py-8 max-w-7xl mx-auto text-red-500">{error}</div>;
+  if (error) return (
+    <div className="mx-auto max-w-7xl px-6 py-8">
+      <p className="text-red-300">{error}</p>
+      <button type="button" onClick={retry} className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black">Try again</button>
+    </div>
+  );
 
   if (data.kind === "curated") return <CuratedPlaylistView data={data} />;
 
@@ -214,7 +239,86 @@ export default function PlaylistPage() {
           <h1 className="truncate text-2xl font-semibold">{data.playlist.name}</h1>
           <div className="mt-1 text-sm opacity-70">{data.songs.length} tracks</div>
         </div>
+        {data.playlist.editable ? (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const next = window.prompt("Playlist name", data.playlist?.name ?? "");
+                if (next?.trim() && next.trim() !== data.playlist?.name) {
+                  void runAction("rename", () => renamePlaylist(id, next));
+                }
+              }}
+              disabled={pendingAction !== null}
+              className="inline-flex items-center gap-2 rounded-full border border-white/[0.16] px-3 py-2 text-sm disabled:opacity-45"
+            >
+              <Pencil size={15} /> Rename
+            </button>
+            <button
+              type="button"
+              onClick={() => setManaging((value) => !value)}
+              className="rounded-full border border-white/[0.16] px-3 py-2 text-sm"
+            >
+              {managing ? "Done" : "Manage tracks"}
+            </button>
+            {!id.startsWith("local-folder-") ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!window.confirm(`Delete “${data.playlist?.name}”?`)) return;
+                  void runAction("delete", () => deletePlaylist(id)).then((deleted) => {
+                    if (deleted) navigate("/library");
+                  });
+                }}
+                disabled={pendingAction !== null}
+                className="inline-flex items-center gap-2 rounded-full border border-red-400/40 px-3 py-2 text-sm text-red-300 disabled:opacity-45"
+              >
+                <Trash2 size={15} /> Delete
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
+      {actionError ? <div className="mb-4 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">{actionError}</div> : null}
+      {managing && data.playlist.editable && data.songs.length > 0 ? (
+        <ol className="mb-7 space-y-1 rounded-xl border border-white/[0.12] bg-white/[0.03] p-2">
+          {data.songs.map((song, index) => (
+            <li key={song.id} className="flex min-h-12 items-center gap-3 rounded-lg px-2">
+              <span className="w-6 text-right text-xs text-white/[0.45]">{index + 1}</span>
+              <span className="min-w-0 flex-1 truncate text-sm">{song.title} <span className="text-white/[0.55]">— {song.artist}</span></span>
+              <button
+                type="button"
+                aria-label={`Move ${song.title} up`}
+                disabled={index === 0 || pendingAction !== null}
+                onClick={() => {
+                  const ids = data.songs.map((item) => item.id);
+                  [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]];
+                  void runAction(`up-${song.id}`, () => reorderPlaylist(id, ids));
+                }}
+                className="grid h-10 w-10 place-items-center rounded-full hover:bg-white/[0.09] disabled:opacity-30"
+              ><ArrowUp size={16} /></button>
+              <button
+                type="button"
+                aria-label={`Move ${song.title} down`}
+                disabled={index === data.songs.length - 1 || pendingAction !== null}
+                onClick={() => {
+                  const ids = data.songs.map((item) => item.id);
+                  [ids[index], ids[index + 1]] = [ids[index + 1], ids[index]];
+                  void runAction(`down-${song.id}`, () => reorderPlaylist(id, ids));
+                }}
+                className="grid h-10 w-10 place-items-center rounded-full hover:bg-white/[0.09] disabled:opacity-30"
+              ><ArrowDown size={16} /></button>
+              <button
+                type="button"
+                aria-label={`Remove ${song.title} from playlist`}
+                disabled={pendingAction !== null}
+                onClick={() => void runAction(`remove-${song.id}`, () => removeSongFromPlaylist(id, song.id))}
+                className="grid h-10 w-10 place-items-center rounded-full text-red-300 hover:bg-red-400/10 disabled:opacity-30"
+              ><X size={16} /></button>
+            </li>
+          ))}
+        </ol>
+      ) : null}
       {data.songs.length === 0 ? (
         <div className="opacity-70">This playlist is empty.</div>
       ) : (

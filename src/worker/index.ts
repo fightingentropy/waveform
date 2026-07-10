@@ -4266,6 +4266,7 @@ type TicketmasterImage = { url: string; width?: number; ratio?: string };
 type TicketmasterEvent = {
   id: string;
   name: string;
+  url?: string;
   images?: TicketmasterImage[];
   dates?: { start?: { localDate?: string } };
   classifications?: { genre?: { name?: string } }[];
@@ -4274,7 +4275,7 @@ type TicketmasterEvent = {
     attractions?: { name?: string }[];
   };
 };
-type LiveEventDto = { id: string; artists: string; venue: string; date: string; imageUrl: string; genre?: string };
+type LiveEventDto = { id: string; artists: string; venue: string; date: string; imageUrl: string; url?: string; genre?: string };
 
 function pickTicketmasterImage(images?: TicketmasterImage[]): string {
   if (!images || images.length === 0) return "";
@@ -4299,7 +4300,15 @@ function mapTicketmasterEvent(ev: TicketmasterEvent): LiveEventDto | null {
   const artists = attractions.length ? attractions.slice(0, 3).join(", ") : ev.name;
   const imageUrl = pickTicketmasterImage(ev.images);
   if (!imageUrl) return null;
-  return { id: ev.id, artists, venue: venueLabel, date, imageUrl, genre: ev.classifications?.[0]?.genre?.name };
+  return {
+    id: ev.id,
+    artists,
+    venue: venueLabel,
+    date,
+    imageUrl,
+    url: ev.url,
+    genre: ev.classifications?.[0]?.genre?.name,
+  };
 }
 
 const artistKey = (e: LiveEventDto): string =>
@@ -5208,7 +5217,8 @@ function playlistsEditableEnabled(env: CloudflareEnv): boolean {
 // Mirror the mini's isLocalLibraryOwner (local-music-server.ts:1206) so the
 // worker resolves "is this the library owner" identically: the local-preview
 // sentinel, or a session user matched against the SPOTIFY_LIBRARY_OWNER_* env
-// lists (default display name "Erlin"). The production owner is a real D1 user
+// lists. Display names are deliberately excluded because they are mutable and
+// non-unique. The production owner is a real D1 user
 // with a UUID id — never the "local-mac-mini" sentinel — so every owner gate
 // MUST go through here, not `user.id === LOCAL_MAC_MINI_AUTH_USER.id`.
 function isLibraryOwner(c: Context<AppEnv>, user: AuthUser | null): boolean {
@@ -5216,14 +5226,10 @@ function isLibraryOwner(c: Context<AppEnv>, user: AuthUser | null): boolean {
   if (user.id === LOCAL_MAC_MINI_AUTH_USER.id) return true;
   const ids = envStringList(c.env, "SPOTIFY_LIBRARY_OWNER_USER_IDS");
   const emails = envStringList(c.env, "SPOTIFY_LIBRARY_OWNER_EMAILS");
-  const names = envStringList(c.env, "SPOTIFY_LIBRARY_OWNER_NAMES");
-  const ownerNames = names.length > 0 ? names : ["Erlin"];
   const email = user.email?.trim().toLowerCase() ?? "";
-  const name = user.name?.trim().toLowerCase() ?? "";
   return (
     ids.some((value) => value.trim() === user.id) ||
-    (!!email && emails.some((value) => value.trim().toLowerCase() === email)) ||
-    (!!name && ownerNames.some((value) => value.trim().toLowerCase() === name))
+    (!!email && emails.some((value) => value.trim().toLowerCase() === email))
   );
 }
 

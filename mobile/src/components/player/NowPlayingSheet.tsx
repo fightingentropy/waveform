@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { FadeIn } from "react-native-reanimated";
+import Animated, { FadeIn, runOnJS } from "react-native-reanimated";
 import { ListMusic, MicVocal, Moon, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Sparkles } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
@@ -51,8 +51,8 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
     .failOffsetY([-12, 12])
     .onEnd((e) => {
       "worklet";
-      if (e.translationX > 60) previous();
-      else if (e.translationX < -60) next();
+      if (e.translationX > 60) runOnJS(previous)();
+      else if (e.translationX < -60) runOnJS(next)();
     });
 
   return (

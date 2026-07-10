@@ -14,8 +14,7 @@ BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
 PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-music.streamarena.xyz}"
 SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-app}"
 LIBRARY_OWNER_EMAILS="${LIBRARY_OWNER_EMAILS:-${SPOTIFY_LIBRARY_OWNER_EMAILS:-}}"
-LIBRARY_OWNER_USER_IDS="${LIBRARY_OWNER_USER_IDS:-${SPOTIFY_LIBRARY_OWNER_USER_IDS:-}}"
-LIBRARY_OWNER_NAMES="${LIBRARY_OWNER_NAMES:-${SPOTIFY_LIBRARY_OWNER_NAMES:-Erlin}}"
+LIBRARY_OWNER_USER_IDS="${LIBRARY_OWNER_USER_IDS:-${SPOTIFY_LIBRARY_OWNER_USER_IDS:-422ecfe9-bda3-4ac5-9eef-bcaa1176ff42}}"
 
 usage() {
   cat <<'USAGE'
@@ -42,7 +41,6 @@ Environment:
   PROXY_HOSTNAMES        Default: music.streamarena.xyz
   LIBRARY_OWNER_EMAILS   Comma-separated account emails allowed to use the Mac mini library.
   LIBRARY_OWNER_USER_IDS Comma-separated account IDs allowed to use the Mac mini library.
-  LIBRARY_OWNER_NAMES    Comma-separated display names allowed to use the Mac mini library. Default: Erlin.
   SERVICE_LABEL          Default: xyz.streamarena.spotify-app
 USAGE
 }
@@ -80,7 +78,7 @@ source "$SCRIPT_DIR/mini-host.sh"
 resolve_mini_host
 
 ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$MINI_HOST" \
-  "REMOTE_APP='$REMOTE_APP' REMOTE_MUSIC_DIR='$REMOTE_MUSIC_DIR' PORT='$PORT' HOST='$HOST' BUN_BIN='$BUN_BIN' PROXY_HOSTNAMES='$PROXY_HOSTNAMES' LIBRARY_OWNER_EMAILS='$LIBRARY_OWNER_EMAILS' LIBRARY_OWNER_USER_IDS='$LIBRARY_OWNER_USER_IDS' LIBRARY_OWNER_NAMES='$LIBRARY_OWNER_NAMES' SERVICE_LABEL='$SERVICE_LABEL' bash -s" <<'REMOTE'
+  "REMOTE_APP='$REMOTE_APP' REMOTE_MUSIC_DIR='$REMOTE_MUSIC_DIR' PORT='$PORT' HOST='$HOST' BUN_BIN='$BUN_BIN' PROXY_HOSTNAMES='$PROXY_HOSTNAMES' LIBRARY_OWNER_EMAILS='$LIBRARY_OWNER_EMAILS' LIBRARY_OWNER_USER_IDS='$LIBRARY_OWNER_USER_IDS' SERVICE_LABEL='$SERVICE_LABEL' bash -s" <<'REMOTE'
 set -euo pipefail
 
 state_dir="$HOME/.local/state/spotify"
@@ -147,7 +145,7 @@ set_env_var SPOTIFY_CACHE_DIR "$REMOTE_APP/cache"
 set_env_var SPOTIFY_PROXY_HOSTNAMES "$PROXY_HOSTNAMES"
 set_env_var SPOTIFY_LIBRARY_OWNER_EMAILS "$LIBRARY_OWNER_EMAILS"
 set_env_var SPOTIFY_LIBRARY_OWNER_USER_IDS "$LIBRARY_OWNER_USER_IDS"
-set_env_var SPOTIFY_LIBRARY_OWNER_NAMES "$LIBRARY_OWNER_NAMES"
+set_env_var SPOTIFY_LIBRARY_OWNER_NAMES ""
 
 cat > "$bin_dir/spotify-run-server" <<'SCRIPT'
 #!/bin/bash

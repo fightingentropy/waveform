@@ -1,3 +1,12 @@
+# Security headers for static documents. API responses receive the same policy
+# from Worker middleware; production HTML is served directly by Caddy.
+/*
+  Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'self'
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+
 # https://developers.cloudflare.com/workers/static-assets/headers
 /sw.js
   Cache-Control: no-cache

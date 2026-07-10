@@ -17,7 +17,9 @@ export default function NowPlayingSidebar() {
   const podcastEpisode = isPodcastSong(displaySong);
   const podcastDescription = displaySong?.description?.trim() ?? "";
 
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem("spotify_right_sidebar_collapsed") === "1",
+  );
   const [showLyrics, setShowLyrics] = useState(false);
   const [playbackPosition, setPlaybackPosition] = useState(0);
 
@@ -27,6 +29,15 @@ export default function NowPlayingSidebar() {
   );
 
   const lyricsState = useLyrics(displaySong?.id, displaySong?.lyricsUrl, showLyrics);
+
+  useEffect(() => {
+    const width = collapsed ? "4rem" : "20rem";
+    document.documentElement.style.setProperty("--wf-right-sidebar-width", width);
+    localStorage.setItem("spotify_right_sidebar_collapsed", collapsed ? "1" : "0");
+    return () => {
+      document.documentElement.style.removeProperty("--wf-right-sidebar-width");
+    };
+  }, [collapsed]);
 
   // PlayerBar owns the audio clock; follow it only while lyrics are visible
   // so the sidebar doesn't re-render 4x/second the rest of the time.

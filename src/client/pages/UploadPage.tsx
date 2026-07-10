@@ -50,6 +50,59 @@ type BatchProgress = {
   failed: number;
 };
 
+type PersistentBatchState = {
+  batchInfo: BatchInfo;
+  status: ActionStatus;
+  progress: BatchProgress | null;
+  failures: string[];
+  notice: string | null;
+  error: string | null;
+};
+
+const BATCH_STATE_KEY = "spotify_active_batch_import";
+let persistentBatchController: AbortController | null = null;
+let persistentBatchState: PersistentBatchState | null = null;
+const persistentBatchListeners = new Set<(state: PersistentBatchState) => void>();
+
+function publishBatchState(patch: Partial<PersistentBatchState>): void {
+  if (!persistentBatchState && !patch.batchInfo) return;
+  persistentBatchState = {
+    batchInfo: patch.batchInfo ?? persistentBatchState!.batchInfo,
+    status: patch.status ?? persistentBatchState?.status ?? "idle",
+    progress: patch.progress !== undefined ? patch.progress : persistentBatchState?.progress ?? null,
+    failures: patch.failures ?? persistentBatchState?.failures ?? [],
+    notice: patch.notice !== undefined ? patch.notice : persistentBatchState?.notice ?? null,
+    error: patch.error !== undefined ? patch.error : persistentBatchState?.error ?? null,
+  };
+  try {
+    sessionStorage.setItem(BATCH_STATE_KEY, JSON.stringify(persistentBatchState));
+  } catch {}
+  for (const listener of persistentBatchListeners) listener(persistentBatchState);
+}
+
+function readPersistedBatchState(): PersistentBatchState | null {
+  try {
+    const raw = sessionStorage.getItem(BATCH_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistentBatchState;
+    if (!parsed?.batchInfo || !Array.isArray(parsed.batchInfo.trackIds)) return null;
+    if (parsed.status === "loading") {
+      parsed.status = "idle";
+      parsed.notice = "The browser reloaded during this import. Choose Resume batch to continue; completed tracks will be skipped.";
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearPersistedBatchState(): void {
+  persistentBatchState = null;
+  try {
+    sessionStorage.removeItem(BATCH_STATE_KEY);
+  } catch {}
+}
+
 function formatDuration(durationMs: number): string {
   if (!durationMs || !Number.isFinite(durationMs)) return "0:00";
   return formatTime(durationMs / 1000);
@@ -196,29 +249,43 @@ export default function UploadPage() {
   const [autoDownloadPending, setAutoDownloadPending] = useState(false);
   const autoDownloadStartedRef = useRef(false);
   const batchDownloadRunnerRef = useRef<() => Promise<void>>(() => Promise.resolve());
-  const batchAbortRef = useRef<AbortController | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const replaceModalRef = useRef<HTMLDivElement | null>(null);
   const replaceTriggerRef = useRef<HTMLElement | null>(null);
   const requestedOutputFormat: OutputFormat = "flac";
 
   useEffect(() => {
+    const restore = (state: PersistentBatchState) => {
+      setBatchInfo(state.batchInfo);
+      setBatchStatus(state.status);
+      setBatchProgress(state.progress);
+      setBatchFailures(state.failures);
+      setNotice(state.notice);
+      setError(state.error);
+    };
+    if (!persistentBatchState) persistentBatchState = readPersistedBatchState();
+    if (persistentBatchState) restore(persistentBatchState);
+    persistentBatchListeners.add(restore);
     return () => {
       previewAudioRef.current?.pause();
       if (previewAudioRef.current) previewAudioRef.current.currentTime = 0;
-      batchAbortRef.current?.abort();
+      persistentBatchListeners.delete(restore);
     };
   }, []);
 
   useEffect(() => {
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
     const params = new URLSearchParams(window.location.search);
-    // sp_dc cookie is sensitive: prefer the URL hash (never sent to servers) over the query.
-    const cookieParam = hashParams.get("spotifyCookie") || params.get("spotifyCookie");
+    // sp_dc is an account credential. Accept it only from the URL fragment,
+    // which is never transmitted in HTTP requests or written to Caddy logs.
+    const cookieParam = hashParams.get("spotifyCookie");
     const urlParam = params.get("url");
     const autostart = params.get("autostart") === "1";
     if (cookieParam) writeSpotifyCookie(cookieParam);
-    if (urlParam) setSpotifyUrl(urlParam);
+    if (urlParam) {
+      clearPersistedBatchState();
+      setSpotifyUrl(urlParam);
+    }
     if (autostart && urlParam) {
       autoStartRef.current = "download";
     } else if (urlParam) {
@@ -380,6 +447,8 @@ export default function UploadPage() {
   }
 
   async function handleFetchSpotify() {
+    if (persistentBatchController && !persistentBatchController.signal.aborted) return;
+    clearPersistedBatchState();
     // Stop any preview audio that was playing for a previously fetched track.
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
@@ -559,20 +628,19 @@ export default function UploadPage() {
   }
 
   function cancelBatchDownload() {
-    batchAbortRef.current?.abort();
+    persistentBatchController?.abort();
   }
 
   async function handleBatchDownload() {
     if (!batchInfo) return;
     // Guard against a double-trigger (e.g. button click + autostart event).
-    if (batchAbortRef.current && !batchAbortRef.current.signal.aborted) return;
+    if (persistentBatchController && !persistentBatchController.signal.aborted) return;
     const controller = new AbortController();
-    batchAbortRef.current = controller;
+    persistentBatchController = controller;
     const { signal } = controller;
     setError(null);
     setNotice(null);
-    setBatchFailures([]);
-    setBatchStatus("loading");
+    publishBatchState({ batchInfo, failures: [], status: "loading", notice: null, error: null });
 
     const batchTracks =
       batchInfo.tracks && batchInfo.tracks.length > 0
@@ -586,14 +654,14 @@ export default function UploadPage() {
     let failed = 0;
     let cancelled = false;
 
-    setBatchProgress({
+    publishBatchState({ progress: {
       current: 0,
       total,
       currentTrack: "",
       succeeded: 0,
       skipped: 0,
       failed: 0,
-    });
+    } });
 
     try {
       for (let index = 0; index < batchTracks.length; index += 1) {
@@ -616,14 +684,14 @@ export default function UploadPage() {
           failures.push(
             `${trackId}: ${err instanceof Error ? err.message : "Failed to fetch track metadata"}`,
           );
-          setBatchProgress({
+          publishBatchState({ progress: {
             current: index + 1,
             total,
             currentTrack: trackId,
             succeeded,
             skipped,
             failed,
-          });
+          } });
           await delay(400);
           continue;
         }
@@ -633,25 +701,25 @@ export default function UploadPage() {
           break;
         }
 
-        setBatchProgress({
+        publishBatchState({ progress: {
           current: index + 1,
           total,
           currentTrack: `${track.artist} - ${track.title}`,
           succeeded,
           skipped,
           failed,
-        });
+        } });
 
         if (knownKeys.has(normalizeTrackKey(track.title, track.artist))) {
           skipped += 1;
-          setBatchProgress({
+          publishBatchState({ progress: {
             current: index + 1,
             total,
             currentTrack: `${track.artist} - ${track.title}`,
             succeeded,
             skipped,
             failed,
-          });
+          } });
           await delay(200);
           continue;
         }
@@ -662,14 +730,14 @@ export default function UploadPage() {
           if (result === "skipped") {
             skipped += 1;
             knownKeys.add(normalizeTrackKey(track.title, track.artist));
-            setBatchProgress({
+            publishBatchState({ progress: {
               current: index + 1,
               total,
               currentTrack: `${track.artist} - ${track.title}`,
               succeeded,
               skipped,
               failed,
-            });
+            } });
             await delay(400);
             continue;
           }
@@ -682,33 +750,34 @@ export default function UploadPage() {
           );
         }
 
-        setBatchProgress({
+        publishBatchState({ progress: {
           current: index + 1,
           total,
           currentTrack: `${track.artist} - ${track.title}`,
           succeeded,
           skipped,
           failed,
-        });
+        } });
         await delay(500);
       }
 
-      setBatchFailures(failures);
-      setBatchStatus(cancelled ? "idle" : failed > 0 && succeeded === 0 ? "error" : "success");
-      setNotice(
-        cancelled
+      const finalNotice = cancelled
           ? `Batch cancelled: ${succeeded} downloaded, ${skipped} skipped, ${failed} failed.`
-          : `Batch complete: ${succeeded} downloaded, ${skipped} skipped, ${failed} failed out of ${total} tracks.`,
-      );
+          : `Batch complete: ${succeeded} downloaded, ${skipped} skipped, ${failed} failed out of ${total} tracks.`;
+      publishBatchState({
+        failures,
+        status: cancelled ? "idle" : failed > 0 && succeeded === 0 ? "error" : "success",
+        notice: finalNotice,
+        error: failures.length > 0 ? failures.slice(0, 3).join(" · ") : null,
+      });
       if (succeeded > 0) invalidateLibraryApiCache();
-      if (failures.length > 0) {
-        setError(failures.slice(0, 3).join(" · "));
-      }
     } catch (err) {
-      setBatchStatus("error");
-      setError(err instanceof Error ? err.message : "Batch download failed");
+      publishBatchState({
+        status: "error",
+        error: err instanceof Error ? err.message : "Batch download failed",
+      });
     } finally {
-      if (batchAbortRef.current === controller) batchAbortRef.current = null;
+      if (persistentBatchController === controller) persistentBatchController = null;
     }
   }
   batchDownloadRunnerRef.current = handleBatchDownload;
@@ -932,7 +1001,7 @@ export default function UploadPage() {
         <div className="space-y-5">
           <div className="flex flex-col md:flex-row gap-3">
             <input aria-label="Spotify URL" value={spotifyUrl} onChange={(e) => setSpotifyUrl(e.target.value)} className="flex-1 border border-white/25 rounded-2xl px-4 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" placeholder="Spotify playlist, album, or Liked Songs URL" />
-            <button type="button" onClick={handleFetchSpotify} disabled={fetchStatus === "loading" || !spotifyUrl.trim()} className="h-11 px-5 rounded-2xl bg-yellow-500 text-black font-medium disabled:opacity-50 inline-flex items-center gap-2">
+            <button type="button" onClick={handleFetchSpotify} disabled={fetchStatus === "loading" || batchStatus === "loading" || !spotifyUrl.trim()} className="h-11 px-5 rounded-2xl bg-yellow-500 text-black font-medium disabled:opacity-50 inline-flex items-center gap-2">
               {fetchStatus === "loading" ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
               Fetch
             </button>
@@ -992,7 +1061,9 @@ export default function UploadPage() {
                   className="flex-1 h-11 rounded-2xl bg-yellow-500 text-black font-semibold disabled:opacity-50 inline-flex items-center justify-center gap-2"
                 >
                   {batchStatus === "loading" ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-                  Download All ({batchInfo.trackCount} tracks)
+                  {batchStatus === "idle" && batchProgress && batchProgress.current > 0
+                    ? `Resume batch (${batchInfo.trackCount} tracks)`
+                    : `Download All (${batchInfo.trackCount} tracks)`}
                   <ActionIcon status={batchStatus} />
                 </button>
                 {batchStatus === "loading" && (

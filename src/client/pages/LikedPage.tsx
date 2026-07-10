@@ -21,7 +21,7 @@ function SongGridSkeleton() {
 export default function LikedPage() {
   const { user, status, refresh } = useAuth();
   const authSettled = status !== "loading";
-  const { data, loading, error } = useApiData<LikedPayload>(
+  const { data, loading, error, retry } = useApiData<LikedPayload>(
     withAccountScope(user ? "/api/liked" : "/api/likes", user?.id ?? status),
     {
       songs: [],
@@ -81,7 +81,10 @@ export default function LikedPage() {
         {loading && songs.length === 0 ? (
           <SongGridSkeleton />
         ) : error ? (
-          <div className="text-red-500">{error}</div>
+          <div>
+            <p className="text-red-300">{error}</p>
+            <button type="button" onClick={retry} className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black">Try again</button>
+          </div>
         ) : songs.length === 0 ? (
           <div className="opacity-70">You haven&apos;t liked any songs yet.</div>
         ) : (

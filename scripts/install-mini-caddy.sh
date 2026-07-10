@@ -195,6 +195,14 @@ http://{domain} {{
 
 https://{domain} {{
 \tencode zstd gzip
+\theader {{
+\t\tContent-Security-Policy "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+\t\tPermissions-Policy "camera=(), microphone=(), geolocation=()"
+\t\tReferrer-Policy "strict-origin-when-cross-origin"
+\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains"
+\t\tX-Content-Type-Options "nosniff"
+\t\tX-Frame-Options "DENY"
+\t}}
 
 \t@trusted_spotify_proxy {{
 \t\tpath /api/*
