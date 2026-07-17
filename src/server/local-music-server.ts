@@ -1259,6 +1259,56 @@ function songsForRequest(songs: PlayerSong[], request: Request): PlayerSong[] {
   return songs.map((song) => songForRequest(song, request));
 }
 
+type MediaRefreshItem = Pick<PlayerSong, "id" | "imageUrl" | "audioUrl" | "lyricsUrl">;
+const MAX_MEDIA_REFRESH_ITEMS = 40;
+const MAX_MEDIA_REFRESH_VALUE_LENGTH = 16_384;
+
+function normalizeMediaRefreshItem(value: unknown): MediaRefreshItem | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  const id = typeof item.id === "string" ? item.id.trim() : "";
+  const imageUrl = typeof item.imageUrl === "string" ? item.imageUrl.trim() : "";
+  const audioUrl = typeof item.audioUrl === "string" ? item.audioUrl.trim() : "";
+  const lyricsUrl = typeof item.lyricsUrl === "string" ? item.lyricsUrl.trim() : "";
+  if (!id || !imageUrl || !audioUrl) return null;
+  if (
+    id.length > 512 ||
+    imageUrl.length > MAX_MEDIA_REFRESH_VALUE_LENGTH ||
+    audioUrl.length > MAX_MEDIA_REFRESH_VALUE_LENGTH ||
+    lyricsUrl.length > MAX_MEDIA_REFRESH_VALUE_LENGTH
+  ) {
+    return null;
+  }
+  return { id, imageUrl, audioUrl, lyricsUrl: lyricsUrl || undefined };
+}
+
+async function handleMediaRefresh(request: Request): Promise<Response> {
+  const identity = currentUserIdentityForRequest(request);
+  if (!identity) return json({ error: "Unauthorized" }, { status: 401 });
+  const payload = await readJsonBody<{ songs?: unknown }>(request);
+  if (!Array.isArray(payload?.songs)) {
+    return json({ error: "Songs are required" }, { status: 400 });
+  }
+  if (payload.songs.length > MAX_MEDIA_REFRESH_ITEMS) {
+    return json({ error: `Maximum ${MAX_MEDIA_REFRESH_ITEMS} songs` }, { status: 413 });
+  }
+  const songs = payload.songs.map(normalizeMediaRefreshItem);
+  if (songs.some((song) => song === null)) {
+    return json({ error: "Invalid song media" }, { status: 400 });
+  }
+  return json(
+    {
+      songs: (songs as MediaRefreshItem[]).map((song) => ({
+        ...song,
+        imageUrl: appendMediaSignature(song.imageUrl, identity) || song.imageUrl,
+        audioUrl: appendMediaSignature(song.audioUrl, identity) || song.audioUrl,
+        lyricsUrl: appendMediaSignature(song.lyricsUrl, identity),
+      })),
+    },
+    { headers: { "cache-control": "no-store" } },
+  );
+}
+
 function hasValidMediaSignature(url: URL): boolean {
   if (!proxyToken) return false;
   const userId = url.searchParams.get(MEDIA_USER_SEARCH_PARAM)?.trim() || "";
@@ -3476,6 +3526,10 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
       songsCount: snapshot.songs.length,
       scannedAt: new Date(snapshot.scannedAt).toISOString(),
     }, { cacheControl: "private, max-age=15, stale-while-revalidate=120" });
+  }
+
+  if (pathname === "/api/media/refresh" && request.method === "POST") {
+    return handleMediaRefresh(request);
   }
 
   if (pathname === "/api/home" && request.method === "GET") {

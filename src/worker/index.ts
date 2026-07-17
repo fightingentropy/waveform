@@ -2824,8 +2824,13 @@ function authorizeMacMiniMutation(c: Context<AppEnv>, user: AuthUser | null): Re
   return null;
 }
 
-async function postJsonToMacMini(c: Context<AppEnv>, user: AuthUser, payload: Record<string, unknown>): Promise<Response> {
-  const targetUrl = new URL("/api/songs", getMacMiniOrigin(c.env));
+async function postJsonToMacMini(
+  c: Context<AppEnv>,
+  user: AuthUser,
+  payload: Record<string, unknown>,
+  path = "/api/songs",
+): Promise<Response> {
+  const targetUrl = new URL(path, getMacMiniOrigin(c.env));
   const headers = new Headers({
     accept: "application/json",
     "content-type": "application/json",
@@ -4193,6 +4198,78 @@ export function playEventSongHasDeviceLocalUrl(song: Pick<PlayerSong, "audioUrl"
   return [song.audioUrl, song.imageUrl, song.lyricsUrl].some((value) => !!value && isDeviceLocalMediaUrl(value));
 }
 
+type PlayEventMediaUrls = Pick<PlayerSong, "id" | "imageUrl" | "audioUrl" | "lyricsUrl">;
+
+export function mergeRefreshedPlayEventMediaUrls(
+  songs: PlayerSong[],
+  refreshed: PlayEventMediaUrls[],
+): PlayerSong[] {
+  const mediaById = new Map(refreshed.map((song) => [song.id, song] as const));
+  return songs.map((song) => {
+    const media = mediaById.get(song.id);
+    if (!media) return song;
+    return {
+      ...song,
+      imageUrl: media.imageUrl || song.imageUrl,
+      audioUrl: media.audioUrl || song.audioUrl,
+      lyricsUrl: media.lyricsUrl || undefined,
+    };
+  });
+}
+
+async function refreshPlayEventMediaUrls(
+  c: Context<AppEnv>,
+  user: AuthUser,
+  songs: PlayerSong[],
+): Promise<PlayerSong[]> {
+  if (songs.length === 0 || !canUseMacMiniProxy(c.env)) return songs;
+
+  const uniqueMedia = Array.from(
+    new Map(
+      songs.map((song) => [
+        song.id,
+        {
+          id: song.id,
+          imageUrl: song.imageUrl,
+          audioUrl: song.audioUrl,
+          lyricsUrl: song.lyricsUrl,
+        } satisfies PlayEventMediaUrls,
+      ]),
+    ).values(),
+  );
+
+  try {
+    const response = await postJsonToMacMini(
+      c,
+      user,
+      { songs: uniqueMedia },
+      "/api/media/refresh",
+    );
+    if (!response.ok) return songs;
+    const payload = (await response.json()) as { songs?: unknown };
+    if (!Array.isArray(payload.songs)) return songs;
+    const refreshed = (payload.songs as unknown[])
+      .map((value) => {
+        const item = toObject(value);
+        if (!item) return null;
+        const id = toStringValue(item.id);
+        const imageUrl = toStringValue(item.imageUrl);
+        const audioUrl = toStringValue(item.audioUrl);
+        const lyricsUrl = toStringValue(item.lyricsUrl);
+        if (!id || !imageUrl || !audioUrl) return null;
+        const media: PlayEventMediaUrls = { id, imageUrl, audioUrl };
+        if (lyricsUrl) media.lyricsUrl = lyricsUrl;
+        return media;
+      })
+      .filter((item): item is PlayEventMediaUrls => item !== null);
+    return mergeRefreshedPlayEventMediaUrls(songs, refreshed);
+  } catch {
+    // Listening history should remain available when the mini is temporarily
+    // unreachable. CoverImage will use its normal placeholder for stale URLs.
+    return songs;
+  }
+}
+
 app.post("/api/play-events", async (c) => {
   const user = requireUser(c.get("user"));
   // The local-dev pseudo-user has no User row, so the FK insert would fail.
@@ -4246,15 +4323,25 @@ app.get("/api/stats/home", async (c) => {
     LIMIT 20
   `;
 
-  const recentlyPlayed = recentRows
+  const parsedRecentlyPlayed = recentRows
     .map((row) => parsePlayEventSongJson(row.songJson))
     .filter((song): song is PlayerSong => song !== null);
-  const mostPlayed = topRows
+  const parsedMostPlayed = topRows
     .map((row) => {
       const song = parsePlayEventSongJson(row.songJson);
       return song ? { song, playCount: Number(row.playCount) || 0 } : null;
     })
     .filter((item): item is { song: PlayerSong; playCount: number } => item !== null);
+  const refreshedSongs = await refreshPlayEventMediaUrls(c, user, [
+    ...parsedRecentlyPlayed,
+    ...parsedMostPlayed.map((item) => item.song),
+  ]);
+  const refreshedById = new Map(refreshedSongs.map((song) => [song.id, song] as const));
+  const recentlyPlayed = parsedRecentlyPlayed.map((song) => refreshedById.get(song.id) ?? song);
+  const mostPlayed = parsedMostPlayed.map((item) => ({
+    ...item,
+    song: refreshedById.get(item.song.id) ?? item.song,
+  }));
   return jsonCached(c, { recentlyPlayed, mostPlayed });
 });
 

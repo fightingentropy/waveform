@@ -209,7 +209,11 @@ Requires authed user (401). The local pseudo-user returns empty.
 Response: `{ "recentlyPlayed": PlayerSong[], "mostPlayed": { "song": PlayerSong, "playCount": number }[] }`.
 `recentlyPlayed` = up to 20 distinct songs by most-recent PlayEvent; `mostPlayed`
 = up to 20 by play count desc. Songs are reconstructed from the JSON snapshot
-stored on each play-event (NOT a Song FK).
+stored on each play-event (NOT a Song FK). Before responding, the Worker sends
+the combined media fields (maximum 40 songs) to the Mac mini's internal
+`POST /api/media/refresh` endpoint so local artwork/audio/lyrics URLs receive
+fresh 24-hour signatures. If the mini is unavailable, history still returns
+with its stored URLs and the client falls back normally.
 
 ### `GET /api/search-index`
 **Cache:** `private, max-age=300, swr=600` + ETag.
