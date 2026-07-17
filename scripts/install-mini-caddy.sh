@@ -11,7 +11,7 @@ SPOTIFY_WORKER_HOST="${SPOTIFY_WORKER_HOST:-spotify.erlinhoxha.workers.dev}"
 SPOTIFY_UPSTREAM="${SPOTIFY_UPSTREAM:-127.0.0.1:5174}"
 CADDYFILE="${CADDYFILE:-/Users/hermes/.config/caddy/Caddyfile}"
 CADDY_BIN="${CADDY_BIN:-/usr/local/bin/caddy}"
-CADDY_SERVICE_LABEL="${CADDY_SERVICE_LABEL:-xyz.streamarena.caddy}"
+CADDY_SERVICE_LABEL="${CADDY_SERVICE_LABEL:-}"
 
 usage() {
   cat <<'USAGE'
@@ -31,7 +31,8 @@ Environment:
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
   CADDYFILE              Default: /Users/hermes/.config/caddy/Caddyfile
   CADDY_BIN              Default: /usr/local/bin/caddy
-  CADDY_SERVICE_LABEL    Default: xyz.streamarena.caddy
+  CADDY_SERVICE_LABEL    Optional explicit launchd label. Otherwise the script
+                         detects the installed current or legacy shared service.
 
 The script reads SPOTIFY_PROXY_TOKEN from /Users/hermes/.config/spotify/env on
 the Mac mini and injects it only into the remote Caddyfile.
@@ -94,6 +95,22 @@ proxy_token="$(
 
 if [[ -z "$proxy_token" ]]; then
   echo "SPOTIFY_PROXY_TOKEN is empty in $env_file" >&2
+  exit 1
+fi
+
+if [[ -z "$CADDY_SERVICE_LABEL" ]]; then
+  for candidate in xyz.streamarena.caddy com.fightingentropy.streamarena-caddy; do
+    if sudo launchctl print "system/$candidate" >/dev/null 2>&1; then
+      CADDY_SERVICE_LABEL="$candidate"
+      break
+    fi
+  done
+  CADDY_SERVICE_LABEL="${CADDY_SERVICE_LABEL:-xyz.streamarena.caddy}"
+fi
+
+service_plist="/Library/LaunchDaemons/$CADDY_SERVICE_LABEL.plist"
+if ! sudo launchctl print "system/$CADDY_SERVICE_LABEL" >/dev/null 2>&1 && [[ ! -f "$service_plist" ]]; then
+  echo "Missing Caddy launchd service $CADDY_SERVICE_LABEL (and $service_plist)" >&2
   exit 1
 fi
 
@@ -269,14 +286,15 @@ sudo cp "$CADDYFILE" "$backup"
 sudo install -m 600 "$tmp" "$CADDYFILE"
 rm -f "$tmp"
 
-sudo launchctl kickstart -k "system/$CADDY_SERVICE_LABEL" 2>/dev/null || {
-  plist="/Library/LaunchDaemons/$CADDY_SERVICE_LABEL.plist"
-  sudo launchctl bootout system "$plist" 2>/dev/null || true
-  sudo launchctl bootstrap system "$plist"
+if sudo launchctl print "system/$CADDY_SERVICE_LABEL" >/dev/null 2>&1; then
   sudo launchctl kickstart -k "system/$CADDY_SERVICE_LABEL"
-}
+else
+  sudo launchctl bootstrap system "$service_plist"
+  sudo launchctl kickstart -k "system/$CADDY_SERVICE_LABEL"
+fi
 
 printf 'caddyfile=%s\n' "$CADDYFILE"
 printf 'backup=%s\n' "$backup"
+printf 'service_label=%s\n' "$CADDY_SERVICE_LABEL"
 sudo launchctl print "system/$CADDY_SERVICE_LABEL" 2>/dev/null | awk '/state =|pid =|last exit code =|path =/ {print}'
 REMOTE

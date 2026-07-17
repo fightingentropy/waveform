@@ -10,6 +10,7 @@ REMOTE_APP="${REMOTE_APP:-/Users/hermes/Developer/spotify}"
 PORT="${PORT:-5174}"
 REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
 SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-app}"
+PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-https://music.streamarena.xyz}"
 
 SSH_OPTS=(
   -i "$SSH_KEY"
@@ -109,5 +110,16 @@ if [[ "$lan_ip" != "missing" && -n "$lan_ip" ]]; then
 else
   bad "mini LAN IP could not be resolved"
 fi
+
+# This deliberately traverses the public DNS, TLS, Caddy, and Worker route. The
+# local service can be perfectly healthy while a missing Caddy hostname leaves
+# the iPhone unable to load playlists or stream anything not already downloaded.
+public_session_status="$(
+  curl -sS -o /dev/null -w "%{http_code}" --max-time 15 \
+    "${PUBLIC_ORIGIN%/}/api/auth/session" || true
+)"
+[[ "$public_session_status" == "200" ]] \
+  && pass "public HTTPS session route returns HTTP 200" \
+  || bad "public HTTPS session route returned HTTP ${public_session_status:-000}"
 
 exit "$fail"

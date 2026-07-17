@@ -58,7 +58,8 @@ media path.
 - Keep the Mac mini music server launchd service running:
   - `xyz.streamarena.spotify-app`
 - Keep the shared Caddy launchd service running:
-  - `xyz.streamarena.caddy`
+  - `xyz.streamarena.caddy` (the installer also detects the legacy
+    `com.fightingentropy.streamarena-caddy` label on existing machines)
 - Keep the DNS drift watcher launchd service running:
   - `xyz.streamarena.spotify-dns-watch`
 - Operational scripts try the Mac mini Tailscale SSH alias `m4mini-ts` first,
@@ -244,6 +245,8 @@ Expected behavior:
 
 - Direct Caddy app returns `200`.
 - Worker backend is reachable on `workers.dev`.
+- `mini:check` also traverses public DNS, TLS, Caddy, and the Worker session
+  route so a missing public hostname cannot be hidden by healthy loopback checks.
 - Audio range requests through Caddy return `206`.
 - Direct Mac mini API requests without the proxy token return `401` on public
   hostnames.
