@@ -1259,7 +1259,7 @@ function songsForRequest(songs: PlayerSong[], request: Request): PlayerSong[] {
   return songs.map((song) => songForRequest(song, request));
 }
 
-type MediaRefreshItem = Pick<PlayerSong, "id" | "imageUrl" | "audioUrl" | "lyricsUrl">;
+type MediaRefreshItem = Pick<PlayerSong, "id" | "title" | "artist" | "imageUrl" | "audioUrl" | "lyricsUrl">;
 const MAX_MEDIA_REFRESH_ITEMS = 40;
 const MAX_MEDIA_REFRESH_VALUE_LENGTH = 16_384;
 
@@ -1267,19 +1267,23 @@ function normalizeMediaRefreshItem(value: unknown): MediaRefreshItem | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
   const id = typeof item.id === "string" ? item.id.trim() : "";
+  const title = typeof item.title === "string" ? item.title.trim() : "";
+  const artist = typeof item.artist === "string" ? item.artist.trim() : "";
   const imageUrl = typeof item.imageUrl === "string" ? item.imageUrl.trim() : "";
   const audioUrl = typeof item.audioUrl === "string" ? item.audioUrl.trim() : "";
   const lyricsUrl = typeof item.lyricsUrl === "string" ? item.lyricsUrl.trim() : "";
-  if (!id || !imageUrl || !audioUrl) return null;
+  if (!id || !title || !artist || !imageUrl || !audioUrl) return null;
   if (
     id.length > 512 ||
+    title.length > 1_024 ||
+    artist.length > 1_024 ||
     imageUrl.length > MAX_MEDIA_REFRESH_VALUE_LENGTH ||
     audioUrl.length > MAX_MEDIA_REFRESH_VALUE_LENGTH ||
     lyricsUrl.length > MAX_MEDIA_REFRESH_VALUE_LENGTH
   ) {
     return null;
   }
-  return { id, imageUrl, audioUrl, lyricsUrl: lyricsUrl || undefined };
+  return { id, title, artist, imageUrl, audioUrl, lyricsUrl: lyricsUrl || undefined };
 }
 
 async function handleMediaRefresh(request: Request): Promise<Response> {
@@ -1296,14 +1300,29 @@ async function handleMediaRefresh(request: Request): Promise<Response> {
   if (songs.some((song) => song === null)) {
     return json({ error: "Invalid song media" }, { status: 400 });
   }
+  const source = librarySourceForIdentity(identity);
+  const snapshot = source ? await getLibrary(source) : null;
+  const currentByTrack = new Map(
+    (snapshot?.songs ?? []).map((song) => [trackKey(song.title, song.artist), song] as const),
+  );
   return json(
     {
-      songs: (songs as MediaRefreshItem[]).map((song) => ({
-        ...song,
-        imageUrl: appendMediaSignature(song.imageUrl, identity) || song.imageUrl,
-        audioUrl: appendMediaSignature(song.audioUrl, identity) || song.audioUrl,
-        lyricsUrl: appendMediaSignature(song.lyricsUrl, identity),
-      })),
+      songs: (songs as MediaRefreshItem[]).map((song) => {
+        // Discover staging is intentionally temporary. Once its cache entry is
+        // pruned, listening history may still point at the dead .discover path.
+        // Prefer the promoted/current library copy when the same track exists.
+        const stagedMedia = song.imageUrl.includes("/.discover/") || song.audioUrl.includes("/.discover/");
+        const currentSong = stagedMedia
+          ? snapshot?.entriesById.get(song.id)?.song ?? currentByTrack.get(trackKey(song.title, song.artist))
+          : null;
+        const media = currentSong ?? song;
+        return {
+          id: song.id,
+          imageUrl: appendMediaSignature(media.imageUrl, identity) || media.imageUrl,
+          audioUrl: appendMediaSignature(media.audioUrl, identity) || media.audioUrl,
+          lyricsUrl: appendMediaSignature(media.lyricsUrl, identity),
+        };
+      }),
     },
     { headers: { "cache-control": "no-store" } },
   );

@@ -4199,6 +4199,7 @@ export function playEventSongHasDeviceLocalUrl(song: Pick<PlayerSong, "audioUrl"
 }
 
 type PlayEventMediaUrls = Pick<PlayerSong, "id" | "imageUrl" | "audioUrl" | "lyricsUrl">;
+type PlayEventMediaRefreshItem = PlayEventMediaUrls & Pick<PlayerSong, "title" | "artist">;
 
 export function mergeRefreshedPlayEventMediaUrls(
   songs: PlayerSong[],
@@ -4230,10 +4231,12 @@ async function refreshPlayEventMediaUrls(
         song.id,
         {
           id: song.id,
+          title: song.title,
+          artist: song.artist,
           imageUrl: song.imageUrl,
           audioUrl: song.audioUrl,
           lyricsUrl: song.lyricsUrl,
-        } satisfies PlayEventMediaUrls,
+        } satisfies PlayEventMediaRefreshItem,
       ]),
     ).values(),
   );

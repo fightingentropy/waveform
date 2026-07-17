@@ -212,8 +212,10 @@ Response: `{ "recentlyPlayed": PlayerSong[], "mostPlayed": { "song": PlayerSong,
 stored on each play-event (NOT a Song FK). Before responding, the Worker sends
 the combined media fields (maximum 40 songs) to the Mac mini's internal
 `POST /api/media/refresh` endpoint so local artwork/audio/lyrics URLs receive
-fresh 24-hour signatures. If the mini is unavailable, history still returns
-with its stored URLs and the client falls back normally.
+fresh 24-hour signatures. Pruned `.discover` paths are resolved to a matching
+current library copy by id or exact normalized title/artist. If the mini is
+unavailable, history still returns with its stored URLs and the client falls
+back normally.
 
 ### `GET /api/search-index`
 **Cache:** `private, max-age=300, swr=600` + ETag.
