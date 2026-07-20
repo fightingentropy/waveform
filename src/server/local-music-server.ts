@@ -26,6 +26,7 @@ import {
   materializeLicensedSourceStream,
   type LicensedSourceStream,
 } from "../lib/licensed-source-download";
+import { maybeDecryptDeezerBuffer, resolveDeezerDecryptionId } from "../lib/deezer-decrypt";
 import {
   RemoteUrlError,
   fetchPublicHttpUrl,
@@ -2114,15 +2115,49 @@ async function materializeDashStreamToFlac(
   }
 }
 
+async function materializeDeezerStream(
+  stream: LicensedSourceStream,
+  userAgent?: string,
+): Promise<Response> {
+  const fallbackId =
+    stream.deezerId ||
+    Number(stream.metadata?.deezerId) ||
+    resolveDeezerDecryptionId(stream.streamUrl, 0);
+  const response = await materializeLicensedSourceStream(stream, {
+    maxBytes: MAX_AUDIO_BYTES,
+    userAgent,
+  });
+  if (!response.ok) return response;
+  const encrypted = Buffer.from(await response.arrayBuffer());
+  const decrypted = maybeDecryptDeezerBuffer(encrypted, stream.streamUrl, fallbackId);
+  return new Response(new Uint8Array(decrypted), {
+    headers: {
+      "content-type": "audio/flac",
+      "content-length": String(decrypted.byteLength),
+    },
+  });
+}
+
+function isDeezerLicensedStream(stream: LicensedSourceStream): boolean {
+  if (stream.deezerId || Number(stream.metadata?.deezerId) > 0) return true;
+  try {
+    const host = new URL(stream.streamUrl).hostname.toLowerCase();
+    return host.includes("dzcdn.net") || host.includes("deezer.com");
+  } catch {
+    return false;
+  }
+}
+
 // Pick the right materialization strategy for a licensed stream (encrypted MP4,
-// DASH→FLAC remux, or a plain licensed URL). Shared by the on-demand
-// /api/licensed-source/materialize endpoint and the Discover staging downloader.
+// DASH→FLAC remux, Deezer BF-CBC, or a plain licensed URL). Shared by the
+// on-demand /api/licensed-source/materialize endpoint and Discover staging.
 async function materializeLicensedStreamToResponse(
   stream: LicensedSourceStream,
   userAgent?: string,
 ): Promise<Response> {
   if (stream.decryptionKey) return materializeEncryptedLicensedSourceStream(stream, userAgent);
   if (stream.kind === "dash") return materializeDashStreamToFlac(stream, userAgent);
+  if (isDeezerLicensedStream(stream)) return materializeDeezerStream(stream, userAgent);
   return materializeLicensedSourceStream(stream, { maxBytes: MAX_AUDIO_BYTES, userAgent });
 }
 

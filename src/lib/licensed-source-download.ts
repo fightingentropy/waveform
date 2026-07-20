@@ -1,5 +1,6 @@
 import { toObject, toStringValue } from "./provider-http";
 import { fetchPublicHttpUrl } from "./safe-fetch";
+import { isSpotByeEnvelopeHost, postSpotByeEnvelope } from "./spotbye-envelope";
 
 // NOTE: this provider's DEFAULT_USER_AGENT and fetchWithTimeout deliberately
 // diverge from the shared provider-http helpers: it advertises the app's own
@@ -35,6 +36,8 @@ export type LicensedSourceStream = {
   headers: Record<string, string>;
   contentType: string;
   decryptionKey?: string;
+  /** Deezer track id for BF-CBC stripe decrypt on the Mac mini. */
+  deezerId?: number;
   codec?: string;
   outputFormat?: string;
   metadata: JsonObject;
@@ -300,30 +303,56 @@ export async function resolveLicensedSourceStreamUrl(options: {
     throw new LicensedSourceDownloadError("Licensed source provider is not configured", 501);
   }
 
-  const headers = new Headers({
-    accept: "application/json, text/plain, */*",
-    "content-type": "application/json",
-    "user-agent": options.userAgent || DEFAULT_USER_AGENT,
-  });
-  if (options.apiKey) headers.set("authorization", `Bearer ${options.apiKey}`);
+  const requestBody = options.body ?? {
+    spotifyId: options.spotifyId,
+    spotifyUrl: options.spotifyUrl,
+    region: (options.region || "US").toUpperCase(),
+    title: options.title || "",
+    artist: options.artist || "",
+    album: options.album || "",
+    durationMs: options.durationMs || "",
+    qualityProfile: options.qualityProfile || "max",
+    outputFormat: options.outputFormat || "flac",
+  };
 
-  const response = await fetchWithTimeout(endpoint.toString(), {
-    method: "POST",
-    headers,
-    body: JSON.stringify(options.body ?? {
-      spotifyId: options.spotifyId,
-      spotifyUrl: options.spotifyUrl,
-      region: (options.region || "US").toUpperCase(),
-      title: options.title || "",
-      artist: options.artist || "",
-      album: options.album || "",
-      durationMs: options.durationMs || "",
-      qualityProfile: options.qualityProfile || "max",
-      outputFormat: options.outputFormat || "flac",
-    }),
-  }, options.timeoutMs);
+  let responseOk = false;
+  let responseStatus = 0;
+  let text = "";
 
-  const text = await response.text();
+  // Lettered SpotBye Next hosts require the encrypted envelope; fall back to
+  // plain JSON for FOSS / legacy / custom endpoints.
+  if (isSpotByeEnvelopeHost(endpoint.toString())) {
+    try {
+      const enveloped = await postSpotByeEnvelope(endpoint.toString(), requestBody, {
+        userAgent: options.userAgent || DEFAULT_USER_AGENT,
+        timeoutMs: options.timeoutMs,
+      });
+      responseOk = enveloped.status >= 200 && enveloped.status < 300;
+      responseStatus = enveloped.status;
+      text = enveloped.text;
+    } catch {
+      // Fall through to plain JSON below.
+    }
+  }
+
+  if (!text) {
+    const headers = new Headers({
+      accept: "application/json, text/plain, */*",
+      "content-type": "application/json",
+      "user-agent": options.userAgent || DEFAULT_USER_AGENT,
+    });
+    if (options.apiKey) headers.set("authorization", `Bearer ${options.apiKey}`);
+
+    const response = await fetchWithTimeout(endpoint.toString(), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(requestBody),
+    }, options.timeoutMs);
+    responseOk = response.ok;
+    responseStatus = response.status;
+    text = await response.text();
+  }
+
   let payload: JsonObject = {};
   if (text.trim().startsWith("http://") || text.trim().startsWith("https://")) {
     payload = { streamUrl: text.trim() };
@@ -331,10 +360,10 @@ export async function resolveLicensedSourceStreamUrl(options: {
     try {
       payload = toObject(JSON.parse(text || "{}")) ?? {};
     } catch {
-      if (!response.ok) {
+      if (!responseOk) {
         throw new LicensedSourceDownloadError(
-          `Licensed source provider returned ${response.status}`,
-          response.status,
+          `Licensed source provider returned ${responseStatus}`,
+          responseStatus,
         );
       }
       throw new LicensedSourceDownloadError("Licensed source provider returned invalid JSON", 502);
@@ -345,10 +374,10 @@ export async function resolveLicensedSourceStreamUrl(options: {
   const data = readNestedObject(payload, "data") ?? {};
   const message = firstString(payload.error, payload.message, data.error, data.message);
 
-  if (!response.ok) {
+  if (!responseOk) {
     throw new LicensedSourceDownloadError(
-      message || `Licensed source provider returned ${response.status}`,
-      response.status,
+      message || `Licensed source provider returned ${responseStatus}`,
+      responseStatus,
     );
   }
 
@@ -407,10 +436,28 @@ export async function resolveLicensedSourceStreamUrl(options: {
     contentType.includes("dash") ||
     parsedStreamUrl.pathname.toLowerCase().endsWith(".mpd") ||
     firstString(data.manifestUrl, payload.mpdUri).startsWith("http");
-  const decryptionKey = firstString(payload.key, data.key, audio.key, stream.key, payload.decryptionKey, data.decryptionKey);
+  const keySpecs = (() => {
+    const raw = payload.key_specs ?? data.key_specs ?? audio.key_specs ?? stream.key_specs;
+    if (!Array.isArray(raw)) return [] as string[];
+    return raw.map((v) => toStringValue(v)).filter(Boolean);
+  })();
+  const decryptionKey =
+    firstString(payload.key, data.key, audio.key, stream.key, payload.decryptionKey, data.decryptionKey) ||
+    keySpecs[0] ||
+    "";
   const codec = firstString(payload.codec, data.codec, audio.codec, stream.codec, payload.format, data.format);
   const outputFormat = options.outputFormat || "";
   const metadata = providerMetadata(payload, data, audio, stream);
+  if (keySpecs.length) metadata.keySpecs = keySpecs;
+  // SpotBye Deezer bodies use { id, quality }; carry that id for BF-CBC decrypt.
+  const bodyId = Number(options.body?.id);
+  const deezerId =
+    /dzcdn\.net|deezer\.com/i.test(parsedStreamUrl.hostname) || /dzr-/i.test(endpoint.hostname)
+      ? Number.isFinite(bodyId) && bodyId > 0
+        ? bodyId
+        : Number(firstString(payload.id, data.id, metadata.deezerId)) || undefined
+      : undefined;
+  if (deezerId) metadata.deezerId = deezerId;
   let streamHeaders = {
     ...headersFromValue(payload.headers),
     ...headersFromValue(data.headers),
@@ -425,6 +472,7 @@ export async function resolveLicensedSourceStreamUrl(options: {
     headers: streamHeaders,
     contentType,
     ...(decryptionKey ? { decryptionKey } : {}),
+    ...(deezerId ? { deezerId } : {}),
     ...(codec ? { codec } : {}),
     ...(outputFormat ? { outputFormat } : {}),
     metadata,

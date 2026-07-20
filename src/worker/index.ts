@@ -53,6 +53,7 @@ import {
 import { fetchLastFmSimilarTracks } from "@/lib/recommendations";
 import { normalizeSongPart } from "@/lib/song-dedupe";
 import { resolveTidalTrackIdByIsrc } from "@/lib/tidal-isrc";
+import { lookupSoundcharts, soundchartsTokenFromEnv } from "@/lib/soundcharts";
 import { createStreamingMultipartBody, peekAndReplayStream } from "./streaming-multipart";
 
 type Variables = {
@@ -1210,6 +1211,74 @@ async function enrichTidalLink(songLinkPayload: Record<string, unknown>, region:
   songLinkPayload.linksByPlatform = links;
 }
 
+function injectPlatformLink(
+  songLinkPayload: Record<string, unknown>,
+  platform: string,
+  url: string,
+  entityUniqueId: string,
+): void {
+  if (getPlatformLink(songLinkPayload, platform)) return;
+  const links = toObject(songLinkPayload.linksByPlatform) ?? {};
+  links[platform] = { url, entityUniqueId };
+  songLinkPayload.linksByPlatform = links;
+}
+
+/** Fill missing Tidal/Qobuz/Amazon/Deezer IDs via Soundcharts (Next parity). */
+async function enrichSoundchartsLinks(
+  env: CloudflareEnv,
+  songLinkPayload: Record<string, unknown>,
+): Promise<void> {
+  if (!songLinkPayload || typeof songLinkPayload !== "object") return;
+  const token = soundchartsTokenFromEnv({
+    SOUNDCHARTS_TOKEN: envString(env, "SOUNDCHARTS_TOKEN"),
+    SOUNDCHARTS_COOKIES_JSON: envString(env, "SOUNDCHARTS_COOKIES_JSON"),
+  });
+  if (!token) return;
+  const missing =
+    !getPlatformLink(songLinkPayload, "tidal") ||
+    !getPlatformLink(songLinkPayload, "qobuz") ||
+    !getPlatformLink(songLinkPayload, "amazonMusic") ||
+    !getPlatformLink(songLinkPayload, "amazon") ||
+    !getPlatformLink(songLinkPayload, "deezer");
+  if (!missing) return;
+  const isrc = await resolveDeezerIsrc(songLinkPayload).catch(() => "");
+  if (!isrc) return;
+  const ids = await lookupSoundcharts(isrc, { token }).catch(() => null);
+  if (!ids) return;
+  if (ids.tidal) {
+    injectPlatformLink(
+      songLinkPayload,
+      "tidal",
+      `https://tidal.com/browse/track/${ids.tidal}`,
+      `TIDAL_SONG::${ids.tidal}`,
+    );
+  }
+  if (ids.qobuz) {
+    injectPlatformLink(
+      songLinkPayload,
+      "qobuz",
+      `https://open.qobuz.com/track/${ids.qobuz}`,
+      `QOBUZ_SONG::${ids.qobuz}`,
+    );
+  }
+  if (ids.deezer) {
+    injectPlatformLink(
+      songLinkPayload,
+      "deezer",
+      `https://www.deezer.com/track/${ids.deezer}`,
+      `DEEZER_SONG::${ids.deezer}`,
+    );
+  }
+  if (ids.amazon) {
+    injectPlatformLink(
+      songLinkPayload,
+      "amazonMusic",
+      `https://music.amazon.com/tracks/${ids.amazon}`,
+      `AMAZON_SONG::${ids.amazon}`,
+    );
+  }
+}
+
 function getPlatformLink(
   songLinkPayload: Record<string, unknown>,
   platform: string,
@@ -1578,6 +1647,20 @@ const DEFAULT_SPOTIFLAC_PROVIDER_ORDER: DownloadProviderService[] = [
 ];
 
 const DEFAULT_SPOTIFLAC_CONFIGURED_PROVIDER_URLS: Partial<Record<DownloadProviderService, string[]>> = {
+  tidal: [
+    "https://tdl-a.spotbye.qzz.io/api/dl",
+    "https://tdl-b.spotbye.qzz.io/api/dl",
+    "https://tdl-c.spotbye.qzz.io/api/dl",
+    "https://tdl-d.spotbye.qzz.io/api/dl",
+    "https://tdl-e.spotbye.qzz.io/api/dl",
+  ],
+  qobuz: [
+    "https://qbz-a.spotbye.qzz.io/api/dl",
+    "https://qbz-b.spotbye.qzz.io/api/dl",
+    "https://qbz-c.spotbye.qzz.io/api/dl",
+    "https://qbz-d.spotbye.qzz.io/api/dl",
+    "https://qbz-e.spotbye.qzz.io/api/dl",
+  ],
   amazon: [
     "https://amz-a.spotbye.qzz.io/api/dl",
     "https://amz-b.spotbye.qzz.io/api/dl",
@@ -2469,6 +2552,7 @@ async function resolveStreamUrl(env: CloudflareEnv, payload: SongPayload): Promi
     envString(env, "SPOTIFY_SP_DC"),
   ).catch(() => ({}));
   await enrichTidalLink(songLinkPayload, toStringValue(payload.region).toUpperCase());
+  await enrichSoundchartsLinks(env, songLinkPayload);
   const service = toStringValue(payload.service).toLowerCase();
   const qualities = qualityLists(payload);
 

@@ -18,6 +18,7 @@ import { PlayerSheets } from "@/components/player/PlayerSheets";
 import { TabBar } from "@/components/nav/TabBar";
 import { ProfileMenu } from "@/components/profile/ProfileMenu";
 import { initOfflineSync } from "@/store/offline";
+import { initImportQueue } from "@/lib/import-queue";
 import { colors } from "@/theme";
 
 void SplashScreen.preventAutoHideAsync();
@@ -111,6 +112,7 @@ export default function RootLayout() {
   // Replay the offline mutation outbox (likes/edits queued while offline) when the
   // app returns to the foreground; returns an AppState unsubscribe for cleanup.
   useEffect(() => initOfflineSync(), []);
+  useEffect(() => initImportQueue(), []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>

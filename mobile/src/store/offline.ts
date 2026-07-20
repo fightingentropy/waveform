@@ -60,10 +60,10 @@ export type OfflineDownloadRecord = {
 
 const OFFLINE_DIR = `${FileSystem.documentDirectory ?? ""}offline-media/`;
 
-// Whether the app is foregrounded. The download pump only runs while foreground
-// + online: a foreground URLSession download gets suspended on background anyway,
-// so we pause it (banking a resume blob) and must not let the pump immediately
-// re-launch it. Written by initOfflineSync's AppState handler (same module).
+// Whether the app is foregrounded. Written by initOfflineSync's AppState handler.
+// Downloads intentionally keep running in the background: createDownloadResumable
+// uses a native URLSession that iOS can continue while suspended (especially with
+// UIBackgroundModes audio). We only pause on connectivity loss, not on background.
 let isForeground = true;
 
 // --- Account scope -----------------------------------------------------------
@@ -327,11 +327,9 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         await FileSystem.makeDirectoryAsync(OFFLINE_DIR, { intermediates: true });
       } catch {}
       while (true) {
-        // Run only while foreground + online. Offline: every attempt would fail
-        // instantly and flip the row to "error". Background: a just-paused download
-        // would be re-launched straight into iOS suspension. Stop on either; the
-        // connectivity + AppState handlers re-kick the pump on recovery.
-        if (!getIsOnline() || !isForeground) break;
+        // Run while online (foreground or background). Offline: stop so we don't
+        // flip every row to "error"; connectivity handler re-kicks the pump.
+        if (!getIsOnline()) break;
         const queuedRecords = Object.values(get().records).filter(
           (record) => record.accountScope === accountScope && record.status === "queued",
         );
@@ -952,11 +950,10 @@ export function initOfflineSync(): () => void {
       // batch is a no-op that still kicks the serial pump for queued rows.
       void useOfflineStore.getState().queueDownloads([], "home");
     } else if (wentToBackground) {
-      // Mark background BEFORE pausing, so the pump's gate sees it and won't
-      // re-launch the download we're about to pause straight into suspension.
+      // Keep downloads running — createDownloadResumable's URLSession can continue
+      // while backgrounded (UIBackgroundModes includes audio). Pausing here used
+      // to make offline pins feel stuck until the user reopened the app.
       isForeground = false;
-      // Pause first so we keep a resume blob and continue from the partial on return.
-      void useOfflineStore.getState().pauseActiveDownload();
     }
   });
   // Connectivity edges, the case AppState can't see: toggling airplane mode while
