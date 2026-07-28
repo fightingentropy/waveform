@@ -1,12 +1,12 @@
 import { ActivityIndicator, Text, View } from "react-native";
 import { Pause, Play } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
+import { GlassSurface } from "@/components/ui/GlassSurface";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { colors } from "@/theme";
 
-// Home horizontal-scroller tile. Uses Spotify-green #1ed760 (play button + active
-// title) — NOT emerald — per the two-greens rule (§4). Play button is only shown
-// for the active tile; tapping anywhere on the tile plays/toggles it.
+// Artwork-forward Home tile. The card itself stays a lightweight translucent
+// material; native glass is reserved for the single active transport control.
 export function ScrollerTile({
   title,
   artist,
@@ -34,48 +34,78 @@ export function ScrollerTile({
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={active && isPlaying ? `Pause ${title}` : `Play ${title}`}
-      className="w-36 rounded-md p-3"
-      style={{ width: 152, backgroundColor: active ? "rgba(255,255,255,0.12)" : "transparent" }}
+      accessibilityState={{ selected: active }}
+      style={{ width: 164 }}
     >
       <View
-        className="relative overflow-hidden rounded-[5px]"
         style={{
           aspectRatio: 1,
+          overflow: "hidden",
+          borderRadius: 12,
+          borderCurve: "continuous",
           backgroundColor: colors.card,
-          shadowColor: "#000",
-          shadowOpacity: 0.35,
-          shadowRadius: 14,
-          shadowOffset: { width: 0, height: 10 },
+          borderWidth: active ? 1 : 0,
+          borderColor: "rgba(255,255,255,0.30)",
         }}
       >
-        <CoverImage src={imageUrl} networkSrc={networkImageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={imageUrl ?? title} />
+        <CoverImage
+          src={imageUrl}
+          networkSrc={networkImageUrl}
+          style={{ width: "100%", height: "100%" }}
+          recyclingKey={imageUrl ?? title}
+        />
         {loading ? (
           <View className="absolute inset-0 items-center justify-center" style={{ backgroundColor: "rgba(0,0,0,0.55)" }}>
             <ActivityIndicator color="#fff" />
           </View>
         ) : null}
         {active ? (
-          <View
-            className="absolute bottom-3 right-3 h-11 w-11 items-center justify-center rounded-full"
-            style={{ backgroundColor: colors.green }}
+          <GlassSurface
+            pointerEvents="none"
+            glassStyle="clear"
+            tintColor="rgba(6,8,12,0.42)"
+            fallbackColor="rgba(8,10,14,0.76)"
+            style={{
+              position: "absolute",
+              right: 10,
+              bottom: 10,
+              width: 42,
+              height: 42,
+              borderRadius: 21,
+              borderCurve: "continuous",
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+              borderWidth: 0.5,
+              borderColor: "rgba(255,255,255,0.26)",
+            }}
           >
             {isPlaying ? (
-              <Pause size={20} color="#000" fill="#000" />
+              <Pause size={20} color="#fff" fill="#fff" strokeWidth={0} />
             ) : (
-              <Play size={20} color="#000" fill="#000" style={{ marginLeft: 2 }} />
+              <Play size={20} color="#fff" fill="#fff" strokeWidth={0} style={{ marginLeft: 2 }} />
             )}
-          </View>
+          </GlassSurface>
         ) : null}
       </View>
-      <View className="mt-3">
-        <Text numberOfLines={1} className="text-[16px] font-medium leading-6" style={{ color: active ? colors.green : "#fff" }}>
+      <View style={{ minHeight: subtitle ? 65 : 48, paddingHorizontal: 1, paddingTop: 9 }}>
+        <Text
+          numberOfLines={1}
+          style={{
+            color: colors.foreground,
+            fontSize: 15.5,
+            fontWeight: "700",
+            lineHeight: 21,
+            letterSpacing: -0.15,
+          }}
+        >
           {title}
         </Text>
-        <Text numberOfLines={1} className="text-[14px] leading-5" style={{ color: "rgba(255,255,255,0.62)" }}>
+        <Text numberOfLines={1} style={{ marginTop: 1, color: "rgba(255,255,255,0.62)", fontSize: 13.5, lineHeight: 19 }}>
           {artist || "Unknown Artist"}
         </Text>
         {subtitle ? (
-          <Text numberOfLines={1} className="mt-0.5 text-[13px]" style={{ color: "rgba(255,255,255,0.46)" }}>
+          <Text numberOfLines={1} style={{ marginTop: 2, color: colors.dim, fontSize: 12.5, lineHeight: 17 }}>
             {subtitle}
           </Text>
         ) : null}

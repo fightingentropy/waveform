@@ -1,31 +1,37 @@
-// Design-system tokens for non-className contexts (icon colors, gradients, RNTP,
+// Design-system tokens for non-className contexts (icon colors, surfaces, RNTP,
 // reanimated). Mirror of tailwind.config.js + styles.css. See §4 of the port brief
 // and docs/port-notes/styles-design.md for provenance.
 
 export const colors = {
-  background: "#0a0a0a",
-  surface: "#121212",
-  foreground: "#ededed",
-  muted: "#b3b3b3",
-  dim: "rgba(255,255,255,0.46)",
-  // Two greens by surface: Spotify-green (Home scrollers) vs emerald (grid/transport).
-  green: "#1ed760",
-  emerald: "#10b981", // rgb(16,185,129)
-  emeraldDarkCheck: "#04140d",
-  card: "rgba(255,255,255,0.08)",
-  cardHover: "rgba(255,255,255,0.09)",
-  cardActive: "rgba(255,255,255,0.12)",
-  line: "rgba(255,255,255,0.10)",
-  iconIdle: "rgba(255,255,255,0.70)",
-  backdrop: "rgba(0,0,0,0.60)",
-  skeletonBase: "rgba(255,255,255,0.08)",
-  skeletonShimmer: "rgba(255,255,255,0.13)",
+  background: "#000000",
+  surface: "#0c0c0d",
+  foreground: "#f2f2f2",
+  muted: "rgba(255,255,255,0.60)",
+  dim: "rgba(255,255,255,0.40)",
+  // Legacy aliases stay for behavior compatibility, but selection is now
+  // monochrome. Artwork is the only non-semantic source of colour.
+  green: "#f2f2f2",
+  emerald: "#f2f2f2",
+  emeraldDarkCheck: "#050505",
+  card: "rgba(255,255,255,0.045)",
+  cardHover: "rgba(255,255,255,0.065)",
+  cardActive: "rgba(255,255,255,0.09)",
+  glass: "rgba(14,14,15,0.70)",
+  glassStrong: "rgba(10,10,11,0.92)",
+  line: "rgba(255,255,255,0.08)",
+  hairline: "rgba(255,255,255,0.12)",
+  iconIdle: "rgba(255,255,255,0.52)",
+  backdrop: "rgba(0,0,0,0.76)",
+  skeletonBase: "rgba(255,255,255,0.055)",
+  skeletonShimmer: "rgba(255,255,255,0.09)",
   white: "#ffffff",
 } as const;
 
 export const layout = {
-  mobileNavHeight: 52, // bottom tab bar
-  mobilePlayerHeight: 68, // mini player
+  mobileNavHeight: 58,
+  mobilePlayerHeight: 66,
+  floatingInset: 10,
+  floatingGap: 8,
   cardWidthSm: 144, // w-36
   cardWidthMd: 160, // w-40 (>=sm)
   listRowMinHeight: 64,

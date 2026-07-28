@@ -2,9 +2,20 @@ import { create } from "zustand";
 import { markPlaybackEngaged } from "@/audio/publish-gate";
 import { getIsOnline } from "@/lib/connectivity";
 import { songKind } from "@/lib/player-song";
+import {
+  appendQueuePage,
+  insertIntoShuffleRemaining,
+  mergeOrderedQueuePage,
+  remapOrderedQueueIndices,
+  wouldDuplicateSongInQueue,
+} from "@/lib/queue-append";
 import { storage } from "@/lib/storage";
 import { useOfflineStore } from "@/store/offline";
-import { rewindHistory } from "@/store/player-nav";
+import {
+  findPlayableQueueIndex,
+  resolveInitialQueueIndex,
+  rewindHistory,
+} from "@/store/player-nav";
 import type { PlayerSong } from "@/types/player";
 
 export type { PlayerSong } from "@/types/player";
@@ -34,6 +45,9 @@ type PlayerState = {
   // per-queue state must reset — from an in-place swap, deterministically and
   // without fingerprint heuristics.
   queueToken: number;
+  // Bumped only by background catalog-page appends. Audio subscriptions use it
+  // to defer the otherwise-immediate full queue snapshot until hydration ends.
+  queueAppendToken: number;
   isPlaying: boolean;
   volume: number; // 0..1
   isMuted: boolean;
@@ -55,6 +69,12 @@ type PlayerState = {
   // survives. Treated immutably: every mutation creates a fresh Set so
   // subscribers re-render.
   recommendedIds: Set<string>;
+  // In-memory roles for explicit queue edits made while a provider playlist is
+  // still hydrating. Play Next rows stay anchored near their insertion point;
+  // Add to Queue rows start an opaque tail block. Both sets are remapped with
+  // every queue splice, just like history/future/shuffle indices.
+  manualNextIndices: Set<number>;
+  manualTailIndices: Set<number>;
   // The collection the current queue was started from, carried so the rec
   // top-up + Add/Skip actions know where to add a kept track. IN-MEMORY ONLY
   // (not persisted). Set from SetQueueOptions.contextMeta in setQueue.
@@ -71,6 +91,17 @@ type PlayerState = {
   // copy instead of the .discover staging URL. Pure data swap — no reload.
   replaceStagedSong: (oldId: string, song: PlayerSong) => void;
   addToQueue: (song: PlayerSong) => void;
+  // Append a fetched page without rebuilding or restarting the active queue.
+  // expectedContextKey makes background playlist hydration a no-op if the user
+  // has already started something else.
+  appendToQueue: (
+    songs: PlayerSong[],
+    expectedContextKey?: string,
+    order?: {
+      compare: (a: PlayerSong, b: PlayerSong) => number;
+      incomingBeforeEqual?: boolean;
+    },
+  ) => void;
   playNext: (song: PlayerSong) => void;
   removeFromQueue: (index: number) => void;
   play: () => void;
@@ -277,21 +308,6 @@ function clampQueueIndex(queueLength: number, index: number): number {
   return Math.max(0, Math.min(queueLength - 1, index));
 }
 
-function randomQueueIndex(queueLength: number, currentIndex: number): number {
-  if (queueLength <= 0) return -1;
-  if (queueLength <= 1) return 0;
-  let index = currentIndex;
-  while (index === currentIndex) {
-    index = Math.floor(Math.random() * queueLength);
-  }
-  return index;
-}
-
-function resolveQueueStartIndex(queueLength: number, startIndex: number, useShuffleStart: boolean): number {
-  if (queueLength <= 0) return -1;
-  return useShuffleStart ? randomQueueIndex(queueLength, -1) : clampQueueIndex(queueLength, startIndex);
-}
-
 function createShuffleRemaining(queueLength: number, currentIndex: number): number[] {
   if (queueLength <= 1) return [];
   const current = clampQueueIndex(queueLength, currentIndex);
@@ -447,6 +463,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   shuffleRemaining: [],
   queueContextKey: null,
   queueToken: 0,
+  queueAppendToken: 0,
   isPlaying: false,
   volume: readStoredVolume(),
   isMuted: readStoredMuted(),
@@ -457,6 +474,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playbackRate: readStoredPlaybackRate(),
   smartShuffleEnabled: readStoredSmartShuffle(),
   recommendedIds: new Set<string>(),
+  manualNextIndices: new Set<number>(),
+  manualTailIndices: new Set<number>(),
   queueContext: null,
   sleepTimerEndsAt: null,
   sleepAtEndOfTrack: false,
@@ -469,10 +488,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const anchorIndex = clampQueueIndex(songs.length, startIndex);
     const anchor = anchorIndex >= 0 ? songs[anchorIndex] ?? null : null;
     const queue = anchor ? songs.filter((item) => songKind(item) === songKind(anchor)) : songs;
+    const requestedStart = anchor
+      ? Math.max(0, queue.findIndex((item) => item.id === anchor.id))
+      : -1;
     const start = anchor
-      ? options?.respectShuffle === true && get().shuffle
-        ? resolveQueueStartIndex(queue.length, 0, true)
-        : Math.max(0, queue.findIndex((item) => item.id === anchor.id))
+      ? resolveInitialQueueIndex(queue.length, requestedStart, {
+          respectShuffle: options?.respectShuffle === true,
+          shuffle: get().shuffle,
+          online: getIsOnline(),
+        })
       : -1;
     const currentSong = start >= 0 ? queue[start] ?? null : null;
     set(() => ({
@@ -486,6 +510,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       queueContext: currentSong != null ? (options?.contextMeta ?? null) : null,
       // A brand-new queue carries no recommendations yet.
       recommendedIds: new Set<string>(),
+      manualNextIndices: new Set<number>(),
+      manualTailIndices: new Set<number>(),
       queueToken: get().queueToken + 1,
       isPlaying: currentSong != null,
     }));
@@ -502,6 +528,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       queueContextKey: null,
       queueContext: null,
       recommendedIds: new Set<string>(),
+      manualNextIndices: new Set<number>(),
+      manualTailIndices: new Set<number>(),
       queueToken: get().queueToken + 1,
     }),
   advanceToIndex: (index, options) =>
@@ -534,33 +562,18 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }),
   skipToPlayable: (canPlay, direction = 1) => {
     const s = get();
-    const n = s.queue.length;
-    if (n === 0) return false;
-    let target: number | undefined;
-    if (s.shuffle) {
-      // Prefer not-yet-played picks so shuffle doesn't repeat itself; fall back
-      // to any playable index other than the current (failed) one.
-      const fresh = validShuffleRemaining(n, s.currentIndex, s.shuffleRemaining).filter(
-        (i) => i !== s.currentIndex && canPlay(s.queue[i]),
-      );
-      const pool =
-        fresh.length > 0
-          ? fresh
-          : s.queue.reduce<number[]>((acc, song, i) => {
-              if (i !== s.currentIndex && canPlay(song)) acc.push(i);
-              return acc;
-            }, []);
-      if (pool.length > 0) target = pool[0];
-    } else {
-      for (let step = 1; step < n; step++) {
-        const i = (((s.currentIndex + direction * step) % n) + n) % n;
-        if (canPlay(s.queue[i])) {
-          target = i;
-          break;
-        }
-      }
-    }
-    if (target === undefined) return false;
+    const target = findPlayableQueueIndex(
+      {
+        queueLength: s.queue.length,
+        currentIndex: s.currentIndex,
+        direction,
+        shuffle: s.shuffle,
+        repeatMode: s.repeatMode,
+        shuffleRemaining: s.shuffleRemaining,
+      },
+      (index) => canPlay(s.queue[index]),
+    );
+    if (target == null) return false;
     get().advanceToIndex(target);
     return true;
   },
@@ -606,6 +619,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }),
   addToQueue: (song) =>
     set((s) => {
+      if (wouldDuplicateSongInQueue(s.queue, song)) return s;
       const queue = [...s.queue, song];
       const appendedIndex = queue.length - 1;
       if (s.currentIndex < 0) {
@@ -614,11 +628,84 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           queue,
           currentIndex: 0,
           currentSong: queue[0],
+          manualNextIndices: new Set<number>(),
+          manualTailIndices: new Set<number>(),
         };
       }
       return {
         queue,
+        manualTailIndices: new Set([...s.manualTailIndices, appendedIndex]),
         shuffleRemaining: s.shuffle ? [...s.shuffleRemaining, appendedIndex] : s.shuffleRemaining,
+      };
+    }),
+  appendToQueue: (songs, expectedContextKey, order) =>
+    set((s) => {
+      if (expectedContextKey && s.queueContextKey !== expectedContextKey) return s;
+      const ordered = order
+        ? mergeOrderedQueuePage(
+            s.queue,
+            songs,
+            s.currentSong,
+            {
+              compare: order.compare,
+              incomingBeforeEqual: order.incomingBeforeEqual,
+              frozenPrefixEnd: s.currentIndex,
+              interleavedOldIndices: new Set(
+                s.queue.flatMap((song, index) =>
+                  s.recommendedIds.has(song.id) || s.manualNextIndices.has(index)
+                    ? [index]
+                    : [],
+                ),
+              ),
+              trailingOldIndices: s.manualTailIndices,
+            },
+          )
+        : null;
+      const appended = ordered ?? appendQueuePage(s.queue, songs, s.currentSong);
+      if (appended.addedIndices.length === 0) return s;
+      const { queue } = appended;
+      if (s.currentIndex < 0) {
+        return {
+          queue,
+          currentIndex: 0,
+          currentSong: queue[0],
+          manualNextIndices: new Set<number>(),
+          manualTailIndices: new Set<number>(),
+          queueAppendToken: s.queueAppendToken + 1,
+        };
+      }
+      const addedIndices = appended.addedIndices;
+      if (ordered) {
+        const currentIndex = ordered.oldIndexToNewIndex[s.currentIndex];
+        if (!Number.isInteger(currentIndex) || currentIndex < 0) return s;
+        const remappedShuffleRemaining = remapOrderedQueueIndices(
+          s.shuffleRemaining,
+          ordered.oldIndexToNewIndex,
+        );
+        return {
+          queue,
+          currentIndex,
+          currentSong: queue[currentIndex],
+          playHistory: remapOrderedQueueIndices(s.playHistory, ordered.oldIndexToNewIndex),
+          playFuture: remapOrderedQueueIndices(s.playFuture, ordered.oldIndexToNewIndex),
+          manualNextIndices: new Set(
+            remapOrderedQueueIndices([...s.manualNextIndices], ordered.oldIndexToNewIndex),
+          ),
+          manualTailIndices: new Set(
+            remapOrderedQueueIndices([...s.manualTailIndices], ordered.oldIndexToNewIndex),
+          ),
+          queueAppendToken: s.queueAppendToken + 1,
+          shuffleRemaining: s.shuffle
+            ? insertIntoShuffleRemaining(remappedShuffleRemaining, addedIndices)
+            : remappedShuffleRemaining,
+        };
+      }
+      return {
+        queue,
+        queueAppendToken: s.queueAppendToken + 1,
+        shuffleRemaining: s.shuffle
+          ? insertIntoShuffleRemaining(s.shuffleRemaining, addedIndices)
+          : s.shuffleRemaining,
       };
     }),
   playNext: (song) =>
@@ -629,11 +716,18 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           queue,
           currentIndex: 0,
           currentSong: queue[0],
+          manualNextIndices: new Set<number>(),
+          manualTailIndices: new Set<number>(),
         };
       }
       const insertAt = s.currentIndex + 1;
+      if (wouldDuplicateSongInQueue(s.queue, song)) return s;
       const queue = s.queue.slice();
       queue.splice(insertAt, 0, song);
+      const manualNextIndices = new Set(
+        remapQueueIndices([...s.manualNextIndices], insertAt, 1),
+      );
+      manualNextIndices.add(insertAt);
       return {
         queue,
         playHistory: remapQueueIndices(s.playHistory, insertAt, 1),
@@ -644,6 +738,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         playFuture: s.shuffle
           ? [...remapQueueIndices(s.playFuture, insertAt, 1), insertAt]
           : remapQueueIndices(s.playFuture, insertAt, 1),
+        manualNextIndices,
+        manualTailIndices: new Set(
+          remapQueueIndices([...s.manualTailIndices], insertAt, 1),
+        ),
         shuffleRemaining: remapQueueIndices(s.shuffleRemaining, insertAt, 1),
       };
     }),
@@ -666,6 +764,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         currentIndex: index < s.currentIndex ? s.currentIndex - 1 : s.currentIndex,
         playHistory: remapQueueIndices(s.playHistory, index, -1),
         playFuture: remapQueueIndices(s.playFuture, index, -1),
+        manualNextIndices: new Set(
+          remapQueueIndices([...s.manualNextIndices], index, -1),
+        ),
+        manualTailIndices: new Set(
+          remapQueueIndices([...s.manualTailIndices], index, -1),
+        ),
         shuffleRemaining: remapQueueIndices(s.shuffleRemaining, index, -1),
         recommendedIds,
       };
@@ -701,7 +805,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         return;
       }
     }
-    if (skipDownloadedOffline(1)) return;
+    if (!getIsOnline()) {
+      // Offline is a complete branch, not a hint before normal navigation. If no
+      // downloaded item remains, stop here; falling through used to select the
+      // very next remote-only row and leave the engine buffering a known-dead URL.
+      if (!skipDownloadedOffline(1)) get().pause();
+      return;
+    }
     set((s) => {
       if (s.queue.length === 0) return s.isPlaying ? { ...s, isPlaying: false } : s;
       if (s.shuffle) {
@@ -759,7 +869,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     // — there's no history stack in linear mode. Shuffle is handled below via
     // playHistory; routing it through the forward-biased skipToPlayable picker is
     // exactly the bug where offline "back" jumped to an unplayed track.
-    if (!get().shuffle && skipDownloadedOffline(-1)) return;
+    if (!get().shuffle && !getIsOnline()) {
+      // No downloaded predecessor means "previous" is a no-op, matching the
+      // online repeat-off boundary instead of wrapping to the queue tail.
+      skipDownloadedOffline(-1);
+      return;
+    }
     set((s) => {
       if (s.queue.length === 0) return s;
       if (s.shuffle) {
@@ -857,6 +972,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       let playHistory = s.playHistory;
       let playFuture = s.playFuture;
       let shuffleRemaining = s.shuffleRemaining;
+      let manualNextIndices = s.manualNextIndices;
+      let manualTailIndices = s.manualTailIndices;
       const recommendedIds = new Set(s.recommendedIds);
       // Ids already present in the queue (post-mutation aware) so we never splice
       // a duplicate; seeded from the current queue and grown as we insert.
@@ -887,6 +1004,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           queue.splice(insertAt, 0, rec);
           playHistory = remapQueueIndices(playHistory, insertAt, 1);
           shuffleRemaining = remapQueueIndices(shuffleRemaining, insertAt, 1);
+          manualNextIndices = new Set(
+            remapQueueIndices([...manualNextIndices], insertAt, 1),
+          );
+          manualTailIndices = new Set(
+            remapQueueIndices([...manualTailIndices], insertAt, 1),
+          );
           playFuture = s.shuffle
             ? [...remapQueueIndices(playFuture, insertAt, 1), insertAt]
             : remapQueueIndices(playFuture, insertAt, 1);
@@ -902,7 +1025,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         if (!isRec) nonRecSinceLast += 1;
         position += 1;
       }
-      return { queue, playHistory, playFuture, shuffleRemaining, recommendedIds };
+      return {
+        queue,
+        playHistory,
+        playFuture,
+        shuffleRemaining,
+        recommendedIds,
+        manualNextIndices,
+        manualTailIndices,
+      };
     }),
   removeUnplayedRecommendations: () =>
     set((s) => {
@@ -911,6 +1042,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       let playHistory = s.playHistory;
       let playFuture = s.playFuture;
       let shuffleRemaining = s.shuffleRemaining;
+      let manualNextIndices = s.manualNextIndices;
+      let manualTailIndices = s.manualTailIndices;
       const recommendedIds = new Set(s.recommendedIds);
       let changed = false;
       // Remove every rec strictly AHEAD of the current track, high index → low so
@@ -923,11 +1056,25 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         playHistory = remapQueueIndices(playHistory, index, -1);
         playFuture = remapQueueIndices(playFuture, index, -1);
         shuffleRemaining = remapQueueIndices(shuffleRemaining, index, -1);
+        manualNextIndices = new Set(
+          remapQueueIndices([...manualNextIndices], index, -1),
+        );
+        manualTailIndices = new Set(
+          remapQueueIndices([...manualTailIndices], index, -1),
+        );
         recommendedIds.delete(id);
         changed = true;
       }
       if (!changed) return s;
-      return { queue, playHistory, playFuture, shuffleRemaining, recommendedIds };
+      return {
+        queue,
+        playHistory,
+        playFuture,
+        shuffleRemaining,
+        recommendedIds,
+        manualNextIndices,
+        manualTailIndices,
+      };
     }),
   startSleepTimer: (minutes) =>
     set({ sleepTimerEndsAt: Date.now() + minutes * 60_000, sleepAtEndOfTrack: false }),

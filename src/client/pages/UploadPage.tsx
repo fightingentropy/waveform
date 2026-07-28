@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link } from "react-router";
 import { CheckCircle2, Download, Loader2, Pause, Play, XCircle } from "lucide-react";
 import { invalidateLibraryApiCache } from "@/client/api";
 import { useAuth } from "@/client/auth";

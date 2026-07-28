@@ -1,14 +1,75 @@
 import { Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Pause, Play } from "lucide-react-native";
+import { usePathname } from "expo-router";
+import { Heart, Pause, Play } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { MarqueeText } from "@/components/ui/MarqueeText";
-import { HeartButton } from "@/components/song/HeartButton";
-import { useArtworkColor } from "@/lib/useArtworkColor";
+import { GlassSurface } from "@/components/ui/GlassSurface";
+import { useSongLike } from "@/components/song/useSongLike";
+import { useAudioProgress } from "@/audio/progress";
+import { selectionAsync } from "@/lib/haptics";
 import { colors, layout } from "@/theme";
 import { usePlayerStore } from "@/store/player";
 import { useUiStore } from "@/store/ui";
+import type { PlayerSong } from "@/types/player";
+
+function MiniPlayerLikeButton({ song }: { song: PlayerSong }) {
+  const { liked, pending, canLike, toggle } = useSongLike(song);
+  if (!canLike) return null;
+
+  return (
+    <PressableScale
+      onPress={() => {
+        void selectionAsync();
+        toggle();
+      }}
+      disabled={pending}
+      accessibilityRole="button"
+      accessibilityState={{ selected: liked, disabled: pending }}
+      accessibilityLabel={liked ? `Remove ${song.title} from Liked Songs` : `Save ${song.title} to Liked Songs`}
+      style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}
+    >
+      <View style={{ opacity: pending ? 0.6 : 1 }}>
+        <Heart
+          size={22}
+          color={colors.foreground}
+          fill={liked ? colors.foreground : "transparent"}
+        />
+      </View>
+    </PressableScale>
+  );
+}
+
+// Keep the native playback clock's 4 Hz updates inside the two-pixel progress
+// strip. If MiniPlayer owns this subscription, every tick reconciles the glass
+// surface, artwork, marquee, heart, and transport even though none changed.
+function MiniPlayerProgress() {
+  const { position, duration } = useAudioProgress();
+  const progress = duration > 0 ? Math.max(0, Math.min(1, position / duration)) : 0;
+
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: 2,
+        backgroundColor: "rgba(255,255,255,0.12)",
+      }}
+    >
+      <View
+        style={{
+          width: `${progress * 100}%`,
+          height: "100%",
+          backgroundColor: "rgba(255,255,255,0.82)",
+        }}
+      />
+    </View>
+  );
+}
 
 // The persistent mini-player bar: cover + title/artist + heart + play/pause; tapping
 // it (anywhere but the controls) opens the Now Playing sheet. Mounted once at the
@@ -19,26 +80,41 @@ export function MiniPlayer() {
   const toggle = usePlayerStore((s) => s.toggle);
   const openNowPlaying = useUiStore((s) => s.openNowPlaying);
   const insets = useSafeAreaInsets();
-  // Spotify-style: tint the bar with a representative color from the cover — same
-  // source as the Now Playing background, so the two stay in sync.
-  const tint = useArtworkColor(song?.imageUrl ?? song?.networkImageUrl);
+  const pathname = usePathname();
 
-  if (!song) return null;
+  if (!song || pathname === "/signin" || pathname === "/register") return null;
 
   // The tab bar is mounted globally on every screen, so the bar always sits above it.
-  const bottom = layout.mobileNavHeight + insets.bottom;
+  const bottom =
+    insets.bottom +
+    layout.mobileNavHeight +
+    layout.floatingGap;
 
   return (
-    <View
-      className="flex-row items-center gap-3 px-3"
+    <GlassSurface
+      tintColor="rgba(12,14,18,0.60)"
+      fallbackColor="rgba(10,12,16,0.84)"
+      blurIntensity={44}
       style={{
         position: "absolute",
-        left: 0,
-        right: 0,
+        left: layout.floatingInset,
+        right: layout.floatingInset,
         bottom,
         height: layout.mobilePlayerHeight,
-        backgroundColor: tint ?? colors.surface,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        paddingHorizontal: 10,
+        borderRadius: 18,
+        borderCurve: "continuous",
         overflow: "hidden",
+        borderWidth: 0.5,
+        borderColor: "rgba(255,255,255,0.13)",
+        shadowColor: "#000",
+        shadowOpacity: 0.2,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 8 },
+        zIndex: 91,
       }}
     >
       <PressableScale
@@ -48,8 +124,21 @@ export function MiniPlayer() {
         accessibilityLabel={`Open now playing: ${song.title}`}
         className="min-w-0 flex-1 flex-row items-center gap-3"
       >
-        <View className="h-11 w-11 overflow-hidden rounded">
-          <CoverImage src={song.imageUrl} networkSrc={song.networkImageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={song.id} />
+        <View
+          style={{
+            width: 50,
+            height: 50,
+            borderRadius: 9,
+            borderCurve: "continuous",
+            overflow: "hidden",
+          }}
+        >
+          <CoverImage
+            src={song.imageUrl}
+            networkSrc={song.networkImageUrl}
+            style={{ width: "100%", height: "100%" }}
+            recyclingKey={song.id}
+          />
         </View>
         <View className="min-w-0 flex-1">
           <MarqueeText className="text-sm font-medium text-foreground">{song.title}</MarqueeText>
@@ -58,13 +147,18 @@ export function MiniPlayer() {
           </Text>
         </View>
       </PressableScale>
-      <HeartButton song={song} size={22} />
+      <MiniPlayerLikeButton song={song} />
       <PressableScale
         onPress={toggle}
         hitSlop={10}
         accessibilityRole="button"
         accessibilityLabel={isPlaying ? "Pause" : "Play"}
-        className="h-10 w-10 items-center justify-center"
+        style={{
+          width: 44,
+          height: 44,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
       >
         <View>
           {isPlaying ? (
@@ -74,6 +168,7 @@ export function MiniPlayer() {
           )}
         </View>
       </PressableScale>
-    </View>
+      <MiniPlayerProgress />
+    </GlassSurface>
   );
 }

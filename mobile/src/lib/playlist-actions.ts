@@ -1,6 +1,6 @@
 import { invalidateLibraryApiCache, type PlaylistEntry } from "@/lib/api";
 import { API_CACHE_CLEARED_EVENT, emit } from "@/lib/events";
-import { apiFetch } from "@/lib/http";
+import { apiFetchWithTimeout } from "@/lib/http";
 import { getOfflineAccountScope } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
 
@@ -36,7 +36,7 @@ function refreshLibrary(): void {
 }
 
 export async function createPlaylist(name: string): Promise<PlaylistEntry> {
-  const res = await apiFetch("/api/playlists", {
+  const res = await apiFetchWithTimeout("/api/playlists", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: name.trim() || "New Playlist" }),
@@ -49,7 +49,7 @@ export async function createPlaylist(name: string): Promise<PlaylistEntry> {
 }
 
 export async function renamePlaylist(playlistId: string, name: string): Promise<void> {
-  const res = await apiFetch(`/api/playlist/${encodeURIComponent(playlistId)}`, {
+  const res = await apiFetchWithTimeout(`/api/playlist/${encodeURIComponent(playlistId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: name.trim() }),
@@ -60,7 +60,7 @@ export async function renamePlaylist(playlistId: string, name: string): Promise<
 }
 
 export async function deletePlaylist(playlistId: string): Promise<void> {
-  const res = await apiFetch(`/api/playlist/${encodeURIComponent(playlistId)}`, {
+  const res = await apiFetchWithTimeout(`/api/playlist/${encodeURIComponent(playlistId)}`, {
     method: "DELETE",
     cache: "no-store",
   });
@@ -69,7 +69,7 @@ export async function deletePlaylist(playlistId: string): Promise<void> {
 }
 
 export async function addSongToPlaylist(playlistId: string, song: PlayerSong): Promise<void> {
-  const res = await apiFetch(`/api/playlist/${encodeURIComponent(playlistId)}/songs`, {
+  const res = await apiFetchWithTimeout(`/api/playlist/${encodeURIComponent(playlistId)}/songs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     // Always send the full song object: the worker upserts a SongRef from it so
@@ -83,7 +83,7 @@ export async function addSongToPlaylist(playlistId: string, song: PlayerSong): P
 }
 
 export async function removeSongFromPlaylist(playlistId: string, songId: string): Promise<void> {
-  const res = await apiFetch(
+  const res = await apiFetchWithTimeout(
     `/api/playlist/${encodeURIComponent(playlistId)}/songs/${encodeURIComponent(songId)}`,
     { method: "DELETE", cache: "no-store" },
   );

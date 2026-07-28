@@ -3,6 +3,7 @@ import { type StyleProp, View, type ViewStyle } from "react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { colors } from "@/theme";
+import { selectionAsync } from "@/lib/haptics";
 import { isDiscoverTrack, isRadioSong } from "@/lib/player-song";
 import { type DownloadScope, getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
@@ -16,11 +17,13 @@ export function DownloadButton({
   song,
   scope,
   size = 20,
+  hitSlop = 8,
   style,
 }: {
   song: PlayerSong;
   scope?: DownloadScope;
   size?: number;
+  hitSlop?: number;
   style?: StyleProp<ViewStyle>;
 }) {
   const key = keyFor(getOfflineAccountScope(), song.id);
@@ -39,6 +42,7 @@ export function DownloadButton({
   const active = status === "downloading" || status === "queued";
 
   const onPress = () => {
+    void selectionAsync();
     // ready / in-flight → unpin (remove or cancel); idle / error → (re)queue.
     if (status === "ready" || active) void unpinScope(song.id, songScope);
     else void queueDownloads([song], songScope);
@@ -59,8 +63,9 @@ export function DownloadButton({
   return (
     <PressableScale
       accessibilityRole="button"
+      accessibilityState={{ selected: status === "ready" }}
       accessibilityLabel={active ? "Cancel download" : status === "ready" ? "Remove download" : "Download"}
-      hitSlop={8}
+      hitSlop={hitSlop}
       onPress={onPress}
       style={style}
     >

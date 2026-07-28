@@ -1,6 +1,6 @@
 "use client";
 
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router";
 import { cn } from "@/lib/utils";
 
 type TabIconProps = { active: boolean };

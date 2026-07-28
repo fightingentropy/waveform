@@ -7,14 +7,50 @@ import {
   dbAllRows,
   dbDeleteRow,
   dbUpsertRow,
+  dbUpsertRows,
   readAllDownloadedRecords,
   resolveMediaPath,
   toMediaRelativePath,
   verifyOrRepairRecord,
   type DownloadRow,
 } from "@/lib/offline-db";
-import { apiFetch } from "@/lib/http";
+import {
+  type DownloadScope,
+  type DownloadStatus,
+  type OfflineDownloadRecord,
+  PLAYBACK_CACHE_SCOPE,
+  offlineDownloadKey,
+  planQueuedDownloads,
+} from "@/lib/offline-download-queue";
+import {
+  type LikeOutboxState,
+  type OfflineMutation,
+  type StoredOfflineMutation,
+  OFFLINE_MUTATION_MAX_ATTEMPTS,
+  OFFLINE_MUTATION_TIMEOUT_MS,
+  createStoredOfflineMutation,
+  deriveLikeOutboxState,
+  offlineMutationCounts,
+  offlineMutationScope,
+  isOfflineMutationReplayCurrent,
+  pendingOfflineMutations,
+  planOfflineMutationFailure,
+  resetExhaustedOfflineMutations,
+  replayMutationsFifo,
+  shouldPublishOfflineMutationCounts,
+  settleAppliedOfflineMutation,
+} from "@/lib/offline-mutation-policy";
+import { apiFetch, apiFetchWithTimeout } from "@/lib/http";
 import { getIsOnline, markOffline, subscribeOnline } from "@/lib/connectivity";
+import { canonicalOf } from "@/lib/canonical-ids";
+import {
+  OFFLINE_MUTATION_OUTBOX_CHANGED_EVENT,
+  OFFLINE_MUTATION_REPLAY_APPLIED_EVENT,
+  OFFLINE_MUTATION_REPLAY_EXHAUSTED_EVENT,
+  emit,
+} from "@/lib/events";
+import { planOfflineAccountDeletion } from "@/lib/account-deletion-policy";
+import { portablePlaybackSong, preferDownloadedPlaybackSong } from "@/lib/offline-playback";
 import { resetPlaybackEngaged } from "@/audio/publish-gate";
 import { storage } from "@/lib/storage";
 import type { PlayerSong } from "@/types/player";
@@ -25,63 +61,61 @@ import type { PlayerSong } from "@/types/player";
 // playback resolution. The blob: materialization is gone — RN plays file://
 // directly with Range support (§6/§8).
 
-export const PLAYBACK_CACHE_SCOPE = "playback-cache" as const;
-export type DownloadScope =
-  | "home"
-  | "liked"
-  | typeof PLAYBACK_CACHE_SCOPE
-  | `playlist:${string}`
-  | `song:${string}`;
-export type DownloadStatus = "queued" | "downloading" | "ready" | "error";
+export { PLAYBACK_CACHE_SCOPE };
+export type { DownloadScope, DownloadStatus, OfflineDownloadRecord };
+export type { OfflineMutation };
 
 // Mirrors the web store's OfflineSyncStatus / OfflineVerificationStatus so the
 // management UI reads the same state machine (see src/client/offline.ts).
 export type OfflineSyncStatus = "idle" | "syncing" | "failed" | "auth-required";
 export type OfflineVerificationStatus = "idle" | "checking" | "ok" | "repair-needed" | "failed";
 
-export type OfflineDownloadRecord = {
-  songId: string;
-  accountScope: string;
-  scopes: DownloadScope[]; // ref-counted pins; record removed when empty
-  status: DownloadStatus;
-  song: PlayerSong;
-  audioPath?: string; // file:// in documentDirectory
-  coverPath?: string;
-  lyricsPath?: string;
-  updatedAt: number;
-  error?: string;
-  // NSURLSession resume blob captured when a download is deliberately paused
-  // (connectivity drop or app-background). The next attempt resumeAsync()s from
-  // the partial instead of restarting at byte 0. In-memory only — deliberately
-  // omitted from recordToRow, because a foreground-session blob is valid only
-  // within this process; across a relaunch the partial is purged and we restart.
-  resumeData?: string;
-};
-
 const OFFLINE_DIR = `${FileSystem.documentDirectory ?? ""}offline-media/`;
-
-// Whether the app is foregrounded. Written by initOfflineSync's AppState handler.
-// Downloads intentionally keep running in the background: createDownloadResumable
-// uses a native URLSession that iOS can continue while suspended (especially with
-// UIBackgroundModes audio). We only pause on connectivity loss, not on background.
-let isForeground = true;
+const DOWNLOAD_RECORD_DB_CHUNK_SIZE = 32;
+let hydrationPromise: Promise<void> | null = null;
 
 // --- Account scope -----------------------------------------------------------
 let accountScope = "anonymous";
+let accountGeneration = 0;
+export type OfflineAccountIdentity = {
+  scope: string;
+  generation: number;
+};
 export function getOfflineAccountScope(): string {
   return accountScope;
+}
+export function getOfflineAccountIdentity(): OfflineAccountIdentity {
+  return { scope: accountScope, generation: accountGeneration };
+}
+export function isOfflineAccountIdentityCurrent(
+  identity: OfflineAccountIdentity,
+): boolean {
+  return isOfflineMutationReplayCurrent(
+    identity.scope,
+    identity.generation,
+    accountScope,
+    accountGeneration,
+  );
 }
 export function setOfflineAccountScope(scope: string | null | undefined): void {
   const next = scope?.trim() || "anonymous";
   if (next === accountScope) return;
   accountScope = next;
+  accountGeneration += 1;
+  const counts = currentMutationCounts(next);
+  useOfflineStore.setState({
+    pendingMutations: counts.pending,
+    failedMutations: counts.failed,
+    syncStatus: counts.failed > 0 ? "failed" : "idle",
+    syncError: counts.failed > 0 ? "Some offline changes need attention" : null,
+  });
   // A different account is now active: drop the "user engaged" flag so a stale
   // restore for the new scope can't publish over the previous account's state.
   resetPlaybackEngaged();
 }
 
 export function keyFor(scope: string, songId: string): string {
-  return `${scope}:${songId}`;
+  return offlineDownloadKey(scope, songId);
 }
 function safeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
@@ -93,23 +127,13 @@ function extFromUrl(url: string, fallback: string): string {
 }
 
 // --- Offline mutation outbox -------------------------------------------------
-export type OfflineMutation =
-  | { type: "like"; payload: { songId: string; nextLiked: boolean; song?: PlayerSong } }
-  | { type: "playlist-reorder"; payload: { playlistId: string; songIds: string[] } }
-  | { type: "song-edit"; payload: Record<string, unknown> };
-
 const MUTATION_QUEUE_KEY = "spotify_offline_mutations";
-const MAX_MUTATION_ATTEMPTS = 5;
+const MAX_MUTATION_ATTEMPTS = OFFLINE_MUTATION_MAX_ATTEMPTS;
 
 // On-disk shape of a queued mutation. queueOfflineMutation has always stamped
 // `scope` + `queuedAt`; `attempts` is added lazily by the replay so the existing
 // persisted queue (items written before this field existed) stays readable.
-type StoredMutation = OfflineMutation & {
-  scope?: string;
-  queuedAt?: number;
-  attempts?: number;
-  error?: string;
-};
+type StoredMutation = StoredOfflineMutation;
 
 function readMutationQueue(): StoredMutation[] {
   try {
@@ -121,18 +145,41 @@ function readMutationQueue(): StoredMutation[] {
   }
 }
 
-function writeMutationQueue(list: StoredMutation[]): void {
+function writeMutationQueue(list: StoredMutation[]): boolean {
   try {
     storage.setItem(MUTATION_QUEUE_KEY, JSON.stringify(list));
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-export async function queueOfflineMutation(mutation: OfflineMutation): Promise<void> {
-  try {
-    const list = readMutationQueue();
-    list.push({ ...mutation, scope: accountScope, queuedAt: Date.now(), attempts: 0 });
-    writeMutationQueue(list);
-  } catch {}
+function discardOfflineMutationsForScope(scope: string): void {
+  const normalized = scope.trim();
+  if (!normalized) return;
+  // Scope-less rows are from the pre-account-scoping format. During account
+  // deletion they necessarily belong to the account whose queue is being
+  // retired, because every current writer stamps an explicit scope.
+  const retained = readMutationQueue().filter((item) => (item.scope ?? normalized) !== normalized);
+  writeMutationQueue(retained);
+}
+
+export async function queueOfflineMutation(
+  mutation: OfflineMutation,
+  scopeOverride = accountScope,
+): Promise<void> {
+  const scope = scopeOverride.trim() || "anonymous";
+  const list = readMutationQueue();
+  list.push(createStoredOfflineMutation(mutation, scope));
+  if (!writeMutationQueue(list)) throw new Error("Couldn't save offline change");
+  const counts = offlineMutationCounts(list, scope, MAX_MUTATION_ATTEMPTS);
+  if (shouldPublishOfflineMutationCounts(scope, accountScope)) {
+    useOfflineStore.setState({
+      pendingMutations: counts.pending,
+      failedMutations: counts.failed,
+    });
+  }
+  emit(OFFLINE_MUTATION_OUTBOX_CHANGED_EVENT, { scope });
 }
 
 // Replay one queued mutation against the same endpoints the live stores use.
@@ -140,22 +187,30 @@ export async function queueOfflineMutation(mutation: OfflineMutation): Promise<v
 // Throws with a `.status` on a non-OK response so the caller can branch on 401/403.
 async function performMutation(mutation: OfflineMutation): Promise<void> {
   if (mutation.type === "like") {
-    const res = await apiFetch("/api/likes", {
-      method: mutation.payload.nextLiked ? "POST" : "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ songId: mutation.payload.songId }),
-      cache: "no-store",
-    });
+    const res = await apiFetchWithTimeout(
+      "/api/likes",
+      {
+        method: mutation.payload.nextLiked ? "POST" : "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ songId: mutation.payload.songId }),
+        cache: "no-store",
+      },
+      OFFLINE_MUTATION_TIMEOUT_MS,
+    );
     if (!res.ok) throw Object.assign(new Error(`Request failed with ${res.status}`), { status: res.status });
     return;
   }
   if (mutation.type === "playlist-reorder") {
-    const res = await apiFetch(`/api/playlist/${encodeURIComponent(mutation.payload.playlistId)}/reorder`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ songIds: mutation.payload.songIds }),
-      cache: "no-store",
-    });
+    const res = await apiFetchWithTimeout(
+      `/api/playlist/${encodeURIComponent(mutation.payload.playlistId)}/reorder`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ songIds: mutation.payload.songIds }),
+        cache: "no-store",
+      },
+      OFFLINE_MUTATION_TIMEOUT_MS,
+    );
     if (!res.ok) throw Object.assign(new Error(`Request failed with ${res.status}`), { status: res.status });
     return;
   }
@@ -164,12 +219,16 @@ async function performMutation(mutation: OfflineMutation): Promise<void> {
   const payload = mutation.payload as Record<string, unknown>;
   const songId = typeof payload.songId === "string" ? payload.songId : "";
   if (!songId) return; // nothing actionable; treat as a no-op success
-  const res = await apiFetch(`/api/songs/${encodeURIComponent(songId)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
+  const res = await apiFetchWithTimeout(
+    `/api/songs/${encodeURIComponent(songId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    },
+    OFFLINE_MUTATION_TIMEOUT_MS,
+  );
   if (!res.ok) throw Object.assign(new Error(`Request failed with ${res.status}`), { status: res.status });
 }
 
@@ -185,12 +244,21 @@ function mutationSignature(item: StoredMutation): string {
   return `${item.queuedAt ?? 0}|${item.type}|${JSON.stringify(item.payload)}`;
 }
 
-// Queued items for the current account that haven't given up yet. Legacy items
-// written before `scope` existed are treated as belonging to the current account.
-function countPendingMutations(): number {
-  return readMutationQueue().filter(
-    (item) => (item.scope ?? accountScope) === accountScope && (item.attempts ?? 0) < MAX_MUTATION_ATTEMPTS,
-  ).length;
+function currentMutationCounts(scope = accountScope): { pending: number; failed: number } {
+  return offlineMutationCounts(readMutationQueue(), scope, MAX_MUTATION_ATTEMPTS);
+}
+
+export function getQueuedLikeOutboxState(scope = accountScope): LikeOutboxState {
+  return deriveLikeOutboxState(
+    readMutationQueue(),
+    scope,
+    MAX_MUTATION_ATTEMPTS,
+    canonicalOf,
+  );
+}
+
+export function hasPersistedLikeMutation(songId: string, scope = accountScope): boolean {
+  return getQueuedLikeOutboxState(scope).lockedSongIds.includes(canonicalOf(songId));
 }
 
 // --- Store -------------------------------------------------------------------
@@ -203,6 +271,7 @@ type OfflineState = {
   // Mutation-outbox replay state.
   syncStatus: OfflineSyncStatus;
   pendingMutations: number;
+  failedMutations: number;
   syncError: string | null;
   // Download verification state.
   verificationStatus: OfflineVerificationStatus;
@@ -227,6 +296,7 @@ type OfflineState = {
   verifyDownloads: () => Promise<void>;
   retryFailedDownloads: () => Promise<void>;
   syncOfflineMutations: () => Promise<void>;
+  retryFailedMutations: () => Promise<void>;
   clearDownloads: () => Promise<void>;
   refreshStorage: () => Promise<void>;
   // Pause the in-flight download (banking its resume blob) — called on app-background.
@@ -292,6 +362,12 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
 
   const removeRecord = async (record: OfflineDownloadRecord) => {
     const key = keyFor(record.accountScope, record.songId);
+    if (activeDownload?.key === key) {
+      // Queue-ahead targets are unpinned as playback moves. Cancel that native
+      // transfer before removing its directory so it cannot keep consuming data
+      // or recreate an orphan after the deletion.
+      await pauseActiveDownload();
+    }
     clearProgress(key);
     set((s) => {
       const next = { ...s.records };
@@ -388,7 +464,42 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           if (result.status >= 400) {
             // expo resolves (doesn't throw) on a bad HTTP status and writes the
             // response body to the file — e.g. an expired signed URL returning
-            // HTML. Guard it so we never mark a garbage file "ready".
+            // HTML. Signed media URLs can expire while a large playlist waits in
+            // this serial queue, so refresh the song once at the authoritative
+            // endpoint and retry with the new URL instead of leaving a permanently
+            // poisoned "Retry" row that keeps using the same stale signature.
+            if (result.status === 401 || result.status === 403 || result.status === 404) {
+              try {
+                const response = await apiFetch(`/api/songs/${encodeURIComponent(queued.songId)}`, {
+                  cache: "no-store",
+                });
+                if (response.ok) {
+                  const fresh = (await response.json()) as PlayerSong;
+                  const latest = get().records[key];
+                  if (
+                    latest &&
+                    fresh?.id === queued.songId &&
+                    fresh.audioUrl &&
+                    fresh.audioUrl !== queued.song.audioUrl
+                  ) {
+                    await FileSystem.deleteAsync(audioPath, { idempotent: true }).catch(() => {});
+                    clearProgress(key);
+                    persist({
+                      ...latest,
+                      song: fresh,
+                      status: "queued",
+                      resumeData: undefined,
+                      error: undefined,
+                      updatedAt: Date.now(),
+                    });
+                    continue;
+                  }
+                }
+              } catch {
+                // Fall through to the normal error/offline classification below.
+              }
+            }
+            // Guard every other error response so garbage is never marked ready.
             throw new Error(`Download failed with HTTP ${result.status}`);
           }
           // Write-time integrity check — confirm the bytes actually landed before
@@ -478,6 +589,35 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     }
   };
 
+  const persistQueuedRecordBatch = async (records: readonly OfflineDownloadRecord[]) => {
+    let pumpStarted = false;
+    try {
+      for (let offset = 0; offset < records.length; offset += DOWNLOAD_RECORD_DB_CHUNK_SIZE) {
+        const chunk = records.slice(offset, offset + DOWNLOAD_RECORD_DB_CHUNK_SIZE);
+        // A cancel, scope change, or pump transition replaces/removes the exact
+        // object stored in memory. Skip that stale queued snapshot so a delayed
+        // chunk cannot resurrect a cancellation or overwrite "downloading".
+        const current = chunk.filter(
+          (record) => get().records[keyFor(record.accountScope, record.songId)] === record,
+        );
+        if (current.length > 0) {
+          await dbUpsertRows(current.map(recordToRow)).catch(() => {});
+        }
+        if (!pumpStarted) {
+          pumpStarted = true;
+          void runPump();
+        }
+        if (offset + DOWNLOAD_RECORD_DB_CHUNK_SIZE < records.length) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
+      }
+    } finally {
+      // Preserve queueDownloads' old guarantee that even an empty/no-op call
+      // re-kicks a previously-paused in-memory queue.
+      if (!pumpStarted) void runPump();
+    }
+  };
+
   // Pause whatever is downloading right now and bank its NSURLSession resume blob
   // on the record, so a later resumeAsync() continues from the partial. Invoked on
   // the two interruptions we can see coming — connectivity loss and app-background.
@@ -506,17 +646,21 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
       const usage = await getDiskUsage();
       set({ storageBytes: usage.usedByDownloads });
     } catch {}
-    set({ pendingMutations: countPendingMutations() });
+    const counts = currentMutationCounts();
+    set({ pendingMutations: counts.pending, failedMutations: counts.failed });
   };
+
+  const initialMutationCounts = currentMutationCounts();
 
   return {
     autoDownloadLiked: storage.getItem(AUTO_DOWNLOAD_KEY) === "1",
     records: {},
     progress: {},
     hydrated: false,
-    syncStatus: "idle",
-    pendingMutations: countPendingMutations(),
-    syncError: null,
+    syncStatus: initialMutationCounts.failed > 0 ? "failed" : "idle",
+    pendingMutations: initialMutationCounts.pending,
+    failedMutations: initialMutationCounts.failed,
+    syncError: initialMutationCounts.failed > 0 ? "Some offline changes need attention" : null,
     verificationStatus: "idle",
     verificationCheckedAt: null,
     verifiedDownloads: 0,
@@ -533,36 +677,16 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     },
 
     queueDownloads: async (songs, scope) => {
-      for (const song of songs) {
-        const key = keyFor(accountScope, song.id);
-        const existing = get().records[key];
-        if (existing) {
-          const addScope = !existing.scopes.includes(scope);
-          // A previously-failed download should retry when re-tapped, not sit
-          // stuck on "error" (matches the per-song button + "Download all").
-          const requeue = existing.status === "error";
-          if (addScope || requeue) {
-            persist({
-              ...existing,
-              song,
-              scopes: addScope ? [...existing.scopes, scope] : existing.scopes,
-              status: requeue ? "queued" : existing.status,
-              error: requeue ? undefined : existing.error,
-              updatedAt: Date.now(),
-            });
-          }
-          continue;
-        }
-        persist({
-          songId: song.id,
-          accountScope,
-          scopes: [scope],
-          status: "queued",
-          song,
-          updatedAt: Date.now(),
-        });
+      const planned = planQueuedDownloads(get().records, songs, scope, accountScope);
+      if (planned.changedRecords.length > 0) {
+        // One clone + one subscriber notification for the whole batch, rather
+        // than N increasingly-large clones and N React render notifications.
+        set({ records: planned.records });
       }
-      void runPump();
+      // Persist at most 32 records per native SQLite statement and yield between
+      // chunks. The first durable chunk starts the same serial download pump;
+      // later chunks are cancellation-aware through object-identity checks.
+      void persistQueuedRecordBatch(planned.changedRecords);
     },
 
     syncPlaybackCache: async (songs) => {
@@ -602,40 +726,48 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
 
     hydrate: async () => {
       if (get().hydrated) return;
-      try {
-        const rows = await dbAllRows();
-        const records: Record<string, OfflineDownloadRecord> = {};
-        for (const row of rows) {
-          const record = rowToRecord(row);
-          // A row left "downloading" means the app died mid-download; its resume
-          // blob lived only in memory, so restart it from scratch as "queued".
-          if (record.status === "downloading") record.status = "queued";
-          records[row.key] = record;
+      if (!hydrationPromise) {
+        // Several launch paths ask for offline state (audio bootstrap, settings,
+        // download buttons). Share one pass so they cannot concurrently load DB
+        // snapshots, purge folders, and start competing pump decisions.
+        hydrationPromise = (async () => {
+          try {
+            const rows = await dbAllRows();
+            const records: Record<string, OfflineDownloadRecord> = {};
+            for (const row of rows) {
+              const record = rowToRecord(row);
+              // A row left "downloading" means the app died mid-download; its
+              // process-local resume blob is gone, so restart it from scratch.
+              if (record.status === "downloading") record.status = "queued";
+              records[row.key] = record;
+            }
+            set({ records });
+            // Validate/re-root trusted completed records before publishing
+            // `hydrated=true`, so source selection can never observe a stale
+            // ready row. Queued/interrupted files are deliberately NOT promoted.
+            await reconcileDownloadedFiles();
+            await purgeOrphanedDownloadArtifacts();
+            set({ hydrated: true });
+            if (
+              Object.values(get().records).some(
+                (r) => r.status === "queued" || r.status === "downloading",
+              )
+            ) {
+              void runPump();
+            }
+          } catch {
+            set({ hydrated: true });
+          }
+          void refreshStorage();
+        })();
+        try {
+          await hydrationPromise;
+        } finally {
+          hydrationPromise = null;
         }
-        set({ records, hydrated: true });
-        // Re-attach records to their downloaded files at the CURRENT container
-        // path. Files are keyed on disk by safeName(songId), so this relinks them
-        // regardless of a stale absolute path or a path cleared by verify — the
-        // reason a reinstall must NOT strand downloads or trigger a re-download.
-        // MUST run before the purge (so recovered folders aren't seen as orphans)
-        // and before the pump (so it doesn't re-download what we just relinked).
-        await reconcileDownloadedFiles();
-        // Reclaim interrupted-download debris (orphaned NSURLSession partials +
-        // stale offline-media folders) before resuming, so the purge can't race
-        // a freshly-resumed download's partial.
-        await purgeOrphanedDownloadArtifacts();
-        // resume any genuinely-incomplete downloads (post-reconcile state)
-        if (
-          Object.values(get().records).some(
-            (r) => r.status === "queued" || r.status === "downloading",
-          )
-        ) {
-          void runPump();
-        }
-      } catch {
-        set({ hydrated: true });
+        return;
       }
-      void refreshStorage();
+      await hydrationPromise;
     },
 
     verifyDownloads: async () => {
@@ -687,20 +819,91 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
       if (failed.length > 0) void runPump();
     },
 
+    retryFailedMutations: async () => {
+      const retryScope = accountScope;
+      const reset = resetExhaustedOfflineMutations(
+        readMutationQueue(),
+        retryScope,
+        MAX_MUTATION_ATTEMPTS,
+      );
+      if (reset.reset === 0) {
+        const counts = currentMutationCounts(retryScope);
+        if (accountScope === retryScope) {
+          set({ pendingMutations: counts.pending, failedMutations: counts.failed });
+        }
+        return;
+      }
+      if (!writeMutationQueue(reset.mutations)) {
+        if (accountScope === retryScope) {
+          set({ syncStatus: "failed", syncError: "Couldn't retry offline changes" });
+        }
+        return;
+      }
+
+      const counts = offlineMutationCounts(
+        reset.mutations,
+        retryScope,
+        MAX_MUTATION_ATTEMPTS,
+      );
+      if (accountScope === retryScope) {
+        set({
+          pendingMutations: counts.pending,
+          failedMutations: counts.failed,
+          syncStatus: "idle",
+          syncError: null,
+        });
+      }
+      emit(OFFLINE_MUTATION_OUTBOX_CHANGED_EVENT, { scope: retryScope });
+      await get().syncOfflineMutations();
+    },
+
     syncOfflineMutations: async () => {
       if (syncRunning) return;
+      const replayScope = accountScope;
+      const replayGeneration = accountGeneration;
+      const replayIsCurrent = () =>
+        isOfflineMutationReplayCurrent(
+          replayScope,
+          replayGeneration,
+          accountScope,
+          accountGeneration,
+        );
       // Mirror navigator.onLine guard from the web: nothing to do with an empty
       // queue, and we avoid flipping the status pill on every cold start.
       const queue = readMutationQueue();
-      const pending = queue.filter(
-        (item) => (item.scope ?? accountScope) === accountScope && (item.attempts ?? 0) < MAX_MUTATION_ATTEMPTS,
-      );
+      const pending = pendingOfflineMutations(queue, replayScope, MAX_MUTATION_ATTEMPTS);
+      const beforeCounts = offlineMutationCounts(queue, replayScope, MAX_MUTATION_ATTEMPTS);
       if (pending.length === 0) {
-        set({ syncStatus: "idle", syncError: null, pendingMutations: 0 });
+        if (replayIsCurrent()) {
+          set({
+            syncStatus: beforeCounts.failed > 0 ? "failed" : "idle",
+            syncError:
+              beforeCounts.failed > 0 ? "Some offline changes need attention" : null,
+            pendingMutations: 0,
+            failedMutations: beforeCounts.failed,
+          });
+        }
+        return;
+      }
+      if (!getIsOnline()) {
+        // Offline is a wait state, not a failed mutation attempt. Burning retry
+        // counts here could permanently abandon every queued edit after five
+        // foregrounds in airplane mode.
+        if (replayIsCurrent()) {
+          set({
+            syncStatus: beforeCounts.failed > 0 ? "failed" : "idle",
+            syncError:
+              beforeCounts.failed > 0 ? "Some offline changes need attention" : null,
+            pendingMutations: beforeCounts.pending,
+            failedMutations: beforeCounts.failed,
+          });
+        }
         return;
       }
       syncRunning = true;
-      set({ syncStatus: "syncing", syncError: null });
+      if (replayIsCurrent()) {
+        set({ syncStatus: "syncing", syncError: null });
+      }
       try {
         // We re-read the persisted queue fresh after every await — JSON.parse
         // yields new object references each time, so items can't be matched by
@@ -712,55 +915,158 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         let lastError: string | null = null;
         // Snapshot the signatures to process (oldest first); the live array is
         // re-read inside the loop so we always write back the freshest copy.
-        for (const target of pending) {
+        await replayMutationsFifo(pending, async (target) => {
+          if (!replayIsCurrent()) return "stop";
           const sig = mutationSignature(target);
           const list = readMutationQueue();
           const idx = list.findIndex((item) => mutationSignature(item) === sig);
-          if (idx === -1) continue; // already drained or signature changed
+          if (idx === -1) return "continue"; // already drained or signature changed
           const item = list[idx];
           try {
             await performMutation(item);
+            // The authenticated cookie can change while a request is in flight.
+            // Preserve the row rather than accepting an ambiguous response; the
+            // absolute mutation is safe to retry under the captured account.
+            if (!replayIsCurrent()) return "stop";
             const after = readMutationQueue();
             const removeAt = after.findIndex((m) => mutationSignature(m) === sig);
-            if (removeAt !== -1) after.splice(removeAt, 1);
-            writeMutationQueue(after);
-            set({ pendingMutations: countPendingMutations() });
+            const settled =
+              removeAt === -1
+                ? { mutations: after, discardedFailures: 0 }
+                : settleAppliedOfflineMutation(
+                    after,
+                    removeAt,
+                    MAX_MUTATION_ATTEMPTS,
+                    replayScope,
+                    canonicalOf,
+                  );
+            if (!writeMutationQueue(settled.mutations)) {
+              lastError = "Couldn't save offline sync progress";
+              return "stop";
+            }
+            emit(OFFLINE_MUTATION_REPLAY_APPLIED_EVENT, {
+              scope: offlineMutationScope(item, replayScope),
+              mutation: item,
+            });
+            const counts = offlineMutationCounts(
+              settled.mutations,
+              replayScope,
+              MAX_MUTATION_ATTEMPTS,
+            );
+            if (replayIsCurrent()) {
+              set({
+                pendingMutations: counts.pending,
+                failedMutations: counts.failed,
+              });
+            }
+            return "continue";
           } catch (e) {
+            if (!replayIsCurrent()) return "stop";
             const status = mutationErrorStatus(e);
-            if (status === 401 || status === 403) {
+            const failure = planOfflineMutationFailure({
+              attempts: item.attempts ?? 0,
+              online: getIsOnline(),
+              status,
+              maxAttempts: MAX_MUTATION_ATTEMPTS,
+            });
+            if (failure.kind === "auth-required") {
               authRequired = true;
-              break;
+              return "stop";
+            }
+            if (failure.kind === "offline") {
+              // apiFetch/apiFetchWithTimeout marks a rejected or timed-out
+              // transport offline. Preserve this item and every item behind it
+              // unchanged; reconnect re-runs the drain.
+              lastError = null;
+              return "stop";
             }
             const after = readMutationQueue();
             const bumpAt = after.findIndex((m) => mutationSignature(m) === sig);
             if (bumpAt !== -1) {
               after[bumpAt] = {
                 ...after[bumpAt],
-                attempts: (after[bumpAt].attempts ?? 0) + 1,
+                attempts: failure.nextAttempts,
                 error: e instanceof Error ? e.message : "Sync failed",
               };
-              writeMutationQueue(after);
+              if (!writeMutationQueue(after)) {
+                lastError = "Couldn't save offline sync progress";
+                return "stop";
+              }
+              if (failure.kind === "retry-exhausted") {
+                emit(OFFLINE_MUTATION_REPLAY_EXHAUSTED_EVENT, {
+                  scope: offlineMutationScope(item, replayScope),
+                  mutation: after[bumpAt],
+                  error: e instanceof Error ? e.message : "Sync failed",
+                });
+              }
+            } else {
+              return "continue";
             }
             lastError = e instanceof Error ? e.message : "Sync failed";
-            set({ pendingMutations: countPendingMutations() });
+            const counts = offlineMutationCounts(
+              after,
+              replayScope,
+              MAX_MUTATION_ATTEMPTS,
+            );
+            if (replayIsCurrent()) {
+              set({
+                pendingMutations: counts.pending,
+                failedMutations: counts.failed,
+              });
+            }
+            // Stop behind any mutation that remains retryable. Once an item has
+            // exhausted its retry budget it is a dead letter, so later FIFO
+            // entries may continue draining instead of being blocked forever.
+            return failure.stop ? "stop" : "continue";
           }
+        });
+        const counts = currentMutationCounts(replayScope);
+        if (replayIsCurrent()) {
+          if (authRequired) {
+            set({
+              syncStatus: "auth-required",
+              syncError: "Sign in to finish syncing offline changes",
+            });
+          } else if (lastError || counts.failed > 0) {
+            set({
+              syncStatus: "failed",
+              syncError:
+                lastError ??
+                `${counts.failed} offline ${counts.failed === 1 ? "change needs" : "changes need"} retry`,
+            });
+          } else {
+            set({ syncStatus: "idle", syncError: null });
+          }
+          set({
+            pendingMutations: counts.pending,
+            failedMutations: counts.failed,
+          });
         }
-        if (authRequired) {
-          set({ syncStatus: "auth-required", syncError: "Sign in to finish syncing offline changes" });
-        } else if (lastError) {
-          set({ syncStatus: "failed", syncError: lastError });
-        } else {
-          set({ syncStatus: "idle", syncError: null });
-        }
-        set({ pendingMutations: countPendingMutations() });
       } catch (e) {
-        set({ syncStatus: "failed", syncError: e instanceof Error ? e.message : "Sync failed" });
+        if (replayIsCurrent()) {
+          const counts = currentMutationCounts(replayScope);
+          set({
+            syncStatus: "failed",
+            syncError: e instanceof Error ? e.message : "Sync failed",
+            pendingMutations: counts.pending,
+            failedMutations: counts.failed,
+          });
+        }
       } finally {
         syncRunning = false;
+        // A new account may have attempted a drain while the previous account
+        // still held the singleton lock. Give the active scope its own pass now.
+        if (!replayIsCurrent()) {
+          void get().syncOfflineMutations();
+        }
       }
     },
 
     clearDownloads: async () => {
+      // Stop the native URLSession writer before deleting its row/directory.
+      // Otherwise a just-cleared in-flight download can finish after the purge
+      // and recreate an orphaned multi-MB file with no record pointing to it.
+      await pauseActiveDownload();
       const records = Object.values(get().records).filter((r) => r.accountScope === accountScope);
       // Drop everything from memory in ONE update first: the pump's next lookup
       // then finds nothing queued and stops immediately (no race with a large
@@ -805,45 +1111,129 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
   };
 });
 
-// Re-attach records to their downloaded files at the CURRENT container path.
-// Files are addressed on disk by safeName(songId), so a record can be relinked
-// regardless of a stale absolute path (iOS changes the container path across
-// reinstalls) or a path an over-eager verify cleared — which is what stops a
-// reinstall from stranding downloads or kicking off a needless multi-GB
-// re-download. Also migrates legacy absolute paths to the stored relative form.
-// Batched: one state merge + parallel DB upserts. Cheap on a healthy launch —
-// records that already hold a resolvable relative path are skipped with no I/O.
+// Account deletion is stronger than sign-out: remove this account's downloaded
+// bytes, SQLite records, and deferred mutation outbox entries so deleted data
+// cannot reappear or attempt to sync if the same email is registered later.
+export async function clearOfflineAccountData(scope: string): Promise<void> {
+  const normalized = scope.trim();
+  if (!normalized) return;
+
+  try {
+    const store = useOfflineStore.getState();
+    if (normalized === accountScope) await store.pauseActiveDownload();
+    await store.hydrate();
+
+    const records = Object.values(useOfflineStore.getState().records);
+    const { deleting, retainedSongIds } = planOfflineAccountDeletion(records, normalized);
+    const deletingKeys = new Set(
+      deleting.map((record) => keyFor(record.accountScope, record.songId)),
+    );
+    useOfflineStore.setState((state) => ({
+      records: Object.fromEntries(
+        Object.entries(state.records).filter(([key]) => !deletingKeys.has(key)),
+      ),
+      progress: Object.fromEntries(
+        Object.entries(state.progress).filter(([key]) => !deletingKeys.has(key)),
+      ),
+      ...(normalized === accountScope
+        ? {
+            verificationStatus: "idle" as const,
+            verificationCheckedAt: null,
+            verifiedDownloads: 0,
+            missingDownloads: 0,
+            verificationError: null,
+          }
+        : {}),
+    }));
+
+    for (const record of deleting) {
+      await dbDeleteRow(keyFor(record.accountScope, record.songId)).catch(() => {});
+      // The legacy directory layout is keyed by song id rather than account.
+      // Keep the bytes if another account on this device references that id.
+      if (!retainedSongIds.has(record.songId)) {
+        await FileSystem.deleteAsync(`${OFFLINE_DIR}${safeName(record.songId)}/`, {
+          idempotent: true,
+        }).catch(() => {});
+      }
+    }
+    await purgeOrphanedDownloadArtifacts();
+  } catch {
+    // Server deletion remains authoritative; local cleanup is best-effort and
+    // each row/file delete is idempotent.
+  }
+  discardOfflineMutationsForScope(normalized);
+  emit(OFFLINE_MUTATION_OUTBOX_CHANGED_EVENT, { scope: normalized });
+  const counts = currentMutationCounts();
+  useOfflineStore.setState({
+    pendingMutations: counts.pending,
+    failedMutations: counts.failed,
+    ...(normalized === accountScope || accountScope === "unauthenticated"
+      ? {
+          syncStatus: counts.failed > 0 ? ("failed" as const) : ("idle" as const),
+          syncError:
+            counts.failed > 0 ? "Some offline changes need attention" : null,
+        }
+      : {}),
+  });
+  void useOfflineStore.getState().refreshStorage();
+}
+
+// Validate and re-attach records that SQLite says completed. Queued/downloading
+// rows are NEVER promoted just because an "audio*" destination is non-empty: an
+// app kill can leave a truncated partial there, and treating it as ready makes a
+// corrupt download permanent. Conversely, a ready row whose file disappeared is
+// re-queued before hydration completes, so playback never prefers a dead file.
 async function reconcileDownloadedFiles(): Promise<void> {
   const records = Object.values(useOfflineStore.getState().records);
   const fixed: Record<string, OfflineDownloadRecord> = {};
   for (const rec of records) {
+    if (rec.status !== "ready") continue;
+
     const hasRelativePath =
-      rec.status === "ready" &&
       !!rec.audioPath &&
       !rec.audioPath.startsWith("file://") &&
       !rec.audioPath.startsWith("/");
-    if (hasRelativePath) continue;
+    if (hasRelativePath) {
+      const livePath = resolveMediaPath(rec.audioPath);
+      try {
+        const info = livePath ? await FileSystem.getInfoAsync(livePath) : null;
+        if (info?.exists && !info.isDirectory && info.size > 0) continue;
+      } catch {}
+    }
 
     const relDir = `offline-media/${safeName(rec.songId)}`;
     const absDir = `${FileSystem.documentDirectory ?? ""}${relDir}`;
-    let names: string[];
+    let names: string[] = [];
     try {
       names = await FileSystem.readDirectoryAsync(absDir);
-    } catch {
-      continue; // no folder → genuinely not downloaded; leave it for the pump
-    }
-    const audioName = names.find((n) => n.startsWith("audio"));
-    if (!audioName) continue;
-    let size = 0;
-    try {
-      const info = await FileSystem.getInfoAsync(`${absDir}/${audioName}`);
-      size = info.exists && !info.isDirectory ? info.size : 0;
     } catch {}
-    if (size <= 0) continue;
+    const audioName = names.find((n) => n.startsWith("audio"));
+    let size = 0;
+    if (audioName) {
+      try {
+        const info = await FileSystem.getInfoAsync(`${absDir}/${audioName}`);
+        size = info.exists && !info.isDirectory ? info.size : 0;
+      } catch {}
+    }
 
-    const coverName = names.find((n) => n.startsWith("cover"));
-    const lyricsName = names.find((n) => n.startsWith("lyrics"));
-    fixed[keyFor(rec.accountScope, rec.songId)] = {
+    const key = keyFor(rec.accountScope, rec.songId);
+    if (!audioName || size <= 0) {
+      fixed[key] = {
+        ...rec,
+        status: "queued",
+        audioPath: undefined,
+        coverPath: undefined,
+        lyricsPath: undefined,
+        resumeData: undefined,
+        error: undefined,
+        updatedAt: Date.now(),
+      };
+      continue;
+    }
+
+    const coverName = names.find((name) => name.startsWith("cover"));
+    const lyricsName = names.find((name) => name.startsWith("lyrics"));
+    fixed[key] = {
       ...rec,
       status: "ready",
       audioPath: `${relDir}/${audioName}`,
@@ -933,27 +1323,17 @@ async function purgeOrphanedDownloadArtifacts(): Promise<void> {
 // an unsubscribe fn. The root layout owns the single call site (see brief).
 export function initOfflineSync(): () => void {
   let previous: AppStateStatus = AppState.currentState;
-  isForeground = AppState.currentState === "active";
   // Cover the cold-launch case: AppState is usually already "active" on mount,
   // so fire one immediate drain in addition to subscribing for later resumes.
   void useOfflineStore.getState().syncOfflineMutations();
   const subscription = AppState.addEventListener("change", (next: AppStateStatus) => {
     const cameToForeground = previous.match(/inactive|background/) && next === "active";
-    // Only the real suspension point — not transient "inactive" (control center,
-    // notification pulldown, Face ID), which doesn't suspend a foreground download.
-    const wentToBackground = next === "background";
     previous = next;
     if (cameToForeground) {
-      isForeground = true;
       void useOfflineStore.getState().syncOfflineMutations();
       // Resume any downloads iOS suspended while we were backgrounded. An empty
       // batch is a no-op that still kicks the serial pump for queued rows.
       void useOfflineStore.getState().queueDownloads([], "home");
-    } else if (wentToBackground) {
-      // Keep downloads running — createDownloadResumable's URLSession can continue
-      // while backgrounded (UIBackgroundModes includes audio). Pausing here used
-      // to make offline pins feel stuck until the user reopened the app.
-      isForeground = false;
     }
   });
   // Connectivity edges, the case AppState can't see: toggling airplane mode while
@@ -963,6 +1343,7 @@ export function initOfflineSync(): () => void {
   const unsubscribeOnline = subscribeOnline((isOnline) => {
     if (isOnline) {
       void useOfflineStore.getState().queueDownloads([], "home");
+      void useOfflineStore.getState().syncOfflineMutations();
     } else {
       void useOfflineStore.getState().pauseActiveDownload();
     }
@@ -979,16 +1360,18 @@ export function resolveOfflinePlaybackSong(song: PlayerSong): PlayerSong {
   const record = useOfflineStore.getState().records[keyFor(accountScope, song.id)];
   // Resolve the stored (relative) path against the live container; the native
   // engine needs an absolute file:// URL, and a legacy absolute path is re-rooted.
-  const audioUrl = resolveMediaPath(record?.audioPath);
-  if (!record || record.status !== "ready" || !audioUrl) return song;
-  return {
-    ...song,
-    source: "offline",
-    audioUrl,
-    imageUrl: resolveMediaPath(record.coverPath) ?? song.imageUrl,
-    networkImageUrl: song.networkImageUrl ?? song.imageUrl,
-    lyricsUrl: resolveMediaPath(record.lyricsPath) ?? song.lyricsUrl,
-  };
+  return preferDownloadedPlaybackSong(song, record, {
+    audioUrl: resolveMediaPath(record?.audioPath),
+    imageUrl: resolveMediaPath(record?.coverPath),
+    lyricsUrl: resolveMediaPath(record?.lyricsPath),
+  });
+}
+
+// Convert a downloaded queue entry back to its original network-addressable
+// shape before writing a cross-device/local-resume snapshot.
+export function resolvePortablePlaybackSong(song: PlayerSong): PlayerSong {
+  const record = useOfflineStore.getState().records[keyFor(accountScope, song.id)];
+  return portablePlaybackSong(song, record);
 }
 
 export function hasUserDownloadScope(record: Pick<OfflineDownloadRecord, "scopes"> | null | undefined): boolean {

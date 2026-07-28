@@ -18,7 +18,7 @@ import {
   SkipBack,
   SkipForward,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { formatPlaybackRate, nextPlaybackRate, sleepTimerRemainingMinutes, usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";

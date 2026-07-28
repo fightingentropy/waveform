@@ -32,3 +32,8 @@ export const API_AUTH_REQUIRED_EVENT = "spotify:api-auth-required";
 // Fired after the API + snapshot caches are wiped, so every mounted useApiData
 // hook re-pulls fresh from the server instead of waiting for a remount.
 export const API_CACHE_CLEARED_EVENT = "spotify:api-cache-cleared";
+// Offline outbox lifecycle. Replay events carry
+// `{ scope, mutation, error? }`; changed carries `{ scope }`.
+export const OFFLINE_MUTATION_REPLAY_APPLIED_EVENT = "spotify:offline-mutation-replay-applied";
+export const OFFLINE_MUTATION_REPLAY_EXHAUSTED_EVENT = "spotify:offline-mutation-replay-exhausted";
+export const OFFLINE_MUTATION_OUTBOX_CHANGED_EVENT = "spotify:offline-mutation-outbox-changed";

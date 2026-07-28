@@ -6,13 +6,12 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { Text } from "react-native";
 import { DownloadButton } from "@/components/song/DownloadButton";
 import { TrackActionsButton } from "@/components/song/TrackActionsButton";
-import { cn } from "@/lib/format";
 import { colors } from "@/theme";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 
-// List row (emerald accent). Active row gets a faint emerald wash + emerald title;
-// list rows change background on press but do NOT scale (scaleTo=1) — §5.
+// List rows stay visually flat. Active playback is communicated with a neutral
+// transport glyph and a barely raised row, leaving artwork as the only colour.
 function SongListItemComponent({
   song,
   onPress,
@@ -27,20 +26,32 @@ function SongListItemComponent({
   // The editable playlist this row belongs to (enables "Remove from this playlist").
   playlist?: { id: string; name: string };
 }) {
-  const isActive = usePlayerStore(useCallback((s) => s.currentSong?.id === song.id, [song.id]));
-  const isActiveAndPlaying = usePlayerStore(useCallback((s) => s.currentSong?.id === song.id && s.isPlaying, [song.id]));
+  // One selector per visible row instead of two subscriptions evaluating the
+  // same song-id comparison on every player-store update.
+  const playbackState = usePlayerStore(
+    useCallback(
+      (s) => (s.currentSong?.id !== song.id ? "idle" : s.isPlaying ? "playing" : "paused"),
+      [song.id],
+    ),
+  );
+  const isActive = playbackState !== "idle";
+  const isActiveAndPlaying = playbackState === "playing";
 
   return (
     <View
-      className={cn("flex-row items-center gap-3 rounded-row px-3 py-2", isActive && "bg-emerald/10")}
-      style={isActive ? { backgroundColor: "rgba(16,185,129,0.10)" } : undefined}
+      className="flex-row items-center gap-3 px-4 py-2"
+      style={isActive ? { backgroundColor: colors.card } : undefined}
     >
       <PressableScale scaleTo={1} onPress={onPress} className="min-w-0 flex-1 flex-row items-center gap-3">
-        <View className="h-12 w-12 overflow-hidden rounded">
+        <View style={{ width: 48, height: 48, overflow: "hidden", borderRadius: 8, borderCurve: "continuous" }}>
           <CoverImage src={song.imageUrl} networkSrc={song.networkImageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={song.id} />
         </View>
         <View className="min-w-0 flex-1">
-          <Text numberOfLines={1} className="text-[15px] font-medium" style={{ color: isActive ? colors.emerald : colors.foreground }}>
+          <Text
+            numberOfLines={1}
+            className="text-[15px]"
+            style={{ color: colors.foreground, fontWeight: isActive ? "600" : "500" }}
+          >
             {song.title}
           </Text>
           <Text numberOfLines={1} className="text-xs" style={{ color: colors.muted }}>
@@ -52,8 +63,12 @@ function SongListItemComponent({
       {showDownload ? <DownloadButton song={song} size={20} /> : null}
 
       {isActive ? (
-        <View className="h-9 w-9 items-center justify-center rounded-full" style={{ backgroundColor: colors.emerald }}>
-          {isActiveAndPlaying ? <Pause size={16} color="#fff" fill="#fff" /> : <Play size={16} color="#fff" fill="#fff" style={{ marginLeft: 1 }} />}
+        <View className="h-9 w-9 items-center justify-center">
+          {isActiveAndPlaying ? (
+            <Pause size={17} color={colors.foreground} fill={colors.foreground} strokeWidth={0} />
+          ) : (
+            <Play size={17} color={colors.foreground} fill={colors.foreground} strokeWidth={0} style={{ marginLeft: 1 }} />
+          )}
         </View>
       ) : null}
 

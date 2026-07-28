@@ -1,7 +1,7 @@
 "use client";
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { chooseNextShuffleIndex, formatPlaybackRate, nextPlaybackRate, sleepTimerRemainingMinutes, usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
@@ -1392,7 +1392,7 @@ function PlayerBar(): React.ReactElement | null {
       | { song: PlayerSong; playbackSong: PlayerSong; index: number; fromFuture: boolean }
       | null => {
       if (!Array.isArray(queue) || queue.length === 0) return null;
-      let nextIdx = currentIndex;
+      let nextIdx: number;
       let nextFromFuture = false;
       if (shuffle) {
         if (queue.length === 1) return null;

@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { Heart, ListMusic, Music2, Plus, Podcast, RadioTower, Ticket, Upload } from "lucide-react";
 import { useApiData, withAccountScope, type LibraryPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";

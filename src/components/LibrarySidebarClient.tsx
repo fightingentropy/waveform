@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { ChevronLeft, ChevronRight, Heart, Library, ListMusic, Music2, Podcast, RadioTower, Ticket } from "lucide-react";
 import { cn } from "@/lib/utils";
 

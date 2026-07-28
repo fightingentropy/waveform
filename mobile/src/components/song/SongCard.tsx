@@ -1,6 +1,5 @@
 import { memo, useCallback } from "react";
 import { View } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
 import { Pause, Play } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
@@ -11,9 +10,8 @@ import { colors } from "@/theme";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 
-// Grid card: square cover + floating emerald play button + title/artist over a
-// bottom gradient. The grid SongCard/SongListItem use emerald (rgb 16,185,129),
-// NOT the Home scroller's Spotify-green — see §4.
+// Compact grid tile. Artwork carries the colour; controls and selection stay
+// monochrome so repeated cards do not turn into a field of status badges.
 function SongCardComponent({
   song,
   onPress,
@@ -25,13 +23,21 @@ function SongCardComponent({
   showDownload?: boolean;
   showActions?: boolean;
 }) {
-  const isActive = usePlayerStore(useCallback((s) => s.currentSong?.id === song.id, [song.id]));
-  const isActiveAndPlaying = usePlayerStore(useCallback((s) => s.currentSong?.id === song.id && s.isPlaying, [song.id]));
+  // Keep one narrow player subscription per visible tile. Only the old/new
+  // active rows re-render when playback moves through a large collection.
+  const playbackState = usePlayerStore(
+    useCallback(
+      (s) => (s.currentSong?.id !== song.id ? "idle" : s.isPlaying ? "playing" : "paused"),
+      [song.id],
+    ),
+  );
+  const isActive = playbackState !== "idle";
+  const isActiveAndPlaying = playbackState === "playing";
 
   return (
     <View
-      className="relative w-full overflow-hidden rounded-card bg-card"
-      style={{ aspectRatio: 1, borderWidth: isActive ? 2 : 0, borderColor: colors.emerald }}
+      className="relative w-full overflow-hidden"
+      style={{ aspectRatio: 1, borderRadius: 10, borderCurve: "continuous", backgroundColor: colors.surface }}
     >
       <PressableScale
         scaleTo={0.985}
@@ -41,7 +47,16 @@ function SongCardComponent({
         className="absolute inset-0"
       >
         <CoverImage src={song.imageUrl} networkSrc={song.networkImageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={song.id} />
-        <LinearGradient colors={["transparent", "rgba(0,0,0,0.6)"]} style={{ position: "absolute", left: 0, right: 0, bottom: 0, top: 0 }} />
+        <View
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 64,
+            backgroundColor: "rgba(0,0,0,0.76)",
+          }}
+        />
         <View className="absolute inset-x-2 bottom-2 flex-row items-end justify-between gap-2">
           <View className="min-w-0 flex-1">
             <MarqueeText className="text-[15px] font-medium text-white" active={isActive}>
@@ -51,11 +66,11 @@ function SongCardComponent({
               {song.artist || "Unknown Artist"}
             </MarqueeText>
           </View>
-          <View className="h-10 w-10 items-center justify-center rounded-full" style={{ backgroundColor: colors.emerald }}>
+          <View className="h-10 w-10 items-center justify-center">
             {isActiveAndPlaying ? (
-              <Pause size={18} color="#fff" fill="#fff" />
+              <Pause size={18} color="#fff" fill="#fff" strokeWidth={0} />
             ) : (
-              <Play size={18} color="#fff" fill="#fff" style={{ marginLeft: 1 }} />
+              <Play size={18} color="#fff" fill="#fff" strokeWidth={0} style={{ marginLeft: 1 }} />
             )}
           </View>
         </View>

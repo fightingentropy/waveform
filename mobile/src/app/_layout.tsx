@@ -6,8 +6,7 @@ import "../../global.css";
 import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { StatusBar } from "expo-status-bar";
-import { Redirect, Stack, useSegments } from "expo-router";
+import { DarkTheme, Redirect, Stack, ThemeProvider, useSegments } from "expo-router";
 import { ActivityIndicator, View } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import * as SystemUI from "expo-system-ui";
@@ -28,16 +27,32 @@ const headerOptions = {
   headerStyle: { backgroundColor: colors.background },
   headerTintColor: colors.foreground,
   headerShadowVisible: false,
+  // Native-stack soft edge treatments on iOS 26/27; older platforms ignore it.
+  // This gives pushed scrolling screens a system-material transition into chrome.
+  scrollEdgeEffects: { top: "soft", bottom: "soft" },
   // Show only the back chevron — not the previous route's title (which was the
   // expo-router group name "(tabs)").
   headerBackButtonDisplayMode: "minimal",
 } as const;
 
+const spotifyNavigationTheme = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    primary: colors.green,
+    background: colors.background,
+    card: colors.background,
+    text: colors.foreground,
+    border: "transparent",
+    notification: colors.green,
+  },
+};
+
 function AuthenticatedApp() {
   const { status } = useAuth();
   const segments = useSegments();
   const firstSegment = segments[0] ?? "";
-  const isPublicAuthRoute = firstSegment === "signin" || firstSegment === "register";
+  const isPublicAuthRoute = firstSegment === "signin";
 
   if (status === "loading") {
     return (
@@ -50,18 +65,19 @@ function AuthenticatedApp() {
   if (status === "authenticated" && isPublicAuthRoute) return <Redirect href="/(tabs)" />;
 
   return (
-    <>
+    <ThemeProvider value={spotifyNavigationTheme}>
       <AudioBootstrap />
-      <StatusBar style="light" />
       <Stack
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: colors.background },
+          // iOS 27 removed UIApplication-level status-bar styling. Let the
+          // native stack own appearance through its view controllers instead.
+          statusBarStyle: "light",
         }}
       >
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="signin" options={{ presentation: "modal" }} />
-        <Stack.Screen name="register" options={{ presentation: "modal" }} />
         <Stack.Screen
           name="liked"
           options={{
@@ -78,6 +94,7 @@ function AuthenticatedApp() {
         <Stack.Screen name="events" options={{ headerShown: false }} />
         <Stack.Screen name="upload" options={{ ...headerOptions, title: "Upload" }} />
         <Stack.Screen name="settings" options={{ ...headerOptions, title: "Settings" }} />
+        <Stack.Screen name="settings/account" options={{ ...headerOptions, title: "Account" }} />
         <Stack.Screen name="settings/playback" options={{ ...headerOptions, title: "Playback" }} />
         <Stack.Screen name="settings/lyrics" options={{ ...headerOptions, title: "Lyrics" }} />
         <Stack.Screen name="settings/storage" options={{ ...headerOptions, title: "Data-saving and offline" }} />
@@ -94,12 +111,32 @@ function AuthenticatedApp() {
             headerTintColor: "#fff",
           }}
         />
+        <Stack.Screen
+          name="search/playlist/[source]/[id]"
+          options={{
+            ...headerOptions,
+            title: "",
+            headerTransparent: true,
+            headerStyle: { backgroundColor: "transparent" },
+            headerTintColor: "#fff",
+          }}
+        />
+        <Stack.Screen
+          name="search/artist/[source]/[id]"
+          options={{
+            ...headerOptions,
+            title: "",
+            headerTransparent: true,
+            headerStyle: { backgroundColor: "transparent" },
+            headerTintColor: "#fff",
+          }}
+        />
       </Stack>
       <TabBar />
       <MiniPlayer />
       <PlayerSheets />
       <ProfileMenu />
-    </>
+    </ThemeProvider>
   );
 }
 

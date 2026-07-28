@@ -1,11 +1,31 @@
 import { create } from "zustand";
 import { patchLikeApiCache } from "@/lib/api";
-import { expandLikedSet, onIdMapChange } from "@/lib/canonical-ids";
+import { canonicalOf, expandLikedSet, onIdMapChange } from "@/lib/canonical-ids";
 import { promoteStagedSong } from "@/lib/discover-keep";
+import {
+  OFFLINE_MUTATION_OUTBOX_CHANGED_EVENT,
+  OFFLINE_MUTATION_REPLAY_APPLIED_EVENT,
+  OFFLINE_MUTATION_REPLAY_EXHAUSTED_EVENT,
+  on,
+} from "@/lib/events";
 import { impactLight } from "@/lib/haptics";
-import { apiFetch } from "@/lib/http";
+import { apiFetchWithTimeout } from "@/lib/http";
+import {
+  applyQueuedLikeIntents,
+  protectLikeBaselines,
+  updateAuthoritativeLikedIds,
+} from "@/lib/like-intent-overlay";
 import { storage } from "@/lib/storage";
-import { getOfflineAccountScope, queueOfflineMutation, useOfflineStore } from "@/store/offline";
+import {
+  getOfflineAccountScope,
+  getOfflineAccountIdentity,
+  getQueuedLikeOutboxState,
+  hasPersistedLikeMutation,
+  isOfflineAccountIdentityCurrent,
+  queueOfflineMutation,
+  useOfflineStore,
+} from "@/store/offline";
+import type { OfflineMutation } from "@/lib/offline-mutation-policy";
 import type { PlayerSong } from "@/types/player";
 
 // Ported from src/store/likes.ts. Changes: relative fetch("/api/likes") →
@@ -44,6 +64,15 @@ function removeKey(source: Record<string, true>, key: string): Record<string, tr
 
 function isLocalSongId(songId: string): boolean {
   return songId.startsWith("browser-local:") || songId.startsWith("picked-file:");
+}
+
+function relatedLikeIds(songId: string): string[] {
+  const canonical = canonicalOf(songId);
+  return Array.from(new Set([songId, canonical, ...expandLikedSet([canonical])]));
+}
+
+function hasRelatedPersistedLikeMutation(songId: string, scope: string): boolean {
+  return relatedLikeIds(songId).some((id) => hasPersistedLikeMutation(id, scope));
 }
 
 // Fire-and-forget: pin/unpin must never block or fail the like toggle itself.
@@ -86,13 +115,23 @@ export const useLikesStore = create<LikesState>((set, get) => ({
   hydrated: false,
   rawRemoteLiked: [],
   mergeInitial: (ids) => {
-    const raw = Array.isArray(ids) ? ids : [];
+    const incomingRaw = Array.isArray(ids) ? ids : [];
+    const outbox = getQueuedLikeOutboxState(getOfflineAccountScope());
+    // A GET can return the optimistic API-cache snapshot while an offline write
+    // is queued. Keep the persisted pre-write direction as the authoritative
+    // baseline until replay confirms or exhausts the mutation.
+    const raw = protectLikeBaselines(
+      incomingRaw,
+      get().rawRemoteLiked,
+      outbox,
+      canonicalOf,
+    );
     // Canonical like-once: also light every retired copy id of each liked
     // (anchor) song. Identity while the id-map is empty (flag off / not loaded).
     const list = expandLikedSet(raw);
     const current = get().likedSongIds;
     const pending = get().pending;
-    const next: Record<string, true> = {};
+    let next: Record<string, true> = {};
 
     for (const id of Object.keys(current)) {
       if (isLocalSongId(id)) next[id] = true;
@@ -103,13 +142,20 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       next[id] = true;
     }
 
+    // Persisted active intents survive relaunch and sit above any stale GET.
+    // Exhausted rows remain baseline locks but are deliberately absent here,
+    // which rolls the visible heart back to its pre-mutation direction.
+    next = applyQueuedLikeIntents(next, outbox.intents, relatedLikeIds);
+
     // Preserve in-flight optimistic likes: a pending id reflects an
     // optimistic toggle the server list may not know about yet. Apply the
     // optimistic direction (present in `current`) over the incoming list so
     // the merge doesn't clobber a like/unlike that's still being saved.
     for (const id of Object.keys(pending)) {
-      if (current[id]) next[id] = true;
-      else delete next[id];
+      for (const relatedId of relatedLikeIds(id)) {
+        if (current[id]) next[relatedId] = true;
+        else delete next[relatedId];
+      }
     }
 
     const currentKeys = Object.keys(current);
@@ -129,7 +175,8 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       if (isLocalSongId(id)) next[id] = true;
     }
     writeLocalLikedSongIds(next);
-    set({ likedSongIds: next, pending: {}, hydrated: true });
+    set({ likedSongIds: next, pending: {}, hydrated: true, rawRemoteLiked: [] });
+    get().mergeInitial([]);
   },
   toggleLike: async (songId, nextLiked, song) => {
     if (typeof songId !== "string" || songId.length === 0) {
@@ -137,7 +184,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     }
 
     const pendingMap = get().pending;
-    if (pendingMap[songId]) {
+    if (relatedLikeIds(songId).some((id) => pendingMap[id])) {
       return { ok: false, status: 0, error: "Like is still updating" };
     }
 
@@ -158,6 +205,14 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       return { ok: true, status: 200 };
     }
 
+    // Capture before promotion (the first possible await). If auth changes while
+    // promotion is running, its old-account intent must never continue into a
+    // like request or be queued under the newly active account.
+    const accountIdentity = getOfflineAccountIdentity();
+    const accountScope = accountIdentity.scope;
+    const accountStillCurrent = () =>
+      isOfflineAccountIdentityCurrent(accountIdentity);
+
     // Optimistically reflect the like immediately so the heart responds on tap,
     // even while a staged Discover track is being promoted (a round-trip that can
     // take a moment). Reverted below if the promote or the save fails.
@@ -172,6 +227,9 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     // keeps the same id; if it differs, move the optimistic like onto the new id.
     if (nextLiked && song?.discoverTrackId) {
       const promoted = await promoteStagedSong(song);
+      if (!accountStillCurrent()) {
+        return { ok: false, status: 409, error: "Account changed while saving" };
+      }
       if (!promoted) {
         set((state) => ({
           likedSongIds: prevLiked
@@ -194,12 +252,54 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       songId = promoted.id;
     }
 
-    // Capture the account scope before the await: reading it afterwards would
-    // patch the wrong account's caches if the user switched accounts in-flight.
-    const accountScope = getOfflineAccountScope();
+    // Once this song has any persisted outbox row, keep all later directions in
+    // that same FIFO. Sending a newer unlike immediately while an older like is
+    // queued would let the older row replay last and invert the user's intent.
+    if (hasRelatedPersistedLikeMutation(songId, accountScope)) {
+      try {
+        await queueOfflineMutation(
+          {
+            type: "like",
+            payload: {
+              songId,
+              logicalSongId: canonicalOf(songId),
+              nextLiked,
+              previousLiked: prevLiked,
+              song,
+            },
+          },
+          accountScope,
+        );
+        if (accountStillCurrent()) {
+          set((state) => ({
+            pending: removeKey(state.pending, songId),
+            hydrated: true,
+          }));
+          syncAutoDownloadLiked(songId, nextLiked, song);
+        }
+        patchLikeApiCache(songId, nextLiked, song, accountScope);
+        void useOfflineStore.getState().syncOfflineMutations();
+        return { ok: true, status: 202 };
+      } catch (error) {
+        if (accountStillCurrent()) {
+          set((state) => ({
+            likedSongIds: prevLiked
+              ? { ...state.likedSongIds, [songId]: true }
+              : removeKey(state.likedSongIds, songId),
+            pending: removeKey(state.pending, songId),
+            hydrated: true,
+          }));
+        }
+        return {
+          ok: false,
+          status: 0,
+          error: error instanceof Error ? error.message : "Failed to save offline change",
+        };
+      }
+    }
 
     try {
-      const response = await apiFetch("/api/likes", {
+      const response = await apiFetchWithTimeout("/api/likes", {
         method: nextLiked ? "POST" : "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ songId }),
@@ -207,13 +307,15 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       });
 
       if (!response.ok) {
-        set((state) => ({
-          likedSongIds: prevLiked
-            ? { ...state.likedSongIds, [songId]: true }
-            : removeKey(state.likedSongIds, songId),
-          pending: removeKey(state.pending, songId),
-          hydrated: true,
-        }));
+        if (accountStillCurrent()) {
+          set((state) => ({
+            likedSongIds: prevLiked
+              ? { ...state.likedSongIds, [songId]: true }
+              : removeKey(state.likedSongIds, songId),
+            pending: removeKey(state.pending, songId),
+            hydrated: true,
+          }));
+        }
 
         let message: string | undefined;
         try {
@@ -226,36 +328,52 @@ export const useLikesStore = create<LikesState>((set, get) => ({
         return { ok: false, status: response.status, error: message };
       }
 
-      set((state) => ({
-        pending: removeKey(state.pending, songId),
-        hydrated: true,
-      }));
-      patchLikeApiCache(songId, nextLiked, song, accountScope);
-      syncAutoDownloadLiked(songId, nextLiked, song);
-
-      return { ok: true, status: response.status };
-    } catch (error) {
-      try {
-        await queueOfflineMutation({
-          type: "like",
-          payload: { songId, nextLiked, song },
-        });
+      if (accountStillCurrent()) {
         set((state) => ({
           pending: removeKey(state.pending, songId),
           hydrated: true,
         }));
-        patchLikeApiCache(songId, nextLiked, song, accountScope);
+        confirmAuthoritativeLike(songId, nextLiked);
         syncAutoDownloadLiked(songId, nextLiked, song);
+      }
+      patchLikeApiCache(songId, nextLiked, song, accountScope);
+
+      return { ok: true, status: response.status };
+    } catch (error) {
+      try {
+        await queueOfflineMutation(
+          {
+            type: "like",
+            payload: {
+              songId,
+              logicalSongId: canonicalOf(songId),
+              nextLiked,
+              previousLiked: prevLiked,
+              song,
+            },
+          },
+          accountScope,
+        );
+        if (accountStillCurrent()) {
+          set((state) => ({
+            pending: removeKey(state.pending, songId),
+            hydrated: true,
+          }));
+          syncAutoDownloadLiked(songId, nextLiked, song);
+        }
+        patchLikeApiCache(songId, nextLiked, song, accountScope);
         return { ok: true, status: 202 };
       } catch {}
 
-      set((state) => ({
-        likedSongIds: prevLiked
-          ? { ...state.likedSongIds, [songId]: true }
-          : removeKey(state.likedSongIds, songId),
-        pending: removeKey(state.pending, songId),
-        hydrated: true,
-      }));
+      if (accountStillCurrent()) {
+        set((state) => ({
+          likedSongIds: prevLiked
+            ? { ...state.likedSongIds, [songId]: true }
+            : removeKey(state.likedSongIds, songId),
+          pending: removeKey(state.pending, songId),
+          hydrated: true,
+        }));
+      }
 
       return {
         ok: false,
@@ -265,6 +383,87 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     }
   },
 }));
+
+function confirmAuthoritativeLike(songId: string, nextLiked: boolean): void {
+  const state = useLikesStore.getState();
+  const raw = updateAuthoritativeLikedIds(
+    state.rawRemoteLiked,
+    songId,
+    nextLiked,
+    canonicalOf(songId),
+    canonicalOf,
+  );
+  useLikesStore.setState({ rawRemoteLiked: raw });
+  useLikesStore.getState().mergeInitial(raw);
+}
+
+type LikeOfflineMutation = Extract<OfflineMutation, { type: "like" }>;
+
+type OfflineMutationEventDetail = {
+  scope: string;
+  mutation: LikeOfflineMutation;
+  error?: string;
+};
+
+function likeMutationEvent(detail: unknown): OfflineMutationEventDetail | null {
+  if (!detail || typeof detail !== "object") return null;
+  const candidate = detail as {
+    scope?: unknown;
+    mutation?: unknown;
+    error?: unknown;
+  };
+  const mutation = candidate.mutation as Partial<LikeOfflineMutation> | undefined;
+  if (
+    typeof candidate.scope !== "string" ||
+    !mutation ||
+    mutation.type !== "like"
+  ) {
+    return null;
+  }
+  const payload = mutation.payload;
+  if (
+    typeof payload?.songId !== "string" ||
+    typeof payload?.nextLiked !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    scope: candidate.scope,
+    mutation: mutation as LikeOfflineMutation,
+    error: typeof candidate.error === "string" ? candidate.error : undefined,
+  };
+}
+
+on(OFFLINE_MUTATION_REPLAY_APPLIED_EVENT, (detail) => {
+  const event = likeMutationEvent(detail);
+  if (!event || event.scope !== getOfflineAccountScope()) return;
+  const { songId, nextLiked, song } = event.mutation.payload;
+  confirmAuthoritativeLike(songId, nextLiked);
+  patchLikeApiCache(songId, nextLiked, song, event.scope);
+  syncAutoDownloadLiked(songId, nextLiked, song);
+});
+
+on(OFFLINE_MUTATION_REPLAY_EXHAUSTED_EVENT, (detail) => {
+  const event = likeMutationEvent(detail);
+  if (!event || event.scope !== getOfflineAccountScope()) return;
+  const { songId, song } = event.mutation.payload;
+  const state = useLikesStore.getState();
+  state.mergeInitial(state.rawRemoteLiked);
+  const resolvedLiked = relatedLikeIds(songId).some(
+    (id) => !!useLikesStore.getState().likedSongIds[id],
+  );
+  patchLikeApiCache(songId, resolvedLiked, song, event.scope);
+  syncAutoDownloadLiked(songId, resolvedLiked, song);
+});
+
+on(OFFLINE_MUTATION_OUTBOX_CHANGED_EVENT, (detail) => {
+  const scope =
+    detail && typeof detail === "object" && "scope" in detail
+      ? (detail as { scope?: unknown }).scope
+      : undefined;
+  if (scope !== getOfflineAccountScope()) return;
+  useLikesStore.getState().reexpand();
+});
 
 // Canonical ids arrive asynchronously. Re-expand the raw server set as soon as
 // the map changes so every retired copy reflects the same liked state.

@@ -3,7 +3,7 @@
 // web app — it relies on the Worker endpoint POST /api/songs/spotify/batch to
 // resolve the track list (see src/worker/index.ts). Types + resolver only.
 
-import { apiFetch } from "@/lib/http";
+import { apiFetchWithTimeout } from "@/lib/http";
 
 export type BatchType = "track" | "album" | "playlist";
 
@@ -40,7 +40,7 @@ export function isBatchSpotifyUrl(url: string): boolean {
 // Resolve the batch by asking the Worker for the track list. The server handles
 // Spotify auth/pathfinder; we just normalize its response into BatchInfo.
 export async function resolveSpotifyBatch(spotifyUrl: string, signal?: AbortSignal): Promise<BatchInfo> {
-  const res = await apiFetch("/api/songs/spotify/batch", {
+  const res = await apiFetchWithTimeout("/api/songs/spotify/batch", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -50,7 +50,7 @@ export async function resolveSpotifyBatch(spotifyUrl: string, signal?: AbortSign
       qualityProfile: "max",
     }),
     signal,
-  });
+  }, 30_000);
   const data = (await res.json().catch(() => ({}))) as { batchInfo?: BatchInfo; error?: string };
   if (!res.ok || !data.batchInfo) {
     throw new Error(data.error || `Failed to fetch batch info (${res.status})`);

@@ -1,6 +1,6 @@
 import { ScrollView, Text, View } from "react-native";
 import Constants from "expo-constants";
-import { Screen } from "@/components/ui/Screen";
+import { CONTENT_BOTTOM_INSET, Screen } from "@/components/ui/Screen";
 import { colors } from "@/theme";
 
 function AboutRow({ label, value }: { label: string; value: string }) {
@@ -21,7 +21,7 @@ export default function AboutSettingsScreen() {
 
   return (
     <Screen topInset={false}>
-      <ScrollView contentContainerStyle={{ paddingTop: 12, paddingBottom: 48 }}>
+      <ScrollView contentContainerStyle={{ paddingTop: 12, paddingBottom: CONTENT_BOTTOM_INSET }}>
         <AboutRow label="App" value={Constants.expoConfig?.name ?? "Spotify"} />
         <View style={{ height: 1, backgroundColor: colors.line, marginHorizontal: 16 }} />
         <AboutRow label="Version" value={version} />

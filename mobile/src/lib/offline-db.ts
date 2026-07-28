@@ -37,6 +37,7 @@ export function resolveMediaPath(path: string | null | undefined): string | null
 }
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let dbWriteTail: Promise<void> = Promise.resolve();
 
 async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
@@ -65,24 +66,66 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
   return dbPromise;
 }
 
+function enqueueDbWrite<T>(write: () => Promise<T>): Promise<T> {
+  const result = dbWriteTail.then(write);
+  // A rejected row must not poison every later write. Keep the caller-visible
+  // rejection while advancing the shared tail as a fulfilled promise.
+  dbWriteTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 export async function dbAllRows(): Promise<DownloadRow[]> {
+  await dbWriteTail;
   const db = await getDb();
   return db.getAllAsync<DownloadRow>("SELECT * FROM downloads ORDER BY updatedAt DESC");
 }
 
-export async function dbUpsertRow(row: DownloadRow): Promise<void> {
+async function runUpsertRows(rows: readonly DownloadRow[]): Promise<void> {
+  if (rows.length === 0) return;
   const db = await getDb();
+  const placeholders = rows.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+  const values: Array<string | number | null> = [];
+  for (const row of rows) {
+    values.push(
+      row.key,
+      row.accountScope,
+      row.songId,
+      row.scopes,
+      row.status,
+      row.song,
+      row.audioPath,
+      row.coverPath,
+      row.lyricsPath,
+      row.updatedAt,
+    );
+  }
   await db.runAsync(
     `INSERT OR REPLACE INTO downloads
       (key, accountScope, songId, scopes, status, song, audioPath, coverPath, lyricsPath, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [row.key, row.accountScope, row.songId, row.scopes, row.status, row.song, row.audioPath, row.coverPath, row.lyricsPath, row.updatedAt],
+     VALUES ${placeholders}`,
+    values,
   );
 }
 
+export function dbUpsertRow(row: DownloadRow): Promise<void> {
+  return enqueueDbWrite(() => runUpsertRows([row]));
+}
+
+// One native SQLite statement per bounded caller chunk. The shared write tail
+// preserves enqueue order against status transitions and cancellation deletes.
+export function dbUpsertRows(rows: readonly DownloadRow[]): Promise<void> {
+  if (rows.length === 0) return Promise.resolve();
+  return enqueueDbWrite(() => runUpsertRows(rows));
+}
+
 export async function dbDeleteRow(key: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync("DELETE FROM downloads WHERE key = ?", [key]);
+  return enqueueDbWrite(async () => {
+    const db = await getDb();
+    await db.runAsync("DELETE FROM downloads WHERE key = ?", [key]);
+  });
 }
 
 // All rows whose status is "ready" for an account scope. Used by the verify pass
@@ -91,6 +134,7 @@ export async function dbDeleteRow(key: string): Promise<void> {
 // authoritative set (the store's in-memory `records` map is the same set today,
 // but this keeps the verify/total logic correct if that ever changes).
 export async function readAllDownloadedRecords(accountScope: string): Promise<DownloadRow[]> {
+  await dbWriteTail;
   const db = await getDb();
   return db.getAllAsync<DownloadRow>(
     "SELECT * FROM downloads WHERE accountScope = ? AND status = 'ready' ORDER BY updatedAt DESC",

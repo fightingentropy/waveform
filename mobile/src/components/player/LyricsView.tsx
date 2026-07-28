@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   type LayoutChangeEvent,
@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import { seekTo } from "@/audio/actions";
-import { useAudioProgress } from "@/audio/progress";
+import { useAudioProgressStore } from "@/audio/progress";
 import { toAbsoluteApiUrl } from "@/lib/config";
 import { hasGreek, transliterateGreek } from "@/lib/greek-phonetics";
 import { apiFetch } from "@/lib/http";
@@ -30,6 +30,10 @@ const SYNC_LOOKAHEAD_SEC = 0.25;
 const TAP_SEEK_LEAD_SEC = 0.45;
 // How long after the user scrolls before auto-centering resumes.
 const USER_SCROLL_HOLD_MS = 2_600;
+const MONO_ACTIVE = "rgba(255,255,255,0.94)";
+const MONO_SECONDARY = "rgba(255,255,255,0.62)";
+const MONO_IDLE = "rgba(255,255,255,0.30)";
+const MONO_DIM = "rgba(255,255,255,0.24)";
 
 // Fetches and renders a song's lyrics. Synced (.lrc with timestamps) files
 // highlight the line being sung and keep it centered — pausing while the user
@@ -49,13 +53,17 @@ export function LyricsView({ song }: { song: PlayerSong }) {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     // Has a lyrics sidecar — load and parse it.
     if (song.lyricsUrl) {
       setState({ status: "loading" });
       (async () => {
         try {
-          const res = await fetch(toAbsoluteApiUrl(song.lyricsUrl), { credentials: "include" });
+          const res = await fetch(toAbsoluteApiUrl(song.lyricsUrl), {
+            credentials: "include",
+            signal: controller.signal,
+          });
           if (!res.ok) throw new Error("No lyrics available");
           const raw = await res.text();
           if (!cancelled) setState({ status: "ready", lines: parseLrc(raw) });
@@ -65,6 +73,7 @@ export function LyricsView({ song }: { song: PlayerSong }) {
       })();
       return () => {
         cancelled = true;
+        controller.abort();
       };
     }
 
@@ -77,7 +86,10 @@ export function LyricsView({ song }: { song: PlayerSong }) {
     setState({ status: "finding" });
     (async () => {
       try {
-        const res = await apiFetch(`/api/songs/${encodeURIComponent(song.id)}/lyrics`, { method: "POST" });
+        const res = await apiFetch(`/api/songs/${encodeURIComponent(song.id)}/lyrics`, {
+          method: "POST",
+          signal: controller.signal,
+        });
         if (res.ok) {
           const updated = (await res.json()) as PlayerSong;
           if (cancelled) return;
@@ -95,13 +107,14 @@ export function LyricsView({ song }: { song: PlayerSong }) {
     })();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [song.id, song.lyricsUrl, replaceSong]);
 
   if (state.status === "finding") {
     return (
       <View className="items-center py-12">
-        <ActivityIndicator color={colors.emerald} />
+        <ActivityIndicator color="rgba(255,255,255,0.82)" />
         <Text className="mt-3 text-sm" style={{ color: colors.muted }}>
           Finding lyrics…
         </Text>
@@ -111,7 +124,7 @@ export function LyricsView({ song }: { song: PlayerSong }) {
   if (state.status === "loading") {
     return (
       <View className="items-center py-12">
-        <ActivityIndicator color={colors.emerald} />
+        <ActivityIndicator color="rgba(255,255,255,0.82)" />
       </View>
     );
   }
@@ -148,7 +161,6 @@ export function LyricsView({ song }: { song: PlayerSong }) {
 }
 
 function SyncedLyrics({ lines, greekPhonetics }: { lines: LrcLine[]; greekPhonetics: boolean }) {
-  const { position } = useAudioProgress();
   const scrollRef = useRef<ScrollView>(null);
   // Y offset of each line within the scroll content (filled via onLayout).
   const lineOffsets = useRef<number[]>([]);
@@ -156,9 +168,14 @@ function SyncedLyrics({ lines, greekPhonetics }: { lines: LrcLine[]; greekPhonet
   // While now < this timestamp, the user is exploring — pause auto-centering.
   const userScrollUntil = useRef(0);
 
-  const activeIndex = useMemo(
-    () => activeLyricIndex(lines, position + SYNC_LOOKAHEAD_SEC),
-    [lines, position],
+  // The native clock ticks at 4 Hz. Select the derived line index so React only
+  // re-renders the lyrics when the highlighted line actually changes, rather
+  // than rebuilding every lyric row on every progress tick.
+  const activeIndex = useAudioProgressStore(
+    useCallback(
+      (progress) => activeLyricIndex(lines, progress.position + SYNC_LOOKAHEAD_SEC),
+      [lines],
+    ),
   );
 
   // Center the active line, unless the user just scrolled.
@@ -203,6 +220,9 @@ function SyncedLyrics({ lines, greekPhonetics }: { lines: LrcLine[]; greekPhonet
           <Pressable
             key={i}
             disabled={!timed}
+            accessibilityRole={timed ? "button" : undefined}
+            accessibilityLabel={timed ? `Seek to ${line.text || "music"}` : undefined}
+            accessibilityState={{ selected: isActive, disabled: !timed }}
             style={{ paddingVertical: 6 }}
             onLayout={(e: LayoutChangeEvent) => {
               lineOffsets.current[i] = e.nativeEvent.layout.y;
@@ -219,13 +239,13 @@ function SyncedLyrics({ lines, greekPhonetics }: { lines: LrcLine[]; greekPhonet
               void seekTo(Math.max(floor, line.time - TAP_SEEK_LEAD_SEC));
             }}
           >
-            <Text className="text-[21px] font-bold leading-7" style={{ color: isActive ? colors.emerald : colors.dim }}>
+            <Text className="text-[21px] font-bold leading-7" style={{ color: isActive ? MONO_ACTIVE : MONO_IDLE }}>
               {line.text || "♪"}
             </Text>
             {phonetic ? (
               <Text
                 className="mt-0.5 text-[16px] font-semibold italic leading-6"
-                style={{ color: isActive ? "rgba(16,185,129,0.7)" : "rgba(255,255,255,0.32)" }}
+                style={{ color: isActive ? MONO_SECONDARY : MONO_DIM }}
               >
                 {phonetic}
               </Text>

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildYouTubePlaylistSearchUrl,
+  isValidYouTubePlaylistId,
+  normalizeYouTubePlaylistSearchQuery,
+  parseYouTubePlaylistSearchEntries,
   passesArtistGate,
   pickBestYouTubeMatch,
   scoreYouTubeCandidate,
@@ -81,5 +85,92 @@ describe("pickBestYouTubeMatch", () => {
     ];
     const match = pickBestYouTubeMatch({ title: "Breathing", artist: "Ben Bohmer", durationMs: 223_000 }, entries, 0.5);
     expect(match?.videoId).toBe("ok");
+  });
+});
+
+describe("YouTube playlist search", () => {
+  test("normalizes a bounded human query and rejects invalid input", () => {
+    expect(normalizeYouTubePlaylistSearchQuery("  daft   punk  ")).toBe("daft punk");
+    expect(normalizeYouTubePlaylistSearchQuery("x")).toBeNull();
+    expect(normalizeYouTubePlaylistSearchQuery(`ok\u0000bad`)).toBeNull();
+    expect(normalizeYouTubePlaylistSearchQuery("x".repeat(101))).toBeNull();
+  });
+
+  test("builds a playlist-filtered YouTube search URL", () => {
+    const url = new URL(buildYouTubePlaylistSearchUrl("daft punk"));
+    expect(url.origin).toBe("https://www.youtube.com");
+    expect(url.pathname).toBe("/results");
+    expect(url.searchParams.get("search_query")).toBe("daft punk");
+    expect(url.searchParams.get("sp")).toBe("EgIQAw%3D%3D");
+  });
+
+  test("accepts only authoritative matching playlist URLs and trusted artwork", () => {
+    const entries = [
+      {
+        id: "PLSdoVPM5WnndLX6Ngmb8wktMF61dJirKl",
+        title: "Daft Punk - Discovery",
+        url: "https://www.youtube.com/playlist?list=PLSdoVPM5WnndLX6Ngmb8wktMF61dJirKl",
+        channel: "Daft Punk",
+        thumbnails: [
+          { url: "https://i.ytimg.com/vi/one/mqdefault.jpg", width: 320, height: 180 },
+          { url: "https://i.ytimg.com/vi/one/hqdefault.jpg", width: 720, height: 404 },
+        ],
+      },
+      // Duplicate id: first authoritative result wins.
+      {
+        id: "PLSdoVPM5WnndLX6Ngmb8wktMF61dJirKl",
+        title: "Duplicate",
+        url: "https://www.youtube.com/playlist?list=PLSdoVPM5WnndLX6Ngmb8wktMF61dJirKl",
+      },
+      // A mismatched declared id and URL is not authoritative.
+      {
+        id: "PLAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        title: "Mismatched",
+        url: "https://www.youtube.com/playlist?list=PLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      },
+      // A video result cannot leak through even if its id happens to match our
+      // conservative playlist-id character/length validation.
+      {
+        id: "abcdefghijk",
+        title: "Video",
+        url: "https://www.youtube.com/watch?v=abcdefghijk",
+      },
+      {
+        id: "PLdXJrX9OsbOVq2TKvUc3xGUp2Rm8nTUVh",
+        title: "Best Of Daft Punk",
+        url: "https://www.youtube.com/playlist?list=PLdXJrX9OsbOVq2TKvUc3xGUp2Rm8nTUVh",
+        uploader: "Listener",
+        thumbnails: [{ url: "https://attacker.example/cover.jpg", width: 1000, height: 1000 }],
+      },
+    ];
+
+    expect(parseYouTubePlaylistSearchEntries(entries)).toEqual([
+      {
+        id: "PLSdoVPM5WnndLX6Ngmb8wktMF61dJirKl",
+        name: "Daft Punk - Discovery",
+        imageUrl: "https://i.ytimg.com/vi/one/hqdefault.jpg",
+        ownerName: "Daft Punk",
+      },
+      {
+        id: "PLdXJrX9OsbOVq2TKvUc3xGUp2Rm8nTUVh",
+        name: "Best Of Daft Punk",
+        ownerName: "Listener",
+      },
+    ]);
+  });
+
+  test("validates ids and clamps result count", () => {
+    expect(isValidYouTubePlaylistId("PLSdoVPM5WnndLX6Ngmb8wktMF61dJirKl")).toBe(true);
+    expect(isValidYouTubePlaylistId("bad/list")).toBe(false);
+
+    const entries = Array.from({ length: 20 }, (_, index) => {
+      const id = `PL${String(index).padStart(30, "0")}`;
+      return {
+        id,
+        title: `Playlist ${index}`,
+        url: `https://www.youtube.com/playlist?list=${id}`,
+      };
+    });
+    expect(parseYouTubePlaylistSearchEntries(entries, 99)).toHaveLength(12);
   });
 });

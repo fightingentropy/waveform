@@ -3,15 +3,20 @@ import { ScrollView, Text, TextInput, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { FileAudio, Image as ImageIcon, Link2 } from "lucide-react-native";
-import { Screen } from "@/components/ui/Screen";
+import { CONTENT_BOTTOM_INSET, Screen } from "@/components/ui/Screen";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
 import { ErrorText, SignedOutPrompt } from "@/components/ui/States";
 import { useAuth } from "@/lib/auth";
-import { apiFetch, apiUrl } from "@/lib/http";
+import { apiFetchWithTimeout, apiUrl } from "@/lib/http";
 import { invalidateLibraryApiCache } from "@/lib/api";
 import { getOfflineAccountScope } from "@/store/offline";
-import { type BatchInfo, isBatchSpotifyUrl, resolveSpotifyBatch } from "@/lib/spotify-batch-client";
+import {
+  type BatchInfo,
+  type BatchTrack,
+  isBatchSpotifyUrl,
+  resolveSpotifyBatch,
+} from "@/lib/spotify-batch-client";
 import {
   cancelImportQueue,
   enqueueImportBatch,
@@ -29,6 +34,8 @@ const inputStyle = { color: colors.foreground, height: 48, fontSize: 16, padding
 type ImportStage = "resolving" | "downloading" | "saving";
 type SingleProgress = { stage: ImportStage; received: number; total: number };
 type ImportOutcome = { kind: "done" } | { kind: "duplicate" } | { kind: "error"; message: string };
+const IMPORT_METADATA_TIMEOUT_MS = 30_000;
+const MEDIA_TRANSFER_TIMEOUT_MS = 10 * 60_000;
 
 function formatMb(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1);
@@ -76,6 +83,7 @@ function runSpotifyImportWithProgress(
     // Force text handling so RN decodes responseText incrementally on each
     // onprogress (some content-types are otherwise buffered as a blob).
     xhr.responseType = "text";
+    xhr.timeout = MEDIA_TRANSFER_TIMEOUT_MS;
     xhr.setRequestHeader("content-type", "application/json");
     xhr.setRequestHeader("x-progress-stream", "1");
 
@@ -138,6 +146,8 @@ function runSpotifyImportWithProgress(
       resolve(outcome);
     };
     xhr.onerror = () => resolve({ kind: "error", message: "Network error during import" });
+    xhr.ontimeout = () =>
+      resolve({ kind: "error", message: "Import timed out. Check your connection and try again." });
     xhr.send(body);
   });
 }
@@ -179,11 +189,11 @@ export default function UploadScreen() {
     setStatus({ kind: "busy", message: "Importing…" });
     setSingleProgress({ stage: "resolving", received: 0, total: 0 });
     try {
-      const metaRes = await apiFetch("/api/songs/spotify", {
+      const metaRes = await apiFetchWithTimeout("/api/songs/spotify", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "fetch", spotifyUrl: url, region: "US" }),
-      });
+      }, IMPORT_METADATA_TIMEOUT_MS);
       const metaData = (await metaRes.json().catch(() => ({}))) as { track?: BatchTrack & { durationMs?: number }; error?: string };
       if (!metaRes.ok || !metaData.track) {
         throw new Error(metaData.error || "Could not resolve this track on Spotify");
@@ -322,7 +332,11 @@ export default function UploadScreen() {
       form.append("title", title.trim());
       form.append("artist", artist.trim());
       if (cover) form.append("image", { uri: cover.uri, name: cover.name, type: cover.type } as unknown as Blob);
-      const res = await apiFetch("/api/songs", { method: "POST", body: form });
+      const res = await apiFetchWithTimeout(
+        "/api/songs",
+        { method: "POST", body: form },
+        MEDIA_TRANSFER_TIMEOUT_MS,
+      );
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(data.error || `Upload failed (${res.status})`);
@@ -340,7 +354,15 @@ export default function UploadScreen() {
 
   return (
     <Screen topInset={false}>
-      <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ padding: 16, gap: 16 }}>
+      <ScrollView
+        style={{ flex: 1, backgroundColor: colors.background }}
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingTop: 16,
+          paddingBottom: CONTENT_BOTTOM_INSET,
+          gap: 16,
+        }}
+      >
         {/* mode toggle */}
         <View className="flex-row gap-2">
           {(["link", "file"] as Mode[]).map((m) => (

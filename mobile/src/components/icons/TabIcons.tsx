@@ -1,10 +1,50 @@
+import { Platform } from "react-native";
+import { SymbolView, type SFSymbol } from "expo-symbols";
 import Svg, { Circle, Path } from "react-native-svg";
 
 // Spotify Encore tab glyphs (24px grid), exact paths from src/components/MobileNav.tsx:
 // outline at rest, filled when active.
 type Props = { active: boolean; color: string; size?: number };
 
+function IOSTabSymbol({
+  name,
+  active,
+  color,
+  size,
+}: {
+  name: SFSymbol;
+  active: boolean;
+  color: string;
+  size: number;
+}) {
+  return (
+    <SymbolView
+      name={name}
+      size={size}
+      tintColor={color}
+      type="hierarchical"
+      weight={active ? "semibold" : "medium"}
+      animationSpec={
+        active
+          ? { effect: { type: "bounce", wholeSymbol: true }, speed: 1.2 }
+          : undefined
+      }
+      style={{ width: size, height: size }}
+    />
+  );
+}
+
 export function HomeTabIcon({ active, color, size = 24 }: Props) {
+  if (Platform.OS === "ios") {
+    return (
+      <IOSTabSymbol
+        name={active ? "house.fill" : "house"}
+        active={active}
+        color={color}
+        size={size}
+      />
+    );
+  }
   return (
     <Svg viewBox="0 0 24 24" width={size} height={size} fill={color}>
       {active ? (
@@ -17,6 +57,16 @@ export function HomeTabIcon({ active, color, size = 24 }: Props) {
 }
 
 export function SearchTabIcon({ active, color, size = 24 }: Props) {
+  if (Platform.OS === "ios") {
+    return (
+      <IOSTabSymbol
+        name="magnifyingglass"
+        active={active}
+        color={color}
+        size={size}
+      />
+    );
+  }
   return (
     <Svg viewBox="0 0 24 24" width={size} height={size} fill={color}>
       <Path d="M10.533 1.279c-5.18 0-9.407 4.14-9.407 9.279s4.226 9.279 9.407 9.279c2.234 0 4.29-.77 5.907-2.058l4.353 4.353a1 1 0 1 0 1.414-1.414l-4.344-4.344a9.157 9.157 0 0 0 2.077-5.816c0-5.14-4.226-9.28-9.407-9.28zm-7.407 9.279c0-4.006 3.302-7.28 7.407-7.28s7.407 3.274 7.407 7.28-3.302 7.279-7.407 7.279-7.407-3.273-7.407-7.28z" />
@@ -26,6 +76,16 @@ export function SearchTabIcon({ active, color, size = 24 }: Props) {
 }
 
 export function LibraryTabIcon({ active, color, size = 24 }: Props) {
+  if (Platform.OS === "ios") {
+    return (
+      <IOSTabSymbol
+        name={active ? "square.stack.fill" : "square.stack"}
+        active={active}
+        color={color}
+        size={size}
+      />
+    );
+  }
   return (
     <Svg viewBox="0 0 24 24" width={size} height={size} fill={color}>
       {active ? (
@@ -40,6 +100,9 @@ export function LibraryTabIcon({ active, color, size = 24 }: Props) {
 // "Create" is an action (it opens the create sheet), not a selectable tab, so it
 // renders the same + glyph regardless of `active`.
 export function CreateTabIcon({ color, size = 24 }: Props) {
+  if (Platform.OS === "ios") {
+    return <IOSTabSymbol name="plus" active={false} color={color} size={size} />;
+  }
   return (
     <Svg viewBox="0 0 24 24" width={size} height={size}>
       <Path d="M12 4.5v15M4.5 12h15" fill="none" stroke={color} strokeWidth={2.5} strokeLinecap="round" />

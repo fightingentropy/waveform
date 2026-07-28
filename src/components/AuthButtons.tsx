@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { ChevronDown, LogIn, LogOut, Settings, UserRound } from "lucide-react";
 import { useAuth } from "@/client/auth";
 

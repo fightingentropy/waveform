@@ -1,7 +1,7 @@
 import type { PlayerSong } from "@/types/player";
 
 // Ported from src/lib/podcasts.ts. The web parser uses DOMParser (absent in RN),
-// so feed parsing here is regex-based. accentClassName → accent color array.
+// so feed parsing here is regex-based.
 export type PodcastShow = {
   id: string;
   title: string;
@@ -11,7 +11,6 @@ export type PodcastShow = {
   feedUrl: string;
   websiteUrl: string;
   imageUrl: string;
-  accent: [string, string, string];
   // True for shows the user added by RSS URL. These resolve media directly from
   // the feed (native has no CORS) instead of through the /api/podcast-media proxy,
   // which only knows the built-in PODCAST_SHOWS.
@@ -26,6 +25,80 @@ export type PodcastEpisode = PlayerSong & {
   publishedAt?: string;
 };
 
+export const PODCAST_FEED_MAX_BYTES = 4 * 1024 * 1024;
+export const PODCAST_FEED_EPISODE_LIMIT = 50;
+
+// Read only the useful prefix of an RSS response. Expo's native fetch exposes a
+// streaming body on iOS, so this bounds retained feed data even when a publisher
+// serves a multi-thousand-item/17MB document. A partial final item is harmless:
+// parsePodcastFeed only accepts complete <item> blocks.
+export async function readPodcastFeedPrefix(
+  response: Response,
+  {
+    maxBytes = PODCAST_FEED_MAX_BYTES,
+    maxItems = PODCAST_FEED_EPISODE_LIMIT,
+  }: { maxBytes?: number; maxItems?: number } = {},
+): Promise<string> {
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+    throw new RangeError("maxBytes must be a positive finite number");
+  }
+  if (!Number.isInteger(maxItems) || maxItems <= 0) {
+    throw new RangeError("maxItems must be a positive integer");
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Podcast feed could not be streamed safely");
+  }
+
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  let bytesRead = 0;
+  let itemCount = 0;
+  let itemBoundaryCarry = "";
+  let shouldCancel = false;
+
+  try {
+    while (bytesRead < maxBytes && itemCount < maxItems) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+
+      const remaining = maxBytes - bytesRead;
+      const accepted = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      bytesRead += accepted.byteLength;
+
+      const decoded = decoder.decode(accepted, { stream: true });
+      parts.push(decoded);
+
+      // The parser recognizes the same conventional RSS closing tag. Retaining
+      // six trailing characters catches a tag split across stream chunks.
+      const searchable = `${itemBoundaryCarry}${decoded}`.toLowerCase();
+      let cursor = 0;
+      while (itemCount < maxItems) {
+        const next = searchable.indexOf("</item>", cursor);
+        if (next === -1) break;
+        itemCount += 1;
+        cursor = next + 7;
+      }
+      itemBoundaryCarry = searchable.slice(-6);
+
+      if (value.byteLength > accepted.byteLength || bytesRead >= maxBytes || itemCount >= maxItems) {
+        shouldCancel = true;
+        break;
+      }
+    }
+
+    parts.push(decoder.decode());
+    return parts.join("");
+  } finally {
+    if (shouldCancel) {
+      await reader.cancel("Podcast feed prefix complete").catch(() => undefined);
+    }
+    reader.releaseLock();
+  }
+}
+
 export const PODCAST_SHOWS: PodcastShow[] = [
   {
     id: "huberman-lab",
@@ -37,7 +110,6 @@ export const PODCAST_SHOWS: PodcastShow[] = [
     websiteUrl: "https://www.hubermanlab.com/podcast",
     imageUrl:
       "https://megaphone.imgix.net/podcasts/042e6144-725e-11ec-a75d-c38f702aecad/image/ee4f0b7b466ca35620792970d9bce2d2.jpg?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress",
-    accent: ["#1ed760", "#06b6d4", "#f97316"],
   },
   {
     id: "modern-wisdom",
@@ -49,7 +121,6 @@ export const PODCAST_SHOWS: PodcastShow[] = [
     websiteUrl: "https://chriswillx.com/podcast/",
     imageUrl:
       "https://megaphone.imgix.net/podcasts/a62f84c0-f8b6-11ed-a4fc-fb9e7841d45b/image/76ed638554a4be965517200d1cd5f30d.jpg?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress",
-    accent: ["#f97316", "#facc15", "#7c3aed"],
   },
   {
     id: "flagrant",
@@ -61,7 +132,6 @@ export const PODCAST_SHOWS: PodcastShow[] = [
     websiteUrl: "https://soundcloud.com/flagrantpodcast",
     imageUrl:
       "https://megaphone.imgix.net/podcasts/0adac72a-8012-11ef-9b16-bffe28b27ef7/image/84f5c3e24f7864f2fd9f7fc858aa2889.png?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress",
-    accent: ["#fb7185", "#f97316", "#22c55e"],
   },
   {
     id: "all-in",
@@ -72,7 +142,6 @@ export const PODCAST_SHOWS: PodcastShow[] = [
     feedUrl: "https://rss.libsyn.com/shows/254861/destinations/1928300.xml",
     websiteUrl: "https://allin.com/",
     imageUrl: "https://static.libsyn.com/p/assets/a/9/c/b/a9cb4d1dadb1ea21/all-in_logo.png",
-    accent: ["#0ea5e9", "#a3e635", "#f97316"],
   },
 ];
 
@@ -182,16 +251,6 @@ export function userPodcastId(feedUrl: string): string {
   return `user-${hashFeedUrl(feedUrl.trim().toLowerCase()).toString(36)}`;
 }
 
-// Auto-assigned gradient accents for user shows (built-in shows hand-pick theirs).
-const USER_PODCAST_ACCENTS: [string, string, string][] = [
-  ["#1ed760", "#06b6d4", "#f97316"],
-  ["#f97316", "#facc15", "#7c3aed"],
-  ["#fb7185", "#f97316", "#22c55e"],
-  ["#0ea5e9", "#a3e635", "#f97316"],
-  ["#8b5cf6", "#ec4899", "#f59e0b"],
-  ["#14b8a6", "#6366f1", "#f43f5e"],
-];
-
 // Pull the channel-level <image>/<url> when there's no <itunes:image href>.
 function rssChannelImage(channel: string): string {
   const block = channel.match(/<image\b[^>]*>([\s\S]*?)<\/image>/i)?.[1] ?? "";
@@ -223,7 +282,6 @@ export function buildUserPodcastShow(feedUrl: string, xmlText: string): PodcastS
     feedUrl: url,
     websiteUrl: tag(channel, "link"),
     imageUrl: attr(channel, "itunes:image", "href") || rssChannelImage(channel),
-    accent: USER_PODCAST_ACCENTS[hashFeedUrl(url) % USER_PODCAST_ACCENTS.length],
     userAdded: true,
   };
 }

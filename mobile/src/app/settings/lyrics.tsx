@@ -1,5 +1,5 @@
 import { ScrollView, Switch, Text, View } from "react-native";
-import { Screen } from "@/components/ui/Screen";
+import { CONTENT_BOTTOM_INSET, Screen } from "@/components/ui/Screen";
 import { usePreferencesStore } from "@/store/preferences";
 import { colors } from "@/theme";
 
@@ -9,7 +9,13 @@ export default function LyricsSettingsScreen() {
 
   return (
     <Screen topInset={false}>
-      <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 48 }}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingTop: 12,
+          paddingBottom: CONTENT_BOTTOM_INSET,
+        }}
+      >
         <Text className="mb-5 text-2xl font-bold" style={{ color: colors.foreground }}>
           Pronunciation
         </Text>
@@ -27,7 +33,7 @@ export default function LyricsSettingsScreen() {
           <Switch
             value={greekPhonetics}
             onValueChange={setGreekPhonetics}
-            trackColor={{ true: colors.emerald, false: "#3a3a3a" }}
+            trackColor={{ true: "rgba(255,255,255,0.42)", false: "#3a3a3a" }}
             thumbColor="#fff"
           />
         </View>

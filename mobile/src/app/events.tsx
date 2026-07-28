@@ -2,7 +2,6 @@ import { type ReactNode } from "react";
 import { Linking, ScrollView, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
 import { ChevronLeft, MapPin } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
@@ -79,8 +78,7 @@ export default function EventsScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <ScrollView contentContainerStyle={{ paddingBottom: CONTENT_BOTTOM_INSET }} showsVerticalScrollIndicator={false}>
-        {/* purple gradient header */}
-        <LinearGradient colors={["#6d28d9", "#3b1c74", colors.background]} style={{ paddingTop: insets.top + 8, paddingHorizontal: 16, paddingBottom: 18 }}>
+        <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 16, paddingBottom: 18 }}>
           <View className="flex-row items-center">
             <PressableScale onPress={() => router.back()} hitSlop={8} accessibilityLabel="Back">
               <View>
@@ -94,7 +92,7 @@ export default function EventsScreen() {
           <View className="mt-4 flex-row gap-2">
             <Chip label="London" outlined icon={<MapPin size={15} color="#c9923f" />} />
           </View>
-        </LinearGradient>
+        </View>
 
         {loading && sections.length === 0 ? (
           <Text className="px-4 py-10 text-center" style={{ color: colors.muted }}>Loading events…</Text>

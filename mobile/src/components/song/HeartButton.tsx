@@ -2,6 +2,7 @@ import { Heart } from "lucide-react-native";
 import { type StyleProp, View, type ViewStyle } from "react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { colors } from "@/theme";
+import { selectionAsync } from "@/lib/haptics";
 import { useSongLike } from "@/components/song/useSongLike";
 import type { PlayerSong } from "@/types/player";
 
@@ -22,10 +23,14 @@ export function HeartButton({
   return (
     <PressableScale
       accessibilityRole="button"
+      accessibilityState={{ selected: liked }}
       accessibilityLabel={liked ? `Remove ${song.title} from Liked Songs` : `Save ${song.title} to Liked Songs`}
       hitSlop={hitSlop}
       disabled={pending}
-      onPress={toggle}
+      onPress={() => {
+        void selectionAsync();
+        toggle();
+      }}
       style={style}
     >
       <View style={{ opacity: pending ? 0.6 : 1 }}>

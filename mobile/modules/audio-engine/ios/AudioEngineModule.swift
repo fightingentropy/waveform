@@ -39,6 +39,16 @@ public class AudioEngineModule: Module {
     private var activeDeck = "A"
     private var configured = false
     private var rampTimer: DispatchSourceTimer?
+    private var artworkTask: URLSessionDataTask?
+    private var artworkGeneration = 0
+    // AVAudioSession category/activation calls can synchronously wait on the
+    // system audio daemon. iOS 27 reports a runtime hang risk when those calls
+    // run on the main thread, so serialize them on a dedicated queue and return
+    // to main only for AVPlayer/UI-facing work.
+    private let audioSessionQueue = DispatchQueue(
+        label: "xyz.streamarena.spotify.audio-session",
+        qos: .userInitiated
+    )
 
     // Keeps a strong reference to the interruption observer target. The @objc
     // selector below stays on the module instance, so it's a NotificationCenter
@@ -237,7 +247,9 @@ public class AudioEngineModule: Module {
 
         AsyncFunction("setActiveDeck") { (deck: String?) in
             if let deckId = deck {
-                self.activeDeck = deckId
+                DispatchQueue.main.async {
+                    self.activeDeck = deckId
+                }
             }
         }
 
@@ -298,6 +310,10 @@ public class AudioEngineModule: Module {
             let artworkUrlValue = artworkUrl
 
             DispatchQueue.main.async {
+                self.artworkGeneration += 1
+                let artworkGeneration = self.artworkGeneration
+                self.artworkTask?.cancel()
+                self.artworkTask = nil
                 var info: [String: Any] = [
                     MPMediaItemPropertyTitle: titleValue,
                     MPMediaItemPropertyArtist: artistValue,
@@ -309,7 +325,7 @@ public class AudioEngineModule: Module {
                     info[MPMediaItemPropertyPlaybackDuration] = durationValue
                 }
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-                self.loadArtwork(artworkUrlValue)
+                self.loadArtwork(artworkUrlValue, generation: artworkGeneration)
             }
         }
 
@@ -354,13 +370,7 @@ public class AudioEngineModule: Module {
     }
 
     private func configureSession() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playback, mode: .default, options: [])
-            try session.setActive(true)
-        } catch {
-            print("[AudioEngine] session activation failed: \(error)")
-        }
+        activateSession()
     }
 
     private func setupDeckObservers(_ deck: Deck) {
@@ -384,16 +394,35 @@ public class AudioEngineModule: Module {
     // MARK: - Playback helpers
 
     private func startPlayback(_ deck: Deck) {
-        let session = AVAudioSession.sharedInstance()
-        if session.category != .playback {
-            configureSession()
-        } else {
-            try? session.setActive(true)
+        activateSession { [weak deck] in
+            guard let deck = deck, deck.wantsPlaying else { return }
+            if deck.desiredRate != 1.0 {
+                deck.player.playImmediately(atRate: deck.desiredRate)
+            } else {
+                deck.player.play()
+            }
         }
-        if deck.desiredRate != 1.0 {
-            deck.player.playImmediately(atRate: deck.desiredRate)
-        } else {
-            deck.player.play()
+    }
+
+    private func activateSession(completion: (() -> Void)? = nil) {
+        audioSessionQueue.async {
+            let session = AVAudioSession.sharedInstance()
+            do {
+                if session.category != .playback ||
+                    session.mode != .default ||
+                    !session.categoryOptions.isEmpty {
+                    try session.setCategory(.playback, mode: .default, options: [])
+                }
+                try session.setActive(true)
+            } catch {
+                // Preserve the previous best-effort behavior: AVPlayer still gets
+                // a chance to start even if explicit session activation fails.
+                print("[AudioEngine] session activation failed: \(error)")
+            }
+            guard let completion = completion else { return }
+            DispatchQueue.main.async {
+                completion()
+            }
         }
     }
 
@@ -416,16 +445,20 @@ public class AudioEngineModule: Module {
         rampTimer = nil
     }
 
-    private func loadArtwork(_ urlString: String?) {
+    private func loadArtwork(_ urlString: String?, generation: Int) {
         guard let urlString = urlString, let url = URL(string: urlString) else { return }
-        URLSession.shared.dataTask(with: url) { data, _, _ in
+        let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let data = data, let image = UIImage(data: data) else { return }
             DispatchQueue.main.async {
+                guard let self = self, generation == self.artworkGeneration else { return }
                 guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
                 info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+                self.artworkTask = nil
             }
-        }.resume()
+        }
+        artworkTask = task
+        task.resume()
     }
 
     private func setupRemoteCommands() {

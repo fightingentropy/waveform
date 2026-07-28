@@ -4,6 +4,7 @@ import { usePlayerStore } from "@/store/player";
 import { markPlaybackEngaged } from "@/audio/publish-gate";
 import { seek } from "@/audio/engine";
 import { resolvePlaybackStartIndex } from "@/lib/playback-continuity";
+import { songKind } from "@/lib/player-song";
 import type { PlayerSong } from "@/types/player";
 
 // High-level playback actions the UI calls. The store is the single source of
@@ -15,9 +16,20 @@ import type { PlayerSong } from "@/types/player";
 // array; reconnecting therefore cannot change order or invalidate shuffle/history.
 function playbackPlan(songs: PlayerSong[], startIndex: number): { songs: PlayerSong[]; startIndex: number } {
   const isDownloaded = useOfflineStore.getState().isDownloaded;
+  const requested = songs[Math.max(0, Math.min(songs.length - 1, Math.floor(startIndex)))];
+  const requestedKind = requested ? songKind(requested) : null;
   return {
     songs,
-    startIndex: resolvePlaybackStartIndex(songs, startIndex, getIsOnline(), (song) => isDownloaded(song.id)),
+    // Mixed feeds can contain music, podcasts, and radio. setQueue filters to the
+    // selected anchor's kind, so an offline fallback must stay in the requested
+    // kind too; otherwise tapping an unavailable song could unexpectedly start a
+    // downloaded podcast later in "Recently played".
+    startIndex: resolvePlaybackStartIndex(
+      songs,
+      startIndex,
+      getIsOnline(),
+      (song) => requestedKind != null && songKind(song) === requestedKind && isDownloaded(song.id),
+    ),
   };
 }
 

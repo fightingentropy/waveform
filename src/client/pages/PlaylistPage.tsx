@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router";
 import { ArrowDown, ArrowUp, Pause, Pencil, Play, Trash2, X } from "lucide-react";
 import {
   useApiData,
@@ -194,7 +194,7 @@ export default function PlaylistPage() {
     {
       playlist: null,
       songs: [],
-      likedSongIds: [],
+      likedSongIds: null,
     },
     {
       enabled: status !== "loading",

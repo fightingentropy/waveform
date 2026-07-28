@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { LinearGradient } from "expo-linear-gradient";
 import { Heart, Pause, Play, Shuffle, Sparkles } from "lucide-react-native";
 import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
@@ -26,12 +25,12 @@ export default function LikedScreen() {
   const { user, status } = useAuth();
   const { data, loading, error } = useApiData<LikedPayload>(
     withAccountScope("/api/liked", user?.id ?? status),
-    { songs: [], likedSongIds: [] },
+    { songs: [], likedSongIds: null },
     { enabled: status === "authenticated", keepPreviousData: true },
   );
   const mergeInitialLikes = useLikesStore((s) => s.mergeInitial);
   useEffect(() => {
-    mergeInitialLikes(data.likedSongIds);
+    if (Array.isArray(data.likedSongIds)) mergeInitialLikes(data.likedSongIds);
   }, [mergeInitialLikes, data.likedSongIds]);
 
   const shuffle = usePlayerStore((s) => s.shuffle);
@@ -60,39 +59,39 @@ export default function LikedScreen() {
     );
   }
 
-  // Spotify-style hero: purple gradient, gradient heart "cover", big title, play +
-  // download. Rendered as the list header so it scrolls with the songs.
+  // Quiet, artwork-free collection header. The material and typography carry the
+  // hierarchy without a decorative color wash.
   const header = (
     <View>
-      <LinearGradient
-        colors={["#5b3aa6", "#2a1c4d", colors.background]}
+      <View
         style={{ paddingTop: insets.top + 52, paddingBottom: 18, paddingHorizontal: 20, alignItems: "center" }}
       >
-        <LinearGradient
-          colors={["#c4b5fd", "#6d28d9"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
+        <View
           style={{
             width: 132,
             height: 132,
-            borderRadius: 6,
+            borderRadius: 28,
+            borderCurve: "continuous",
             alignItems: "center",
             justifyContent: "center",
+            backgroundColor: colors.surface,
+            borderWidth: 0.7,
+            borderColor: colors.hairline,
             shadowColor: "#000",
-            shadowOpacity: 0.45,
-            shadowRadius: 16,
-            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.32,
+            shadowRadius: 18,
+            shadowOffset: { width: 0, height: 10 },
           }}
         >
-          <Heart size={58} color="#fff" fill="#fff" />
-        </LinearGradient>
+          <Heart size={54} color={colors.emerald} fill={colors.emerald} />
+        </View>
         <Text className="mt-5 text-3xl font-extrabold" style={{ color: "#fff" }}>
           Liked Songs
         </Text>
         <Text className="mt-1.5 text-sm font-medium" style={{ color: colors.muted }}>
           {count} {count === 1 ? "song" : "songs"}
         </Text>
-      </LinearGradient>
+      </View>
 
       {/* action row: download · shuffle · play (Spotify layout) */}
       <View

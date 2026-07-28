@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useEffect } from "react";
 import { useApiData, withAccountScope, type LikedPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";

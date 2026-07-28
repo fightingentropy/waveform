@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { encryptSpotByeEnvelope, decryptSpotByeEnvelope, isSpotByeEnvelopeHost } from "../src/lib/spotbye-envelope";
+import { encryptSpotByeEnvelope, isSpotByeEnvelopeHost } from "../src/lib/spotbye-envelope";
 
 describe("spotbye envelope", () => {
   test("host detection", () => {

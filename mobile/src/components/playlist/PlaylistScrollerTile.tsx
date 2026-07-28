@@ -4,9 +4,9 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { colors } from "@/theme";
 
 // Home horizontal-scroller card for an auto-updating playlist (the Discover first
-// row). Tapping opens the playlist detail (it navigates, never toggles audio), so —
-// unlike ScrollerTile — there's no play overlay or active/playing state. Matches
-// ScrollerTile's 152px footprint + cover styling so the rows line up.
+// row). Tapping opens the playlist detail (it navigates, never toggles audio).
+// It shares the artwork-forward material treatment with ScrollerTile without
+// creating a native GlassView for every repeated card.
 export function PlaylistScrollerTile({
   name,
   subtitle,
@@ -24,28 +24,34 @@ export function PlaylistScrollerTile({
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={`Open ${name}`}
-      className="rounded-md p-3"
-      style={{ width: 152 }}
+      style={{ width: 164 }}
     >
       <View
-        className="relative overflow-hidden rounded-[5px]"
         style={{
           aspectRatio: 1,
+          overflow: "hidden",
+          borderRadius: 12,
+          borderCurve: "continuous",
           backgroundColor: colors.card,
-          shadowColor: "#000",
-          shadowOpacity: 0.35,
-          shadowRadius: 14,
-          shadowOffset: { width: 0, height: 10 },
         }}
       >
         <CoverImage src={imageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={imageUrl ?? name} />
       </View>
-      <View className="mt-3">
-        <Text numberOfLines={1} className="text-[16px] font-medium leading-6" style={{ color: "#fff" }}>
+      <View style={{ minHeight: 48, paddingHorizontal: 1, paddingTop: 9 }}>
+        <Text
+          numberOfLines={1}
+          style={{
+            color: colors.foreground,
+            fontSize: 15.5,
+            fontWeight: "700",
+            lineHeight: 21,
+            letterSpacing: -0.15,
+          }}
+        >
           {name}
         </Text>
         {subtitle ? (
-          <Text numberOfLines={1} className="text-[14px] leading-5" style={{ color: "rgba(255,255,255,0.62)" }}>
+          <Text numberOfLines={1} style={{ marginTop: 1, color: "rgba(255,255,255,0.58)", fontSize: 13.5, lineHeight: 19 }}>
             {subtitle}
           </Text>
         ) : null}

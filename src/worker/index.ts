@@ -2,6 +2,10 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
 import { compare } from "bcryptjs";
 import { basename, extname, join } from "node:path";
+import {
+  exclusiveManagedStorageKeys,
+  type AccountMediaRow,
+} from "@/lib/account-deletion";
 import { D1_SCHEMA_STATEMENTS } from "@/lib/db-schema";
 import type { PlaybackStateRow, PlaylistRow, SongRow, UserRow } from "@/lib/db-types";
 import { PLAYBACK_STATE_VERSION, type PlaybackStateSnapshot } from "@/lib/playback-state";
@@ -41,13 +45,18 @@ import {
 import { classifyAudioBytes, classifyAudioContentType, type AudioCodecInfo } from "@/lib/audio-codec-detect";
 import {
   SpotifyPathfinderError,
+  fetchSpotifyArtistCatalog,
   fetchSpotifyAlbumTracks as fetchPathfinderAlbumTracks,
   fetchSpotifyLikedTracks,
+  fetchSpotifyPlaylistCatalogPage,
   fetchSpotifyPlaylistTracks as fetchPathfinderPlaylistTracks,
   fetchSpotifyTrackMetadata,
+  isSpotifyCatalogId,
   scrapeSpotifyTrackIdsFromHtml,
+  searchSpotifyCatalog,
   searchSpotifyTrackId,
-  searchSpotifyTracks,
+  type SpotifyCatalogArtist,
+  type SpotifyCatalogPlaylist,
   type SpotifyBatchTrack,
 } from "@/lib/spotify-pathfinder";
 import { fetchLastFmSimilarTracks } from "@/lib/recommendations";
@@ -208,6 +217,7 @@ const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
+const R2_DELETE_BATCH_SIZE = 1_000;
 const SPOTIFY_REQUEST_TIMEOUT_MS = 20_000;
 const DOWNLOAD_REQUEST_TIMEOUT_MS = 120_000;
 const SERVER_IMPORT_OUTPUT_FORMAT: OutputFormat = "flac";
@@ -808,6 +818,145 @@ async function publicUserForResponse(c: Context<AppEnv>, user: AuthUser) {
   return publicUser(await ensureDefaultProfileImageStored(c, user));
 }
 
+async function listAccountMediaRows(db: SqlTag, userId: string): Promise<AccountMediaRow[]> {
+  return db<AccountMediaRow>`
+    SELECT "image" AS "url"
+    FROM "User"
+    WHERE "id" = ${userId} AND "image" IS NOT NULL
+    UNION ALL
+    SELECT "imageUrl" AS "url"
+    FROM "Song"
+    WHERE "userId" = ${userId} AND "imageUrl" IS NOT NULL
+    UNION ALL
+    SELECT "audioUrl" AS "url"
+    FROM "Song"
+    WHERE "userId" = ${userId} AND "audioUrl" IS NOT NULL
+    UNION ALL
+    SELECT "lyricsUrl" AS "url"
+    FROM "Song"
+    WHERE "userId" = ${userId} AND "lyricsUrl" IS NOT NULL
+    UNION ALL
+    SELECT "imageUrl" AS "url"
+    FROM "Playlist"
+    WHERE "userId" = ${userId} AND "imageUrl" IS NOT NULL
+    UNION ALL
+    SELECT "imageUrl" AS "url"
+    FROM "SongRef"
+    WHERE "userId" = ${userId} AND "imageUrl" IS NOT NULL
+    UNION ALL
+    SELECT "audioUrl" AS "url"
+    FROM "SongRef"
+    WHERE "userId" = ${userId} AND "audioUrl" IS NOT NULL
+    UNION ALL
+    SELECT "lyricsUrl" AS "url"
+    FROM "SongRef"
+    WHERE "userId" = ${userId} AND "lyricsUrl" IS NOT NULL
+  `;
+}
+
+async function listOtherAccountMediaRows(db: SqlTag, userId: string): Promise<AccountMediaRow[]> {
+  return db<AccountMediaRow>`
+    SELECT "image" AS "url"
+    FROM "User"
+    WHERE "id" <> ${userId} AND "image" IS NOT NULL
+    UNION ALL
+    SELECT "imageUrl" AS "url"
+    FROM "Song"
+    WHERE "userId" <> ${userId} AND "imageUrl" IS NOT NULL
+    UNION ALL
+    SELECT "audioUrl" AS "url"
+    FROM "Song"
+    WHERE "userId" <> ${userId} AND "audioUrl" IS NOT NULL
+    UNION ALL
+    SELECT "lyricsUrl" AS "url"
+    FROM "Song"
+    WHERE "userId" <> ${userId} AND "lyricsUrl" IS NOT NULL
+    UNION ALL
+    SELECT "imageUrl" AS "url"
+    FROM "Playlist"
+    WHERE "userId" <> ${userId} AND "imageUrl" IS NOT NULL
+    UNION ALL
+    SELECT "imageUrl" AS "url"
+    FROM "SongRef"
+    WHERE "userId" <> ${userId} AND "imageUrl" IS NOT NULL
+    UNION ALL
+    SELECT "audioUrl" AS "url"
+    FROM "SongRef"
+    WHERE "userId" <> ${userId} AND "audioUrl" IS NOT NULL
+    UNION ALL
+    SELECT "lyricsUrl" AS "url"
+    FROM "SongRef"
+    WHERE "userId" <> ${userId} AND "lyricsUrl" IS NOT NULL
+  `;
+}
+
+async function deleteAccountRows(
+  env: CloudflareEnv,
+  userId: string,
+  email: string,
+  deletionRateLimitKey: string,
+): Promise<void> {
+  // D1 batch() is atomic. Most tables also have ON DELETE CASCADE, but the
+  // explicit ordered deletes cover legacy schemas plus PlaybackState/SongRef,
+  // which intentionally have no User foreign key.
+  await env.DB.batch([
+    env.DB.prepare(
+      `DELETE FROM "PlaylistSong"
+       WHERE "playlistId" IN (SELECT "id" FROM "Playlist" WHERE "userId" = ?)
+          OR "songId" IN (SELECT "id" FROM "Song" WHERE "userId" = ?)
+          OR "songId" IN (SELECT "id" FROM "SongRef" WHERE "userId" = ?)`,
+    ).bind(userId, userId, userId),
+    env.DB.prepare(
+      `DELETE FROM "Like"
+       WHERE "userId" = ?
+          OR "songId" IN (SELECT "id" FROM "Song" WHERE "userId" = ?)`,
+    ).bind(userId, userId),
+    env.DB.prepare(`DELETE FROM "PlaybackState" WHERE "userId" = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM "PlayEvent" WHERE "userId" = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM "LikeBackfill" WHERE "userId" = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM "SongRef" WHERE "userId" = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM "Playlist" WHERE "userId" = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM "Song" WHERE "userId" = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM "Account" WHERE "userId" = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM "Session" WHERE "userId" = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM "VerificationToken" WHERE "identifier" = ?`).bind(email),
+    env.DB.prepare(`DELETE FROM "RateLimit" WHERE "key" = ?`).bind(deletionRateLimitKey),
+    env.DB.prepare(`DELETE FROM "User" WHERE "id" = ?`).bind(userId),
+  ]);
+}
+
+async function deleteAccountMedia(env: CloudflareEnv, userId: string, keys: string[]): Promise<void> {
+  const allKeys = new Set(keys);
+  // Older avatars become unreferenced each time a new one is uploaded. They
+  // cannot be recovered from D1, so enumerate the account-owned namespace too.
+  // Song media is not user-namespaced and remains restricted to the reference
+  // snapshot above to avoid deleting a file another account still uses.
+  const profilePrefix = `users/${sanitizePathSegment(userId)}/profile/`;
+  let cursor: string | undefined;
+  try {
+    do {
+      const page = await env.MEDIA.list({
+        prefix: profilePrefix,
+        cursor,
+        limit: R2_DELETE_BATCH_SIZE,
+      });
+      for (const object of page.objects) allKeys.add(object.key);
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+  } catch (error) {
+    console.error(
+      "[account deletion] profile media listing failed",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  const pendingKeys = [...allKeys];
+  for (let offset = 0; offset < pendingKeys.length; offset += R2_DELETE_BATCH_SIZE) {
+    const batch = pendingKeys.slice(offset, offset + R2_DELETE_BATCH_SIZE);
+    if (batch.length > 0) await env.MEDIA.delete(batch);
+  }
+}
+
 function defaultUserImage(_email: string, _name: string | null): string | null {
   // Name-based identity heuristics have been dropped; everyone gets the same
   // generic default avatar (resolved by the normal fallback paths).
@@ -1048,7 +1197,7 @@ async function fetchJsonObject(url: string, timeoutMs = SPOTIFY_REQUEST_TIMEOUT_
   const maxAttempts = 3;
   let lastStatus = 0;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let response: Response | null = null;
+    let response: Response | null;
     try {
       response = await fetchWithTimeout(url, timeoutMs);
     } catch {
@@ -3394,7 +3543,71 @@ app.post("/api/auth/signout", async (c) => {
     `;
   }
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
-  return new Response(null, { status: 204 });
+  return c.body(null, 204);
+});
+
+app.delete("/api/account", async (c) => {
+  const user = requireUser(c.get("user"));
+  if (user.id === LOCAL_MAC_MINI_AUTH_USER.id) {
+    return jsonError("The local library owner cannot be deleted from preview mode", 403);
+  }
+
+  const db = c.get("db");
+  const limited = await rateLimit(db, c.req.raw, `account-delete:${user.id}`, 5, 10 * 60 * 1000);
+  if (!limited.allowed) {
+    return c.json({ error: "Too many requests" }, { status: 429, headers: limited.headers });
+  }
+
+  const body = await readJson<{ password?: unknown; confirmation?: unknown }>(c.req.raw);
+  const password = toStringValue(body?.password);
+  const confirmation = toStringValue(body?.confirmation);
+  if (confirmation !== "DELETE") {
+    return jsonError('Type "DELETE" to confirm account deletion', 400);
+  }
+  if (!password) return jsonError("Password is required", 400);
+
+  const rows = await db<{ id: string; email: string; passwordHash: string | null }>`
+    SELECT "id", "email", "passwordHash"
+    FROM "User"
+    WHERE "id" = ${user.id}
+    LIMIT 1
+  `;
+  const account = rows[0];
+  // Preserve the sign-in endpoint's constant-cost failure behavior.
+  const passwordMatches = await compare(password, account?.passwordHash || DUMMY_PASSWORD_HASH);
+  if (!account?.passwordHash || !passwordMatches) {
+    return jsonError("Password is incorrect", 401);
+  }
+
+  // Snapshot managed media URLs before deleting their rows. A key referenced by
+  // another account is retained; arbitrary/external URLs are never passed to R2.
+  const [accountMedia, otherAccountMedia] = await Promise.all([
+    listAccountMediaRows(db, user.id),
+    listOtherAccountMediaRows(db, user.id),
+  ]);
+  const mediaKeys = exclusiveManagedStorageKeys(accountMedia, otherAccountMedia);
+
+  await deleteAccountRows(
+    c.env,
+    user.id,
+    account.email,
+    `account-delete:${user.id}:${limited.ip}`,
+  );
+  deleteCookie(c, SESSION_COOKIE, { path: "/" });
+
+  // Database deletion is the compliance-critical operation and has completed
+  // atomically. Object cleanup is bounded, idempotent, and allowed to finish
+  // after the response; a transient R2 failure cannot resurrect the account.
+  c.executionCtx.waitUntil(
+    deleteAccountMedia(c.env, user.id, mediaKeys).catch((error) => {
+      console.error(
+        "[account deletion] media cleanup failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }),
+  );
+
+  return c.body(null, 204);
 });
 
 app.get("/api/auth/verify/:token?", async (c) => {
@@ -3449,7 +3662,7 @@ app.post("/api/profile/image", async (c) => {
   const user = requireUser(c.get("user"));
   let imageBytes: ArrayBuffer;
   let imageName = "profile.jpg";
-  let imageType = "";
+  let imageType: string;
 
   if ((c.req.header("content-type") || "").toLowerCase().startsWith("application/json")) {
     // The native app's HTTP bridge can't send multipart bodies reliably, so it
@@ -3609,7 +3822,14 @@ async function fetchDiscoverTracksForPlaylist(
   limit: number,
 ): Promise<DiscoverTrendingTrack[]> {
   try {
-    const { tracks } = await fetchPathfinderPlaylistTracks(playlistId, envString(env, "SPOTIFY_SP_DC"), limit);
+    // Catalog-page metadata + contents are fetched in parallel and the outer
+    // deadline bounds token acquisition too. The legacy playlist helper fetched
+    // those two surfaces serially, which could exceed the mobile 15s budget on a
+    // cold Top 50 open.
+    const { tracks } = await withProviderDeadline(
+      fetchSpotifyPlaylistCatalogPage(playlistId, envString(env, "SPOTIFY_SP_DC") || undefined, 0, limit),
+      12_000,
+    );
     return tracks
       .filter((track) => track.id && track.name && track.artists.length > 0)
       .map((track) => ({
@@ -3634,19 +3854,14 @@ function fetchTop50DiscoverTracks(env: CloudflareEnv): Promise<DiscoverTrendingT
 
 type DiscoverStagedTrack = DiscoverTrendingTrack & { staged: boolean; audioId?: string; audioUrl?: string };
 
-// Ask the Mac-mini which of these tracks are already staged (instantly playable
-// from .discover) and fold that status into each track. Best-effort: on any
-// failure (or when staging isn't configured) every track is reported unstaged,
-// which just means a tap materializes it on demand. Shared by the Discover row
-// and curated-playlist detail views.
-async function markDiscoverStaged(
+async function readDiscoverStagingStatus(
   env: CloudflareEnv,
-  tracks: DiscoverTrendingTrack[],
-): Promise<DiscoverStagedTrack[]> {
+  timeoutMs = 4_000,
+): Promise<Map<string, DiscoverStagingStatusEntry>> {
   const staged = new Map<string, DiscoverStagingStatusEntry>();
   if (isMacMiniMusicConfigured(env)) {
     try {
-      const res = await macMiniDiscoverFetch(env, "/api/discover/staging", "GET", undefined, 4_000);
+      const res = await macMiniDiscoverFetch(env, "/api/discover/staging", "GET", undefined, timeoutMs);
       if (res.ok) {
         const body = (await res.json()) as { entries?: DiscoverStagingStatusEntry[] };
         for (const entry of body.entries ?? []) staged.set(entry.trackId, entry);
@@ -3655,12 +3870,32 @@ async function markDiscoverStaged(
       // Staging status is best-effort; fall back to "not staged".
     }
   }
+  return staged;
+}
+
+function applyDiscoverStaging(
+  tracks: DiscoverTrendingTrack[],
+  staged: Map<string, DiscoverStagingStatusEntry>,
+): DiscoverStagedTrack[] {
   return tracks.map((track) => {
     const ready = staged.get(track.id);
     return ready
       ? { ...track, staged: true, audioId: ready.id, audioUrl: ready.audioUrl }
       : { ...track, staged: false };
   });
+}
+
+// Ask the Mac-mini which of these tracks are already staged (instantly playable
+// from .discover) and fold that status into each track. Best-effort: on any
+// failure (or when staging isn't configured) every track is reported unstaged,
+// which just means a tap materializes it on demand. Shared by the Discover row
+// and curated-playlist detail views.
+async function markDiscoverStaged(
+  env: CloudflareEnv,
+  tracks: DiscoverTrendingTrack[],
+  timeoutMs = 4_000,
+): Promise<DiscoverStagedTrack[]> {
+  return applyDiscoverStaging(tracks, await readDiscoverStagingStatus(env, timeoutMs));
 }
 
 // The YouTube Music auto-updating "Discover Mix" surfaced as a Home playlist card —
@@ -3943,7 +4178,7 @@ app.post("/api/smart-shuffle/recommend", async (c) => {
   for (const seed of seeds) excludeKeys.add(smartShuffleKey(seed.title, seed.artist));
   for (const entry of exclude) excludeKeys.add(smartShuffleKey(entry.title, entry.artist));
 
-  let tracks: DiscoverStagedTrack[] = [];
+  let tracks: DiscoverStagedTrack[];
   try {
     const candidates = (await fetchLastFmSimilarTracks(seeds, apiKey, limit)).filter(
       (candidate) => !excludeKeys.has(smartShuffleKey(candidate.title, candidate.artist)),
@@ -4009,54 +4244,238 @@ app.get("/api/search-index", async (c) => {
   });
 });
 
-// Catalog search: find songs that AREN'T in the library yet, via Spotify. The
-// library search (/api/search-index, filtered on-device) covers what you own; this
-// covers everything else. Each result is a Discover-style placeholder keyed by its
-// Spotify track id, so the existing staging pipeline handles it for free — tapping
-// it previews a cheap YouTube Opus (preview: true, resolver-independent), and a
-// like / add-to-playlist promotes it to lossless FLAC (keeping the library FLAC-only).
-// Auth-gated: it spends the owner's Spotify search surface + the staging infra.
+type YouTubeCatalogPlaylist = {
+  kind: "playlist";
+  provider: "youtube";
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  ownerName?: string;
+  externalUrl: string;
+};
+
+type CatalogProviderStatus = {
+  spotify: "ok" | "unavailable";
+  youtube: "ok" | "not_configured" | "unavailable";
+};
+
+async function withProviderDeadline<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new SpotifyPathfinderError("Provider request timed out", 504)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+export function parseYouTubePlaylistSearchPayload(payload: unknown): YouTubeCatalogPlaylist[] {
+  const rows = Array.isArray(toObject(payload)?.playlists) ? toObject(payload)?.playlists : [];
+  const playlists: YouTubeCatalogPlaylist[] = [];
+  const seen = new Set<string>();
+  for (const row of rows as unknown[]) {
+    const item = toObject(row);
+    const id = toStringValue(item?.id);
+    const name = toStringValue(item?.name);
+    if (!/^[A-Za-z0-9_-]{6,64}$/.test(id) || !name || seen.has(id)) continue;
+    const image = parseHttpUrl(toStringValue(item?.imageUrl));
+    const imageUrl = image?.protocol === "https:" ? image.toString() : null;
+    const ownerName = toStringValue(item?.ownerName);
+    seen.add(id);
+    playlists.push({
+      kind: "playlist",
+      provider: "youtube",
+      id,
+      name,
+      imageUrl,
+      ...(ownerName ? { ownerName } : {}),
+      externalUrl: `https://music.youtube.com/playlist?list=${encodeURIComponent(id)}`,
+    });
+    if (playlists.length >= 8) break;
+  }
+  return playlists;
+}
+
+function spotifyBatchTracksToCatalogSongs(tracks: SpotifyBatchTrack[]): DiscoverTrendingTrack[] {
+  return tracks
+    .filter((track) => isSpotifyCatalogId(track.id) && track.name && track.artists.length > 0)
+    .map((track) => ({
+      id: track.id,
+      title: track.name,
+      artist: track.artists.join(", "),
+      album: track.album || "",
+      imageUrl: track.imageUrl || "/apple-icon.png",
+      durationMs: typeof track.durationMs === "number" && track.durationMs > 0 ? track.durationMs : null,
+      spotifyUrl: `https://open.spotify.com/track/${track.id}`,
+    }));
+}
+
+async function searchYouTubeCatalogPlaylists(
+  env: CloudflareEnv,
+  query: string,
+): Promise<{ status: CatalogProviderStatus["youtube"]; playlists: YouTubeCatalogPlaylist[] }> {
+  if (!canUseMacMiniProxy(env)) return { status: "not_configured", playlists: [] };
+  try {
+    const response = await macMiniDiscoverFetch(
+      env,
+      `/api/youtube/search/playlists?q=${encodeURIComponent(query)}`,
+      "GET",
+      undefined,
+      6_000,
+    );
+    if (response.status === 404 || response.status === 501) {
+      return { status: "not_configured", playlists: [] };
+    }
+    if (!response.ok) return { status: "unavailable", playlists: [] };
+    return {
+      status: "ok",
+      playlists: parseYouTubePlaylistSearchPayload(await response.json().catch(() => null)),
+    };
+  } catch {
+    return { status: "unavailable", playlists: [] };
+  }
+}
+
+// Mixed catalog search. `results` remains the backward-compatible song array.
+// Spotify playlists/artists and YouTube playlists are provider-authored metadata;
+// failures are reported per provider rather than masquerading as "no matches".
 app.get("/api/search/catalog", async (c) => {
   if (!c.get("user")) return jsonError("Unauthorized", 401);
-  const q = (c.req.query("q") || "").trim();
-  if (q.length < 2) return jsonCached(c, { results: [] }, { cacheControl: "private, max-age=30" });
-
-  let results: PlayerSong[] = [];
-  try {
-    const spotifyCookie = envString(c.env, "SPOTIFY_SP_DC");
-    const hits = await searchSpotifyTracks(q, spotifyCookie || undefined, 24);
-    // Dedupe by id AND by normalized title+artist: Spotify lists the same recording
-    // across many releases (single, album, deluxe, sped-up), so collapse those to the
-    // first (most-relevant) copy. A genuinely different version (Remix, edit) has a
-    // different title and survives. Keeps the list clean and avoids prefetch staging
-    // several copies of one song.
-    const seenIds = new Set<string>();
-    const seenKeys = new Set<string>();
-    const resolved: DiscoverTrendingTrack[] = [];
-    for (const hit of hits) {
-      if (!hit.id || seenIds.has(hit.id)) continue;
-      const key = smartShuffleKey(hit.name, hit.artists.join(", "));
-      if (seenKeys.has(key)) continue;
-      seenIds.add(hit.id);
-      seenKeys.add(key);
-      resolved.push({
-        id: hit.id,
-        title: hit.name,
-        artist: hit.artists.join(", "),
-        album: hit.album || "",
-        imageUrl: hit.imageUrl || "/apple-icon.png",
-        durationMs: typeof hit.durationMs === "number" && hit.durationMs > 0 ? hit.durationMs : null,
-        spotifyUrl: `https://open.spotify.com/track/${hit.id}`,
-      });
-    }
-    // Flag already-staged tracks so a previously-previewed one plays instantly.
-    const staged = await markDiscoverStaged(c.env, resolved);
-    results = staged.map((track) => ({ ...discoverStagedToPlayerSong(track), preview: true }));
-  } catch {
-    results = [];
+  const q = (c.req.query("q") || "").trim().slice(0, 100);
+  if (q.length < 2) {
+    const providers: CatalogProviderStatus = {
+      spotify: "ok",
+      youtube: canUseMacMiniProxy(c.env) ? "ok" : "not_configured",
+    };
+    return jsonCached(c, { query: q, results: [], playlists: [], artists: [], providers }, {
+      cacheControl: "private, max-age=30",
+    });
   }
 
-  return jsonCached(c, { results }, { cacheControl: "private, max-age=60, stale-while-revalidate=120" });
+  const stagingStatus = readDiscoverStagingStatus(c.env, 4_000);
+  const [spotify, youtube, stagedById] = await Promise.all([
+    (async () => {
+      try {
+        return {
+          status: "ok" as const,
+          catalog: await withProviderDeadline(
+            searchSpotifyCatalog(q, envString(c.env, "SPOTIFY_SP_DC") || undefined, {
+              tracks: 24,
+              playlists: 8,
+              artists: 8,
+            }),
+            6_000,
+          ),
+        };
+      } catch {
+        return {
+          status: "unavailable" as const,
+          catalog: { tracks: [], playlists: [], artists: [] },
+        };
+      }
+    })(),
+    searchYouTubeCatalogPlaylists(c.env, q),
+    stagingStatus,
+  ]);
+
+  const resolved = spotifyBatchTracksToCatalogSongs(spotify.catalog.tracks);
+  const seenKeys = new Set<string>();
+  const uniqueTracks = resolved.filter((track) => {
+    const key = smartShuffleKey(track.title, track.artist);
+    if (seenKeys.has(key)) return false;
+    seenKeys.add(key);
+    return true;
+  });
+  const staged = applyDiscoverStaging(uniqueTracks, stagedById);
+  const results: PlayerSong[] = staged.map((track) => ({ ...discoverStagedToPlayerSong(track), preview: true }));
+  const playlists: Array<SpotifyCatalogPlaylist | YouTubeCatalogPlaylist> = [
+    ...spotify.catalog.playlists,
+    ...youtube.playlists,
+  ];
+  const artists: SpotifyCatalogArtist[] = spotify.catalog.artists;
+  const providers: CatalogProviderStatus = {
+    spotify: spotify.status,
+    youtube: youtube.status,
+  };
+
+  return jsonCached(c, { query: q, results, playlists, artists, providers }, {
+    cacheControl: "private, max-age=60, stale-while-revalidate=120",
+  });
+});
+
+app.get("/api/catalog/spotify/playlists/:id", async (c) => {
+  if (!c.get("user")) return jsonError("Unauthorized", 401);
+  const id = c.req.param("id");
+  if (!isSpotifyCatalogId(id)) return jsonError("Invalid Spotify playlist ID", 400);
+  const offset = Math.min(10_000, Math.max(0, Math.floor(toNumberValue(c.req.query("offset")) ?? 0)));
+  const limit = Math.min(100, Math.max(1, Math.floor(toNumberValue(c.req.query("limit")) ?? 100)));
+  try {
+    const spotifyCookie = envString(c.env, "SPOTIFY_SP_DC");
+    const stagingStatus = readDiscoverStagingStatus(c.env, 6_000);
+    const catalog = await withProviderDeadline(
+      fetchSpotifyPlaylistCatalogPage(id, spotifyCookie || undefined, offset, limit),
+      12_000,
+    );
+    const tracks = applyDiscoverStaging(
+      spotifyBatchTracksToCatalogSongs(catalog.tracks),
+      await stagingStatus,
+    );
+    return jsonCached(
+      c,
+      {
+        kind: "catalog",
+        provider: "spotify",
+        playlist: { ...catalog.playlist, editable: false },
+        songs: tracks.map((track) => ({ ...discoverStagedToPlayerSong(track), preview: true })),
+        // Catalog playlists do not own the caller's complete like set.
+        likedSongIds: null,
+        page: {
+          offset: catalog.offset,
+          limit,
+          totalCount: catalog.totalCount,
+          nextOffset: catalog.nextOffset,
+        },
+      },
+      { cacheControl: "private, max-age=60, stale-while-revalidate=300" },
+    );
+  } catch (error) {
+    if (error instanceof SpotifyPathfinderError) return jsonError(error.message, error.status);
+    return jsonError("Could not load Spotify playlist", 502);
+  }
+});
+
+app.get("/api/catalog/spotify/artists/:id", async (c) => {
+  if (!c.get("user")) return jsonError("Unauthorized", 401);
+  const id = c.req.param("id");
+  if (!isSpotifyCatalogId(id)) return jsonError("Invalid Spotify artist ID", 400);
+  try {
+    const stagingStatus = readDiscoverStagingStatus(c.env, 6_000);
+    const catalog = await withProviderDeadline(
+      fetchSpotifyArtistCatalog(id, envString(c.env, "SPOTIFY_SP_DC") || undefined, "US"),
+      12_000,
+    );
+    const tracks = applyDiscoverStaging(
+      spotifyBatchTracksToCatalogSongs(catalog.tracks),
+      await stagingStatus,
+    );
+    return jsonCached(
+      c,
+      {
+        provider: "spotify",
+        market: "US",
+        artist: catalog.artist,
+        songs: tracks.map((track) => ({ ...discoverStagedToPlayerSong(track), preview: true })),
+      },
+      { cacheControl: "private, max-age=300, stale-while-revalidate=900" },
+    );
+  } catch (error) {
+    if (error instanceof SpotifyPathfinderError) return jsonError(error.message, error.status);
+    return jsonError("Could not load Spotify artist", 502);
+  }
 });
 
 app.get("/api/library", async (c) => {
@@ -4634,7 +5053,14 @@ app.get("/api/playlist/:id", async (c) => {
   // screen renders + plays it like any other playlist (lossless, via discover
   // staging). Public read-through (the global chart), before the auth gate.
   if (id === "discover-top50") {
-    const tracks = await markDiscoverStaged(c.env, await fetchTop50DiscoverTracks(c.env));
+    // Spotify and the mini staging manifest are independent reads. Start both
+    // immediately so the 4s best-effort staging lookup never stacks on top of
+    // the bounded Spotify page fetch.
+    const [discover, stagedById] = await Promise.all([
+      fetchTop50DiscoverTracks(c.env),
+      readDiscoverStagingStatus(c.env, 4_000),
+    ]);
+    const tracks = applyDiscoverStaging(discover, stagedById);
     return jsonCached(
       c,
       {
@@ -4646,7 +5072,7 @@ app.get("/api/playlist/:id", async (c) => {
           description: "The most-played tracks globally, refreshed daily.",
         },
         songs: tracks.map(discoverStagedToPlayerSong),
-        likedSongIds: [],
+        likedSongIds: null,
       },
       { cacheControl: "private, max-age=30, stale-while-revalidate=300" },
     );
@@ -4668,7 +5094,7 @@ app.get("/api/playlist/:id", async (c) => {
       `/api/youtube/playlists/${encodeURIComponent(listId)}`,
       "GET",
       undefined,
-      60_000,
+      20_000,
     );
     return new Response(await res.text(), { status: res.status, headers: { "content-type": "application/json" } });
   }
@@ -4979,12 +5405,12 @@ app.post("/api/songs", async (c) => {
   const user = requireUser(c.get("user"));
   const db = c.get("db");
   const contentType = c.req.header("content-type") || "";
-  let title = "";
-  let artist = "";
+  let title: string;
+  let artist: string;
   let album = "";
   let duration: number | null = null;
-  let imageUrl = "/apple-icon.png";
-  let audioUrl = "";
+  let imageUrl: string;
+  let audioUrl: string;
   let lyricsText = "";
   const audioBitDepth: number | null = null;
   const audioSampleRate: number | null = null;

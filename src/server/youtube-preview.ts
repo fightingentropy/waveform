@@ -67,6 +67,155 @@ export const DEFAULT_YOUTUBE_PREVIEW_CONFIG: YouTubePreviewConfig = {
   format: "774/251/250/249/bestaudio[acodec=opus]/bestaudio",
 };
 
+export type YouTubePlaylistSearchResult = {
+  id: string;
+  name: string;
+  imageUrl?: string;
+  ownerName?: string;
+};
+
+export type YouTubePlaylistSearchRawEntry = {
+  id?: unknown;
+  title?: unknown;
+  url?: unknown;
+  webpage_url?: unknown;
+  channel?: unknown;
+  uploader?: unknown;
+  thumbnails?: unknown;
+};
+
+const YOUTUBE_PLAYLIST_SEARCH_MIN_QUERY_LENGTH = 2;
+const YOUTUBE_PLAYLIST_SEARCH_MAX_QUERY_LENGTH = 100;
+const YOUTUBE_PLAYLIST_SEARCH_MAX_RESULTS = 12;
+// YouTube's playlist-only search filter. URLSearchParams escapes the percent
+// signs once more when serializing, producing the working `EgIQAw%253D%253D`
+// query value used by youtube.com.
+const YOUTUBE_PLAYLIST_SEARCH_FILTER = "EgIQAw%3D%3D";
+const YOUTUBE_PLAYLIST_ID = /^[A-Za-z0-9_-]{6,64}$/;
+const YOUTUBE_PAGE_HOSTS = new Set(["youtube.com", "www.youtube.com", "music.youtube.com", "m.youtube.com"]);
+
+export function normalizeYouTubePlaylistSearchQuery(value: string): string | null {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || code === 127) return null;
+  }
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (
+    normalized.length < YOUTUBE_PLAYLIST_SEARCH_MIN_QUERY_LENGTH ||
+    normalized.length > YOUTUBE_PLAYLIST_SEARCH_MAX_QUERY_LENGTH
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+export function isValidYouTubePlaylistId(value: string): boolean {
+  return YOUTUBE_PLAYLIST_ID.test(value);
+}
+
+export function buildYouTubePlaylistSearchUrl(query: string): string {
+  const normalized = normalizeYouTubePlaylistSearchQuery(query);
+  if (!normalized) throw new TypeError("YouTube playlist search query must be 2-100 characters");
+  const url = new URL("https://www.youtube.com/results");
+  url.searchParams.set("search_query", normalized);
+  url.searchParams.set("sp", YOUTUBE_PLAYLIST_SEARCH_FILTER);
+  return url.toString();
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function playlistIdFromSearchEntry(entry: YouTubePlaylistSearchRawEntry): string | null {
+  const declaredId = stringValue(entry.id);
+  for (const candidate of [entry.url, entry.webpage_url]) {
+    const raw = stringValue(candidate);
+    if (!raw) continue;
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol !== "https:" || !YOUTUBE_PAGE_HOSTS.has(parsed.hostname.toLowerCase())) continue;
+      if (parsed.pathname !== "/playlist") continue;
+      const id = parsed.searchParams.get("list")?.trim() || "";
+      // The playlist URL is authoritative. If yt-dlp also supplied an id, the two
+      // must agree; this keeps malformed/mixed video results out of the endpoint.
+      if (!isValidYouTubePlaylistId(id) || (declaredId && declaredId !== id)) continue;
+      return id;
+    } catch {
+      // Ignore malformed result URLs.
+    }
+  }
+  return null;
+}
+
+function trustedYouTubeThumbnail(value: unknown): string | null {
+  const raw = stringValue(value);
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "https:") return null;
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      hostname === "i.ytimg.com" ||
+      hostname.endsWith(".ytimg.com") ||
+      hostname === "yt3.ggpht.com" ||
+      hostname.endsWith(".googleusercontent.com")
+    ) {
+      return parsed.toString();
+    }
+  } catch {
+    // Ignore malformed thumbnails.
+  }
+  return null;
+}
+
+function bestPlaylistSearchThumbnail(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const candidates = value
+    .map((thumbnail, index) => {
+      if (!thumbnail || typeof thumbnail !== "object" || Array.isArray(thumbnail)) return null;
+      const object = thumbnail as Record<string, unknown>;
+      const url = trustedYouTubeThumbnail(object.url);
+      if (!url) return null;
+      const width = typeof object.width === "number" && Number.isFinite(object.width) ? object.width : 0;
+      const height = typeof object.height === "number" && Number.isFinite(object.height) ? object.height : 0;
+      return { url, area: width * height, index };
+    })
+    .filter((candidate): candidate is { url: string; area: number; index: number } => candidate !== null)
+    .sort((left, right) => right.area - left.area || right.index - left.index);
+  return candidates[0]?.url;
+}
+
+export function parseYouTubePlaylistSearchEntries(
+  entries: unknown,
+  limit = 8,
+): YouTubePlaylistSearchResult[] {
+  if (!Array.isArray(entries)) return [];
+  const boundedLimit = Math.max(1, Math.min(YOUTUBE_PLAYLIST_SEARCH_MAX_RESULTS, Math.floor(limit) || 1));
+  const seen = new Set<string>();
+  const playlists: YouTubePlaylistSearchResult[] = [];
+
+  for (const rawEntry of entries) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) continue;
+    const entry = rawEntry as YouTubePlaylistSearchRawEntry;
+    const id = playlistIdFromSearchEntry(entry);
+    const name = stringValue(entry.title).slice(0, 300);
+    if (!id || !name || seen.has(id)) continue;
+    seen.add(id);
+
+    const imageUrl = bestPlaylistSearchThumbnail(entry.thumbnails);
+    const ownerName = (stringValue(entry.channel) || stringValue(entry.uploader)).slice(0, 200);
+    playlists.push({
+      id,
+      name,
+      ...(imageUrl ? { imageUrl } : {}),
+      ...(ownerName ? { ownerName } : {}),
+    });
+    if (playlists.length >= boundedLimit) break;
+  }
+
+  return playlists;
+}
+
 // Build the subprocess env, prepending config.extraPath to PATH so yt-dlp can
 // locate deno (JS challenge solver) and ffmpeg under launchd's minimal PATH.
 function execEnv(config: YouTubePreviewConfig): NodeJS.ProcessEnv | undefined {
@@ -204,6 +353,36 @@ export async function searchYouTube(
   );
   const parsed = JSON.parse(stdout) as { entries?: YouTubeSearchEntry[] };
   return Array.isArray(parsed.entries) ? parsed.entries : [];
+}
+
+export async function searchYouTubePlaylists(
+  query: string,
+  config: YouTubePreviewConfig = DEFAULT_YOUTUBE_PREVIEW_CONFIG,
+  limit = 8,
+): Promise<YouTubePlaylistSearchResult[]> {
+  const normalized = normalizeYouTubePlaylistSearchQuery(query);
+  if (!normalized) throw new TypeError("YouTube playlist search query must be 2-100 characters");
+  const boundedLimit = Math.max(1, Math.min(YOUTUBE_PLAYLIST_SEARCH_MAX_RESULTS, Math.floor(limit) || 1));
+  const args = [
+    "--no-warnings",
+    "--flat-playlist",
+    "--dump-single-json",
+    "--playlist-end",
+    String(boundedLimit),
+    "--socket-timeout",
+    "8",
+    "--retries",
+    "1",
+  ];
+  if (config.cookiesFile) args.push("--cookies", config.cookiesFile);
+  args.push(buildYouTubePlaylistSearchUrl(normalized));
+  const { stdout } = await execFileAsync(config.ytDlpPath, args, {
+    maxBuffer: 8 * 1024 * 1024,
+    timeout: 10_000,
+    env: execEnv(config),
+  });
+  const parsed = JSON.parse(stdout) as { entries?: unknown };
+  return parseYouTubePlaylistSearchEntries(parsed.entries, boundedLimit);
 }
 
 export async function resolveYouTubePreviewMatch(

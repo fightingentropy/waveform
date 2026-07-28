@@ -36,6 +36,14 @@ export function isPersistablePlayerSong(song: PlayerSong | null | undefined): so
   // resumes. Covers both placeholders ("discover:" id) and staged copies.
   if (song.discoverTrackId || song.id.startsWith("discover:")) return false;
   if (song.id.startsWith("browser-local:") || song.id.startsWith("picked-file:")) return false;
+  if (
+    song.source === "offline" ||
+    song.source === "browser-local" ||
+    song.source === "picked-file" ||
+    /^(file|blob|data):/i.test(song.audioUrl)
+  ) {
+    return false;
+  }
   return true;
 }
 

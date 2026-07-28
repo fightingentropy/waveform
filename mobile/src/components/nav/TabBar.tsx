@@ -1,21 +1,19 @@
 import { Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { usePathname, useRouter, type Href } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CreateTabIcon, HomeTabIcon, LibraryTabIcon, SearchTabIcon } from "@/components/icons/TabIcons";
 import { selectionAsync } from "@/lib/haptics";
 import { useUiStore } from "@/store/ui";
 import { usePrefsStore } from "@/store/prefs";
-import { colors, layout } from "@/theme";
+import { layout } from "@/theme";
 
 type TabKey = "index" | "search" | "library" | "create";
 
 const TABS: { key: TabKey; label: string; path: Href; Icon: typeof HomeTabIcon }[] = [
   { key: "index", label: "Home", path: "/", Icon: HomeTabIcon },
   { key: "search", label: "Search", path: "/search", Icon: SearchTabIcon },
-  { key: "library", label: "Your Library", path: "/library", Icon: LibraryTabIcon },
+  { key: "library", label: "Library", path: "/library", Icon: LibraryTabIcon },
   // Create opens the create-menu sheet instead of navigating (handled in onPress).
   { key: "create", label: "Create", path: "/", Icon: CreateTabIcon },
 ];
@@ -32,8 +30,8 @@ function activeTab(pathname: string): TabKey {
   return "library";
 }
 
-// Mirrors src/components/MobileNav.tsx: 3-tab grid, filled icon when active,
-// gradient-to-top black backdrop + blur. Mounted once in the root layout (not via the
+// Mirrors src/components/MobileNav.tsx: compact native icons and material selection.
+// Mounted once in the root layout (not via the
 // Tabs navigator's tabBar prop) so it persists on pushed stack screens too — liked,
 // playlist, downloads, … — not just the tabs. Driven by the router: navigate() unwinds
 // any pushed screen and switches tab in one step.
@@ -51,50 +49,87 @@ export function TabBar() {
   const tabs = showCreateTab ? TABS : TABS.filter((tab) => tab.key !== "create");
 
   return (
-    <View style={{ position: "absolute", left: 0, right: 0, bottom: 0 }}>
-      <LinearGradient
-        colors={["rgba(0,0,0,0.38)", "rgba(0,0,0,0.85)", "#000"]}
-        style={{ paddingBottom: insets.bottom }}
+    <View
+      style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: layout.mobileNavHeight + insets.bottom,
+        zIndex: 90,
+        backgroundColor: "rgba(6,6,7,0.98)",
+        borderTopWidth: 0.5,
+        borderTopColor: "rgba(255,255,255,0.11)",
+      }}
+    >
+      <View
+        style={{
+          height: layout.mobileNavHeight,
+          flexDirection: "row",
+          alignItems: "center",
+          paddingHorizontal: 10,
+          paddingTop: 5,
+          paddingBottom: 4,
+        }}
       >
-        <BlurView intensity={24} tint="dark" style={{ height: layout.mobileNavHeight, flexDirection: "row" }}>
-          {tabs.map((tab) => {
-            const isActive = active === tab.key;
-            const onPress = () => {
-              void selectionAsync();
-              // Create isn't a destination — it opens the create-menu sheet over
-              // whatever's on screen, leaving the active tab untouched.
-              if (tab.key === "create") {
-                openCreateMenu();
-                return;
-              }
-              // A tab tap should return to that tab's root. Sub-screens (a playlist,
-              // Liked, …) are PUSHED on the root stack on top of the tabs, so first pop
-              // the stack back to the tabs: dismissAll() dispatches POP_TO_TOP, which
-              // unwinds and unmounts them cleanly (like the header back button, but all
-              // the way). Using navigate() to "go back" here instead pushes a SECOND tabs
-              // instance and leaves the sub-screen mounted underneath — duplicates that
-              // never unmount. Then switch tab only if we're not already on it.
-              if (router.canDismiss()) router.dismissAll();
-              if (!isActive) router.navigate(tab.path);
-            };
-            const tint = isActive ? "#fff" : colors.muted;
-            return (
-              <PressableScale
-                key={tab.key}
-                scaleTo={0.985}
-                onPress={onPress}
-                className="flex-1 items-center justify-center gap-1"
-                accessibilityRole="button"
-                accessibilityState={{ selected: isActive }}
-                accessibilityLabel={tab.label}
+        {tabs.map((tab) => {
+          const isActive = active === tab.key;
+          const onPress = () => {
+            void selectionAsync();
+            // Create isn't a destination — it opens the create-menu sheet over
+            // whatever's on screen, leaving the active tab untouched.
+            if (tab.key === "create") {
+              openCreateMenu();
+              return;
+            }
+            // A tab tap should return to that tab's root. Sub-screens (a playlist,
+            // Liked, …) are PUSHED on the root stack on top of the tabs, so first pop
+            // the stack back to the tabs: dismissAll() dispatches POP_TO_TOP, which
+            // unwinds and unmounts them cleanly (like the header back button, but all
+            // the way). Using navigate() to "go back" here instead pushes a SECOND tabs
+            // instance and leaves the sub-screen mounted underneath — duplicates that
+            // never unmount. Then switch tab only if we're not already on it.
+            if (router.canDismiss()) router.dismissAll();
+            // Always dispatch the requested root. On a pushed route, `isActive`
+            // describes the highlighted owner, not necessarily the tab beneath
+            // that route (Settings can be opened over Home, for example).
+            router.navigate(tab.path);
+          };
+          const tint = isActive ? "#fff" : "rgba(255,255,255,0.58)";
+          return (
+            <PressableScale
+              key={tab.key}
+              scaleTo={0.985}
+              onPress={onPress}
+              className="flex-1"
+              accessibilityRole="button"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={tab.label}
+            >
+              <View
+                style={{
+                  flex: 1,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 2,
+                }}
               >
-                <tab.Icon active={isActive} color={tint} />
-                <Text style={{ color: tint, fontSize: 10, fontWeight: "500" }}>{tab.label}</Text>
-              </PressableScale>
-            );
-          })}
-        </BlurView>
-      </LinearGradient>
+                <tab.Icon active={isActive} color={tint} size={22} />
+                <Text
+                  style={{
+                    color: tint,
+                    fontSize: 10,
+                    fontWeight: isActive ? "700" : "600",
+                    letterSpacing: 0.1,
+                  }}
+                >
+                  {tab.label}
+                </Text>
+              </View>
+            </PressableScale>
+          );
+        })}
+      </View>
     </View>
   );
 }

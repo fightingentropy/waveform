@@ -97,6 +97,16 @@ function fieldCompare(key: SongSortKey, a: PlayerSong, b: PlayerSong): number {
   }
 }
 
+// Primary ordering shared with paged queue hydration. Equal values deliberately
+// return zero: sortSongs owns source-order tie handling, while the queue merger
+// knows whether an equal-valued incoming page belongs before or after earlier
+// provider pages.
+export function compareSongsForSort(a: PlayerSong, b: PlayerSong, sort: SongSort): number {
+  if (sort.key === "custom") return 0;
+  const compared = fieldCompare(sort.key, a, b);
+  return sort.dir === "desc" ? -compared : compared;
+}
+
 // Pure, non-mutating. "custom" keeps the server order (asc) or reverses it (desc).
 // Other keys sort ascending — ties keep their input order (stable) — then flip for
 // descending. Returns the input array unchanged for the no-op case so callers can

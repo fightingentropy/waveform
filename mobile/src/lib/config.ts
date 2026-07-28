@@ -1,11 +1,14 @@
 import Constants from "expo-constants";
 
-// Base origin for the UNCHANGED Cloudflare Worker backend. Everything — API data
-// calls and signed media — goes here. Override via app config `extra.apiOrigin`.
+// Base origin for the Cloudflare Worker backend. Everything — API data calls and
+// signed media — goes here. Native integration builds can point at a local
+// read-only fixture server without editing app.json; production keeps the fixed
+// HTTPS origin unless an explicit Expo config override is present.
 const DEFAULT_API_ORIGIN = "https://music.streamarena.xyz";
 
 export const API_ORIGIN: string = (
   (Constants.expoConfig?.extra as { apiOrigin?: string } | undefined)?.apiOrigin ||
+  process.env.EXPO_PUBLIC_API_ORIGIN ||
   DEFAULT_API_ORIGIN
 ).replace(/\/+$/, "");
 

@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
+import { fetch as expoFetch } from "expo/fetch";
 import { Rss } from "lucide-react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
+import { CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { ErrorText } from "@/components/ui/States";
-import { buildUserPodcastShow } from "@/lib/podcasts";
+import { buildUserPodcastShow, readPodcastFeedPrefix } from "@/lib/podcasts";
 import { useUserPodcastsStore } from "@/store/user-podcasts";
 import { colors } from "@/theme";
 
@@ -25,12 +27,14 @@ async function fetchFeedXml(url: string): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
-    const res = await fetch(url, {
+    const res = await expoFetch(url, {
       signal: controller.signal,
       headers: { accept: "application/rss+xml, application/xml, text/xml, */*" },
     });
     if (!res.ok) throw new Error(`Feed returned ${res.status}`);
-    return await res.text();
+    // Adding a show only needs channel metadata; one complete item is enough to
+    // terminate the stream while still validating a conventional RSS feed.
+    return await readPodcastFeedPrefix(res, { maxItems: 1 });
   } finally {
     clearTimeout(timer);
   }
@@ -77,7 +81,15 @@ export default function AddPodcastScreen() {
           headerShadowVisible: false,
         }}
       />
-      <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingTop: 16,
+          paddingBottom: CONTENT_BOTTOM_INSET,
+          gap: 12,
+        }}
+        keyboardShouldPersistTaps="handled"
+      >
         <View className="flex-row items-center gap-3">
           <View className="h-11 w-11 items-center justify-center rounded-lg" style={{ backgroundColor: "#1f1f1f" }}>
             <Rss size={22} color={colors.emerald} />

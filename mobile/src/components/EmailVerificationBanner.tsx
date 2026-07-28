@@ -11,14 +11,6 @@ import { colors } from "@/theme";
 // and a session-local Dismiss. The web app's ?verified= success banner is dropped:
 // mobile has no URL query, so the Worker can't hand back a redirect param (§ port).
 
-// Amber tones (Tailwind amber-500/300/100) kept as literals — there's no amber
-// token in @/theme; `colors` is imported for the dismiss glyph so the tint stays
-// in sync with the rest of the app's chrome.
-const AMBER_BG = "rgba(245,158,11,0.15)"; // amber-500/15
-const AMBER_BORDER = "rgba(245,158,11,0.30)"; // amber-500/30
-const AMBER_TEXT = "#fde68a"; // amber-200/-100 range, legible on the wash
-const AMBER_STRONG = "#fcd34d"; // amber-300, for the title + button outline
-
 type ResendState = "idle" | "sending" | "sent" | "error";
 
 export function EmailVerificationBanner() {
@@ -54,13 +46,13 @@ export function EmailVerificationBanner() {
     <View
       accessibilityRole="alert"
       className="mx-4 my-2 flex-row items-center gap-3 rounded-row px-4 py-3"
-      style={{ backgroundColor: AMBER_BG, borderWidth: 1, borderColor: AMBER_BORDER }}
+      style={{ backgroundColor: colors.card, borderWidth: 0.5, borderColor: colors.line }}
     >
       <View className="min-w-0 flex-1">
-        <Text className="text-[15px] font-semibold" style={{ color: AMBER_STRONG }}>
+        <Text className="text-[15px] font-semibold" style={{ color: colors.foreground }}>
           Verify your email
         </Text>
-        <Text numberOfLines={2} className="mt-0.5 text-xs" style={{ color: AMBER_TEXT }}>
+        <Text numberOfLines={2} className="mt-0.5 text-xs" style={{ color: colors.muted }}>
           {user?.email ? `Confirm ${user.email} to secure your account.` : "Confirm your email to secure your account."}
         </Text>
       </View>
@@ -72,12 +64,12 @@ export function EmailVerificationBanner() {
         accessibilityLabel="Resend verification email"
         className="shrink-0 rounded-full px-3 py-1.5"
         style={{
-          borderWidth: 1,
-          borderColor: AMBER_STRONG,
+          borderWidth: 0.5,
+          borderColor: colors.hairline,
           opacity: resendState === "sending" ? 0.5 : 1,
         }}
       >
-        <Text className="text-xs font-semibold" style={{ color: AMBER_STRONG }}>
+        <Text className="text-xs font-semibold" style={{ color: colors.foreground }}>
           {resendLabel}
         </Text>
       </PressableScale>

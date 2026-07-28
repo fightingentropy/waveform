@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { useEffect, useMemo } from "react";
+import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { EmailVerificationBanner } from "@/components/EmailVerificationBanner";
@@ -21,17 +21,39 @@ import { useLikesStore } from "@/store/likes";
 import { colors } from "@/theme";
 import type { PlayerSong } from "@/types/player";
 
-function SectionTitle({ children }: { children: string }) {
+function greetingForNow(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function SectionTitle({ title }: { title: string }) {
   return (
-    <Text className="mb-4 text-2xl font-bold" style={{ color: "#fff" }}>
-      {children}
-    </Text>
+    <View style={{ marginBottom: 14 }}>
+      <Text
+        style={{
+          color: colors.foreground,
+          fontSize: 22,
+          fontWeight: "700",
+          letterSpacing: -0.35,
+        }}
+      >
+        {title}
+      </Text>
+    </View>
   );
 }
 
 function HScroller({ children }: { children: React.ReactNode }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 16, paddingRight: 16 }}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      decelerationRate="fast"
+      snapToInterval={176}
+      contentContainerStyle={{ gap: 12, paddingRight: 20 }}
+    >
       {children}
     </ScrollView>
   );
@@ -44,12 +66,12 @@ export default function HomeScreen() {
 
   const { data: homeData, loading, error } = useApiData<HomePayload>(
     withAccountScope("/api/home", scope),
-    { likedSongIds: [] },
+    { likedSongIds: null },
     { enabled: status !== "loading", keepPreviousData: true },
   );
   const mergeInitialLikes = useLikesStore((s) => s.mergeInitial);
   useEffect(() => {
-    mergeInitialLikes(homeData.likedSongIds);
+    if (Array.isArray(homeData.likedSongIds)) mergeInitialLikes(homeData.likedSongIds);
   }, [mergeInitialLikes, homeData.likedSongIds]);
 
   const { data: statsData } = useApiData<StatsHomePayload>(
@@ -72,6 +94,7 @@ export default function HomeScreen() {
 
   const recentlyPlayed = statsData.recentlyPlayed as PlayerSong[];
   const mostPlayed = statsData.mostPlayed;
+  const mostPlayedSongs = useMemo(() => mostPlayed.map((entry) => entry.song), [mostPlayed]);
 
   const playScroller = (songs: PlayerSong[], index: number) => {
     const song = songs[index];
@@ -83,28 +106,68 @@ export default function HomeScreen() {
     playSongs(songs, index);
   };
 
-  if ((loading && homeData.likedSongIds.length === 0) || status === "loading") {
+  if ((loading && (homeData.likedSongIds?.length ?? 0) === 0) || status === "loading") {
     return (
-      <Screen>
-        <View className="px-4 pt-12">
-          <Text style={{ color: colors.muted }}>Loading library…</Text>
+      <Screen ambience="none">
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }}>
+          <ActivityIndicator color={colors.foreground} />
+          <Text style={{ color: colors.muted, fontSize: 14 }}>Loading your library…</Text>
         </View>
       </Screen>
     );
   }
 
+  const firstName = user?.name?.trim().split(/\s+/)[0];
+  const greeting = firstName ? `${greetingForNow()}, ${firstName}` : greetingForNow();
+
   return (
-    <Screen>
-      <ScrollView contentContainerStyle={{ paddingBottom: CONTENT_BOTTOM_INSET, paddingHorizontal: 16, paddingTop: 12 }}>
-        <View className="mb-5 flex-row items-center">
-          <ProfileButton />
+    <Screen ambience="none">
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          paddingBottom: CONTENT_BOTTOM_INSET,
+          paddingHorizontal: 16,
+          paddingTop: 14,
+        }}
+      >
+        <View style={{ marginBottom: 28 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+            <View style={{ minWidth: 0, flex: 1 }}>
+              <Text
+                style={{
+                  color: colors.muted,
+                  fontSize: 13,
+                  lineHeight: 18,
+                  fontWeight: "600",
+                }}
+              >
+                {greeting}
+              </Text>
+              <Text
+                style={{
+                  marginTop: 4,
+                  color: colors.foreground,
+                  fontSize: 34,
+                  lineHeight: 39,
+                  fontWeight: "700",
+                  letterSpacing: -0.9,
+                }}
+              >
+                Listen now
+              </Text>
+            </View>
+            <ProfileButton size={40} />
+          </View>
         </View>
-        <EmailVerificationBanner />
+
+        <View style={{ marginHorizontal: -16, marginBottom: 10 }}>
+          <EmailVerificationBanner />
+        </View>
         {error ? <View className="mb-4"><ErrorText>{error}</ErrorText></View> : null}
 
         {discoverPlaylists.length > 0 ? (
-          <View className="mb-9">
-            <SectionTitle>Discover</SectionTitle>
+          <View style={{ marginBottom: 34 }}>
+            <SectionTitle title="Discover" />
             <HScroller>
               {discoverPlaylists.map((pl) => (
                 <PlaylistScrollerTile
@@ -120,8 +183,8 @@ export default function HomeScreen() {
         ) : null}
 
         {recentlyPlayed.length > 0 ? (
-          <View className="mb-9">
-            <SectionTitle>Recently played</SectionTitle>
+          <View style={{ marginBottom: 34 }}>
+            <SectionTitle title="Continue listening" />
             <HScroller>
               {recentlyPlayed.map((song, index) => (
                 <ScrollerTile
@@ -140,11 +203,10 @@ export default function HomeScreen() {
         ) : null}
 
         {mostPlayed.length > 0 ? (
-          <View className="mb-9">
-            <SectionTitle>Most played</SectionTitle>
+          <View style={{ marginBottom: 34 }}>
+            <SectionTitle title="Most played" />
             <HScroller>
               {mostPlayed.map((entry, index) => {
-                const songs = mostPlayed.map((e) => e.song);
                 const song = entry.song;
                 return (
                   <ScrollerTile
@@ -156,7 +218,7 @@ export default function HomeScreen() {
                     subtitle={entry.playCount > 0 ? `${entry.playCount} ${entry.playCount === 1 ? "play" : "plays"}` : undefined}
                     active={currentSongId === song.id}
                     isPlaying={currentSongId === song.id && isPlaying}
-                    onPress={() => playScroller(songs, index)}
+                    onPress={() => playScroller(mostPlayedSongs, index)}
                   />
                 );
               })}
@@ -165,9 +227,28 @@ export default function HomeScreen() {
         ) : null}
 
         {discoverPlaylists.length === 0 && recentlyPlayed.length === 0 && mostPlayed.length === 0 ? (
-          <View className="pt-20">
-            <Text className="text-center" style={{ color: colors.muted }}>
-              Your library is empty. Start playing something to see it here.
+          <View
+            style={{
+              marginTop: 36,
+              alignItems: "center",
+              paddingHorizontal: 28,
+              paddingVertical: 24,
+            }}
+          >
+            <Text style={{ color: colors.foreground, fontSize: 17, fontWeight: "700" }}>
+              Nothing here yet
+            </Text>
+            <Text
+              style={{
+                marginTop: 7,
+                maxWidth: 270,
+                color: colors.muted,
+                fontSize: 14,
+                lineHeight: 20,
+                textAlign: "center",
+              }}
+            >
+              Start playing something and it will appear here.
             </Text>
           </View>
         ) : null}

@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
-import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
 import EmailVerificationBanner from "@/components/EmailVerificationBanner";

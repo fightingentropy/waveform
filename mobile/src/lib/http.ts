@@ -1,5 +1,6 @@
 import { API_ORIGIN } from "@/lib/config";
 import { markOffline, markOnline } from "@/lib/connectivity";
+import { RequestTimeoutError, withRequestTimeout } from "@/lib/request-timeout";
 
 // Resolve an API path against the backend origin. Absolute URLs pass through.
 export function apiUrl(path: string): string {
@@ -21,6 +22,37 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
     // Caller cancellation is not a reachability signal. Timeouts explicitly mark
     // offline at their call site before aborting.
     if ((error as { name?: string })?.name !== "AbortError") markOffline();
+    throw error;
+  }
+}
+
+export const DEFAULT_API_REQUEST_TIMEOUT_MS = 15_000;
+
+// Interactive writes/auth calls use this wrapper instead of raw apiFetch so a
+// blackholed-but-"connected" iOS route cannot leave a button spinning forever.
+// Long-running media imports choose a larger budget at their call site.
+export async function apiFetchWithTimeout(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = DEFAULT_API_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  try {
+    return await withRequestTimeout(
+      (signal) =>
+        apiFetch(path, {
+          ...init,
+          signal,
+        }),
+      {
+        timeoutMs,
+        signal: init?.signal,
+      },
+    );
+  } catch (error) {
+    // apiFetch deliberately ignores AbortError because user cancellation is not
+    // a reachability signal. A deadline is different: the backend was
+    // unreachable for the full client budget, so fail over to offline behavior.
+    if (error instanceof RequestTimeoutError) markOffline();
     throw error;
   }
 }

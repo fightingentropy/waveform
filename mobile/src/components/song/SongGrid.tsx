@@ -4,7 +4,8 @@ import { LayoutGrid, Rows3 } from "lucide-react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { SongCard } from "@/components/song/SongCard";
 import { SongListItem } from "@/components/song/SongListItem";
-import { colors, layout } from "@/theme";
+import { CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
+import { colors } from "@/theme";
 import { toggleSongInList } from "@/audio/actions";
 import type { PlayerSong } from "@/types/player";
 
@@ -17,16 +18,18 @@ export function SongGrid({
   songs,
   header,
   emptyComponent,
+  footer,
   onEndReached,
   showToggle = true,
   initialMode = "grid",
-  contentBottomInset = layout.mobileNavHeight + layout.mobilePlayerHeight + 24,
+  contentBottomInset = CONTENT_BOTTOM_INSET,
   contextKey,
   playlistContext,
 }: {
   songs: PlayerSong[];
   header?: ReactElement | null;
   emptyComponent?: ReactElement | null;
+  footer?: ReactElement | null;
   onEndReached?: () => void;
   showToggle?: boolean;
   initialMode?: Mode;
@@ -83,6 +86,7 @@ export function SongGrid({
         </View>
       }
       ListEmptyComponent={emptyComponent}
+      ListFooterComponent={footer}
       contentContainerStyle={{ paddingBottom: contentBottomInset, paddingTop: 4 }}
       onEndReached={onEndReached}
       onEndReachedThreshold={0.6}

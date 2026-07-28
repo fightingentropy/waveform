@@ -8,6 +8,7 @@ const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 const PAGE_SIZE = 100;
 const PATHFINDER_REQUEST_TIMEOUT_MS = 20_000;
+const CATALOG_REQUEST_TIMEOUT_MS = 12_000;
 const TOKEN_PRODUCT_TYPE = "web-player";
 const TOKEN_TOTP_PERIOD_SECONDS = 30;
 const TOKEN_TOTP_DIGITS = 6;
@@ -47,6 +48,60 @@ export type SpotifyBatchTrack = {
   imageUrl?: string;
 };
 
+export type SpotifyCatalogPlaylist = {
+  kind: "playlist";
+  provider: "spotify";
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  description?: string;
+  ownerName?: string;
+  trackCount?: number;
+  externalUrl: string;
+};
+
+export type SpotifyCatalogArtist = {
+  kind: "artist";
+  provider: "spotify";
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  externalUrl: string;
+};
+
+export type SpotifyArtistProfile = SpotifyCatalogArtist & {
+  genres?: string[];
+  followers?: number;
+};
+
+export type SpotifyCatalogSearchResult = {
+  tracks: SpotifyBatchTrack[];
+  playlists: SpotifyCatalogPlaylist[];
+  artists: SpotifyCatalogArtist[];
+};
+
+export type SpotifyArtistCatalog = {
+  artist: SpotifyArtistProfile;
+  tracks: SpotifyBatchTrack[];
+};
+
+export type SpotifyPlaylistCatalog = {
+  playlist: SpotifyCatalogPlaylist;
+  tracks: SpotifyBatchTrack[];
+};
+
+export type SpotifyPlaylistCatalogPage = SpotifyPlaylistCatalog & {
+  offset: number;
+  totalCount: number;
+  nextOffset: number | null;
+};
+
+const SPOTIFY_ENTITY_ID = /^[0-9A-Za-z]{22}$/;
+
+export function isSpotifyCatalogId(value: string): boolean {
+  return SPOTIFY_ENTITY_ID.test(value);
+}
+
 type SpotifyAccessTokenCache = {
   accessToken: string;
   expiresAtMs: number;
@@ -69,20 +124,23 @@ function toFiniteNumber(value: unknown): number | null {
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
-function imageUrlFromAlbum(albumValue: Record<string, unknown> | null): string {
-  const coverArt = toObject(albumValue?.coverArt);
-  const sources = Array.isArray(coverArt?.sources) ? coverArt.sources : [];
-  const ranked = sources
-    .map((source) => {
-      const object = toObject(source);
+function largestImageUrl(value: unknown): string {
+  const rows = Array.isArray(value) ? value : [];
+  return rows
+    .map((entry) => {
+      const object = toObject(entry);
       return {
         url: toStringValue(object?.url),
-        width: toFiniteNumber(object?.width) ?? 0,
+        width: toFiniteNumber(object?.width) ?? toFiniteNumber(object?.maxWidth) ?? 0,
       };
     })
-    .filter((source) => source.url)
-    .sort((left, right) => right.width - left.width);
-  return ranked[0]?.url || "";
+    .filter((entry) => entry.url)
+    .sort((left, right) => right.width - left.width)[0]?.url ?? "";
+}
+
+function imageUrlFromAlbum(albumValue: Record<string, unknown> | null): string {
+  const coverArt = toObject(albumValue?.coverArt);
+  return largestImageUrl(coverArt?.sources);
 }
 
 function releaseDateFromAlbum(albumValue: Record<string, unknown> | null): string {
@@ -402,6 +460,7 @@ async function pathfinderQuery(
   variables: Record<string, unknown>,
   hash: string,
   spotifyCookie?: string,
+  timeoutMs = PATHFINDER_REQUEST_TIMEOUT_MS,
 ): Promise<Record<string, unknown>> {
   const accessToken = await fetchSpotifyAccessToken(spotifyCookie);
   const params = new URLSearchParams({
@@ -412,13 +471,17 @@ async function pathfinderQuery(
     }),
   });
 
-  const response = await fetchWithTimeout(`${SPOTIFY_PATHFINDER_URL}?${params.toString()}`, {
-    headers: {
-      authorization: `Bearer ${accessToken}`,
-      "user-agent": DEFAULT_USER_AGENT,
-      accept: "application/json",
+  const response = await fetchWithTimeout(
+    `${SPOTIFY_PATHFINDER_URL}?${params.toString()}`,
+    {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "user-agent": DEFAULT_USER_AGENT,
+        accept: "application/json",
+      },
     },
-  });
+    timeoutMs,
+  );
 
   if (!response?.ok) {
     throw new SpotifyPathfinderError(`Spotify pathfinder returned ${response?.status ?? "unknown"}`, 502);
@@ -519,6 +582,144 @@ function findTrackResultsSection(value: unknown, depth = 0): unknown {
     }
   }
   return null;
+}
+
+function spotifyEntityId(value: Record<string, unknown>, kind: "playlist" | "artist"): string {
+  const uriMatch = toStringValue(value.uri).match(new RegExp(`^spotify:${kind}:([0-9A-Za-z]{22})$`));
+  const id = uriMatch?.[1] ?? toStringValue(value.id);
+  return isSpotifyCatalogId(id) ? id : "";
+}
+
+function findSearchV2(value: unknown, depth = 0): Record<string, unknown> | null {
+  if (depth > 8) return null;
+  const object = toObject(value);
+  if (!object) return null;
+  const direct = toObject(object.searchV2);
+  if (direct) return direct;
+  for (const child of Object.values(object)) {
+    if (!child || typeof child !== "object") continue;
+    const found = findSearchV2(child, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function pathfinderArtistImage(value: Record<string, unknown>): string {
+  const visuals = toObject(value.visuals);
+  const avatar = toObject(visuals?.avatarImage) ?? toObject(value.avatarImage);
+  return largestImageUrl(avatar?.sources);
+}
+
+function pathfinderPlaylistOwner(value: Record<string, unknown>): string {
+  const owner = toObject(value.ownerV2) ?? toObject(value.owner);
+  const data = toObject(owner?.data) ?? owner;
+  const profile = toObject(data?.profile);
+  return (
+    toStringValue(profile?.name) ||
+    toStringValue(data?.displayName) ||
+    toStringValue(data?.name) ||
+    toStringValue(data?.username)
+  );
+}
+
+function collectPathfinderPlaylists(
+  value: unknown,
+  out: SpotifyCatalogPlaylist[],
+  seen: Set<string>,
+  limit: number,
+  depth = 0,
+): void {
+  if (depth > 8 || out.length >= limit) return;
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      collectPathfinderPlaylists(child, out, seen, limit, depth + 1);
+      if (out.length >= limit) break;
+    }
+    return;
+  }
+  const object = toObject(value);
+  if (!object) return;
+  const id = spotifyEntityId(object, "playlist");
+  const name = toStringValue(object.name);
+  if (id && name && !seen.has(id)) {
+    const content = toObject(object.content);
+    const tracks = toObject(object.tracks);
+    const trackCount = toFiniteNumber(content?.totalCount) ?? toFiniteNumber(tracks?.total);
+    const description = toStringValue(object.description);
+    const ownerName = pathfinderPlaylistOwner(object);
+    seen.add(id);
+    out.push({
+      kind: "playlist",
+      provider: "spotify",
+      id,
+      name,
+      imageUrl: imageUrlFromPlaylistImages(object) || null,
+      ...(description ? { description } : {}),
+      ...(ownerName ? { ownerName } : {}),
+      ...(trackCount !== null && trackCount >= 0 ? { trackCount } : {}),
+      externalUrl: `https://open.spotify.com/playlist/${id}`,
+    });
+  }
+  for (const child of Object.values(object)) {
+    if (!child || typeof child !== "object") continue;
+    collectPathfinderPlaylists(child, out, seen, limit, depth + 1);
+    if (out.length >= limit) break;
+  }
+}
+
+function collectPathfinderArtists(
+  value: unknown,
+  out: SpotifyCatalogArtist[],
+  seen: Set<string>,
+  limit: number,
+  depth = 0,
+): void {
+  if (depth > 8 || out.length >= limit) return;
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      collectPathfinderArtists(child, out, seen, limit, depth + 1);
+      if (out.length >= limit) break;
+    }
+    return;
+  }
+  const object = toObject(value);
+  if (!object) return;
+  const id = spotifyEntityId(object, "artist");
+  const name = toStringValue(toObject(object.profile)?.name) || toStringValue(object.name);
+  if (id && name && !seen.has(id)) {
+    seen.add(id);
+    out.push({
+      kind: "artist",
+      provider: "spotify",
+      id,
+      name,
+      imageUrl: pathfinderArtistImage(object) || null,
+      externalUrl: `https://open.spotify.com/artist/${id}`,
+    });
+  }
+  for (const child of Object.values(object)) {
+    if (!child || typeof child !== "object") continue;
+    collectPathfinderArtists(child, out, seen, limit, depth + 1);
+    if (out.length >= limit) break;
+  }
+}
+
+// Parse only the dedicated searchV2 playlist/artist sections. In particular, do
+// not recursively harvest artist URIs from track rows: those are credits, not
+// artist search results, and surfacing them would fabricate Spotify's ranking.
+export function parseSpotifyPathfinderSearchEntities(
+  payload: unknown,
+  limits: { playlists?: number; artists?: number } = {},
+): { playlists: SpotifyCatalogPlaylist[]; artists: SpotifyCatalogArtist[] } {
+  const search = findSearchV2(payload);
+  if (!search) return { playlists: [], artists: [] };
+  const playlistSection = search.playlistsV2 ?? search.playlists;
+  const artistSection = search.artistsV2 ?? search.artists;
+  const playlists: SpotifyCatalogPlaylist[] = [];
+  const artists: SpotifyCatalogArtist[] = [];
+  collectPathfinderPlaylists(playlistSection, playlists, new Set<string>(), Math.max(0, limits.playlists ?? 8));
+  collectPathfinderArtists(artistSection, artists, new Set<string>(), Math.max(0, limits.artists ?? 8));
+  return { playlists, artists };
 }
 
 // Pick the best candidate whose normalized title matches the query AND whose
@@ -674,6 +875,207 @@ export async function searchSpotifyTrackId(
   return null;
 }
 
+function webApiTrackCandidate(value: unknown): SearchCandidate | null {
+  const data = toObject(value);
+  if (!data) return null;
+  const id = parseTrackIdFromUri(toStringValue(data.uri)) || toStringValue(data.id);
+  const name = toStringValue(data.name);
+  if (!isSpotifyCatalogId(id) || !name) return null;
+  const artistRows = Array.isArray(data.artists) ? data.artists : [];
+  const artists = artistRows.map((row) => toStringValue(toObject(row)?.name)).filter(Boolean);
+  const albumValue = toObject(data.album);
+  const imageUrl = largestImageUrl(albumValue?.images);
+  const durationMs = toFiniteNumber(data.duration_ms) ?? 0;
+  return {
+    id,
+    name,
+    artists: artists.length > 0 ? artists : ["Unknown Artist"],
+    album: toStringValue(albumValue?.name) || undefined,
+    imageUrl: imageUrl || undefined,
+    durationMs: durationMs > 0 ? durationMs : undefined,
+  };
+}
+
+function webApiPlaylist(value: unknown): SpotifyCatalogPlaylist | null {
+  const data = toObject(value);
+  if (!data) return null;
+  const id = spotifyEntityId(data, "playlist");
+  const name = toStringValue(data.name);
+  if (!id || !name) return null;
+  const description = toStringValue(data.description);
+  const ownerName = toStringValue(toObject(data.owner)?.display_name);
+  const trackCount = toFiniteNumber(toObject(data.tracks)?.total);
+  return {
+    kind: "playlist",
+    provider: "spotify",
+    id,
+    name,
+    imageUrl: largestImageUrl(data.images) || null,
+    ...(description ? { description } : {}),
+    ...(ownerName ? { ownerName } : {}),
+    ...(trackCount !== null && trackCount >= 0 ? { trackCount } : {}),
+    externalUrl: `https://open.spotify.com/playlist/${id}`,
+  };
+}
+
+function webApiArtist(value: unknown): SpotifyCatalogArtist | null {
+  const data = toObject(value);
+  if (!data) return null;
+  const id = spotifyEntityId(data, "artist");
+  const name = toStringValue(data.name);
+  if (!id || !name) return null;
+  return {
+    kind: "artist",
+    provider: "spotify",
+    id,
+    name,
+    imageUrl: largestImageUrl(data.images) || null,
+    externalUrl: `https://open.spotify.com/artist/${id}`,
+  };
+}
+
+function dedupeValuesById<T extends { id: string }>(values: T[], limit: number): T[] {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!value.id || seen.has(value.id)) continue;
+    seen.add(value.id);
+    out.push(value);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+export function parseSpotifyWebApiSearchEntities(
+  payload: unknown,
+  limits: { playlists?: number; artists?: number } = {},
+): { playlists: SpotifyCatalogPlaylist[]; artists: SpotifyCatalogArtist[] } {
+  const root = toObject(payload);
+  const playlistItems = Array.isArray(toObject(root?.playlists)?.items) ? toObject(root?.playlists)?.items : [];
+  const artistItems = Array.isArray(toObject(root?.artists)?.items) ? toObject(root?.artists)?.items : [];
+  return {
+    playlists: dedupeValuesById(
+      (playlistItems as unknown[]).map(webApiPlaylist).filter((item): item is SpotifyCatalogPlaylist => item !== null),
+      Math.max(0, limits.playlists ?? 8),
+    ),
+    artists: dedupeValuesById(
+      (artistItems as unknown[]).map(webApiArtist).filter((item): item is SpotifyCatalogArtist => item !== null),
+      Math.max(0, limits.artists ?? 8),
+    ),
+  };
+}
+
+const SEARCH_STOPWORDS = new Set([
+  "the", "and", "for", "you", "with", "that", "this", "from", "feat", "ft", "a", "an", "of", "to", "in", "on", "my",
+]);
+
+function dedupeRelevantSearchCandidates(
+  candidates: SearchCandidate[],
+  searchTerm: string,
+  limit: number,
+): SpotifyBatchTrack[] {
+  const queryTokens = searchTerm
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 3 && !SEARCH_STOPWORDS.has(token));
+  const seen = new Set<string>();
+  const out: SpotifyBatchTrack[] = [];
+  for (const candidate of candidates) {
+    const haystack = `${candidate.name} ${candidate.artists.join(" ")}`.toLowerCase();
+    if (
+      !candidate.id ||
+      seen.has(candidate.id) ||
+      (queryTokens.length > 0 && !queryTokens.some((token) => haystack.includes(token)))
+    ) {
+      continue;
+    }
+    seen.add(candidate.id);
+    out.push(candidateToTrack(candidate));
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+// One bounded mixed search for the UI. Pathfinder's dedicated searchV2 sections
+// are primary; Spotify's Web API is the fallback if that persisted query fails.
+// Both are authoritative Spotify payloads. A total provider failure throws so
+// the API can distinguish "no matches" from "Spotify unavailable".
+export async function searchSpotifyCatalog(
+  query: string,
+  spotifyCookie?: string,
+  limits: { tracks?: number; playlists?: number; artists?: number } = {},
+): Promise<SpotifyCatalogSearchResult> {
+  const searchTerm = toStringValue(query).slice(0, 100);
+  if (!searchTerm) return { tracks: [], playlists: [], artists: [] };
+  const trackLimit = Math.min(24, Math.max(0, limits.tracks ?? 24));
+  const playlistLimit = Math.min(8, Math.max(0, limits.playlists ?? 8));
+  const artistLimit = Math.min(8, Math.max(0, limits.artists ?? 8));
+
+  try {
+    const payload = await pathfinderQuery(
+      "searchDesktop",
+      {
+        searchTerm,
+        offset: 0,
+        limit: Math.max(trackLimit, playlistLimit, artistLimit),
+        numberOfTopResults: 5,
+        includeAudiobooks: false,
+      },
+      PATHFINDER_QUERIES.searchDesktop,
+      spotifyCookie,
+      CATALOG_REQUEST_TIMEOUT_MS,
+    );
+    const data = toObject(payload.data);
+    const trackCandidates: SearchCandidate[] = [];
+    collectSearchCandidates(findTrackResultsSection(data) ?? data, trackCandidates);
+    const entities = parseSpotifyPathfinderSearchEntities(payload, {
+      playlists: playlistLimit,
+      artists: artistLimit,
+    });
+    return {
+      tracks: dedupeRelevantSearchCandidates(trackCandidates, searchTerm, trackLimit),
+      ...entities,
+    };
+  } catch {
+    // Fall through to Spotify's Web API.
+  }
+
+  const accessToken = await fetchSpotifyAccessToken(spotifyCookie);
+  const params = new URLSearchParams({
+    q: searchTerm,
+    type: "track,playlist,artist",
+    limit: String(Math.max(trackLimit, playlistLimit, artistLimit)),
+  });
+  const response = await fetchWithTimeout(
+    `${SPOTIFY_SEARCH_URL}?${params.toString()}`,
+    {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+        "user-agent": DEFAULT_USER_AGENT,
+      },
+    },
+    CATALOG_REQUEST_TIMEOUT_MS,
+  );
+  if (!response?.ok) {
+    throw new SpotifyPathfinderError(`Spotify search returned ${response?.status ?? "unknown"}`, 502);
+  }
+  const payload = toObject(await response.json().catch(() => null));
+  if (!payload) throw new SpotifyPathfinderError("Spotify search returned invalid JSON", 502);
+  const trackItems = Array.isArray(toObject(payload.tracks)?.items) ? toObject(payload.tracks)?.items : [];
+  const trackCandidates = (trackItems as unknown[])
+    .map(webApiTrackCandidate)
+    .filter((candidate): candidate is SearchCandidate => candidate !== null);
+  const entities = parseSpotifyWebApiSearchEntities(payload, {
+    playlists: playlistLimit,
+    artists: artistLimit,
+  });
+  return {
+    tracks: dedupeRelevantSearchCandidates(trackCandidates, searchTerm, trackLimit),
+    ...entities,
+  };
+}
+
 // Free-text catalog search → a ranked LIST of track candidates (deduped by id).
 // Mirrors searchSpotifyTrackId's surface fallback chain (Pathfinder searchTracks →
 // searchDesktop → public /v1/search), but returns the whole list for a
@@ -789,6 +1191,141 @@ export async function searchSpotifyTracks(
   return [];
 }
 
+export function parseSpotifyArtistCatalogPayload(
+  profilePayload: unknown,
+  topTracksPayload: unknown,
+  expectedArtistId: string,
+): SpotifyArtistCatalog | null {
+  if (!isSpotifyCatalogId(expectedArtistId)) return null;
+  const profile = toObject(profilePayload);
+  if (!profile) return null;
+  const id = spotifyEntityId(profile, "artist");
+  const name = toStringValue(profile.name);
+  if (id !== expectedArtistId || !name) return null;
+
+  const genres = Array.isArray(profile.genres)
+    ? profile.genres.map(toStringValue).filter(Boolean).slice(0, 20)
+    : [];
+  const followers = toFiniteNumber(toObject(profile.followers)?.total);
+  const trackRows = Array.isArray(toObject(topTracksPayload)?.tracks)
+    ? (toObject(topTracksPayload)?.tracks as unknown[])
+    : [];
+  const tracks = dedupeValuesById(
+    trackRows
+      .filter((row) => {
+        const artists = Array.isArray(toObject(row)?.artists) ? toObject(row)?.artists : [];
+        return (artists as unknown[]).some((artist) => spotifyEntityId(toObject(artist) ?? {}, "artist") === id);
+      })
+      .map(webApiTrackCandidate)
+      .filter((track): track is SearchCandidate => track !== null)
+      .map(candidateToTrack),
+    20,
+  );
+
+  return {
+    artist: {
+      kind: "artist",
+      provider: "spotify",
+      id,
+      name,
+      imageUrl: largestImageUrl(profile.images) || null,
+      externalUrl: `https://open.spotify.com/artist/${id}`,
+      ...(genres.length > 0 ? { genres } : {}),
+      ...(followers !== null && followers >= 0 ? { followers } : {}),
+    },
+    tracks,
+  };
+}
+
+export function parseSpotifyArtistEmbedPayload(
+  payload: unknown,
+  expectedArtistId: string,
+): SpotifyArtistCatalog | null {
+  if (!isSpotifyCatalogId(expectedArtistId)) return null;
+  const props = toObject(toObject(payload)?.props);
+  const pageProps = toObject(props?.pageProps);
+  const state = toObject(pageProps?.state);
+  const data = toObject(state?.data);
+  const entity = toObject(data?.entity);
+  if (!entity || toStringValue(entity.type) !== "artist") return null;
+  const id = spotifyEntityId(entity, "artist");
+  const name = toStringValue(entity.name) || toStringValue(entity.title);
+  if (id !== expectedArtistId || !name) return null;
+  const imageUrl = largestImageUrl(toObject(entity.visualIdentity)?.image) || null;
+  const trackRows = Array.isArray(entity.trackList) ? entity.trackList : [];
+  const candidates: SpotifyBatchTrack[] = [];
+  for (const row of trackRows) {
+    const track = toObject(row);
+    if (!track || track.isPlayable === false) continue;
+    const trackId = parseTrackIdFromUri(toStringValue(track.uri));
+    const title = toStringValue(track.title);
+    if (!trackId || !title) continue;
+    const artistDisplay = toStringValue(track.subtitle) || name;
+    const durationMs = toFiniteNumber(track.duration) ?? 0;
+    candidates.push({
+      id: trackId,
+      name: title,
+      artists: [artistDisplay],
+      imageUrl: imageUrl || undefined,
+      durationMs: durationMs > 0 ? durationMs : undefined,
+    });
+  }
+  return {
+    artist: {
+      kind: "artist",
+      provider: "spotify",
+      id,
+      name,
+      imageUrl,
+      externalUrl: `https://open.spotify.com/artist/${id}`,
+    },
+    tracks: dedupeValuesById(candidates, 20),
+  };
+}
+
+export function parseSpotifyArtistEmbedHtml(
+  html: string,
+  expectedArtistId: string,
+): SpotifyArtistCatalog | null {
+  const match = html.match(/<script[^>]+id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (!match?.[1]) return null;
+  try {
+    return parseSpotifyArtistEmbedPayload(JSON.parse(match[1]), expectedArtistId);
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchSpotifyArtistCatalog(
+  artistId: string,
+  _spotifyCookie?: string,
+  _market = "US",
+): Promise<SpotifyArtistCatalog> {
+  if (!isSpotifyCatalogId(artistId)) {
+    throw new SpotifyPathfinderError("Invalid Spotify artist ID", 400);
+  }
+  const response = await fetchWithTimeout(
+    `https://open.spotify.com/embed/artist/${artistId}`,
+    {
+      headers: {
+        accept: "text/html",
+        "user-agent": DEFAULT_USER_AGENT,
+        referer: "https://open.spotify.com/",
+      },
+    },
+    CATALOG_REQUEST_TIMEOUT_MS,
+  );
+  if (!response?.ok) {
+    throw new SpotifyPathfinderError(
+      response?.status === 404 ? "Spotify artist not found" : "Could not load Spotify artist",
+      response?.status === 404 ? 404 : 502,
+    );
+  }
+  const catalog = parseSpotifyArtistEmbedHtml(await response.text(), artistId);
+  if (!catalog) throw new SpotifyPathfinderError("Spotify returned invalid artist metadata", 502);
+  return catalog;
+}
+
 async function fetchPaginatedTracks(options: {
   fetchPage: (offset: number, limit: number) => Promise<{ items: unknown[]; totalCount: number }>;
   maxTracks?: number;
@@ -866,6 +1403,134 @@ export async function fetchSpotifyPlaylistMetadata(
   } catch {
     return null;
   }
+}
+
+function playlistSummaryFromPathfinder(
+  playlistMeta: Record<string, unknown> | null,
+  playlistId: string,
+): SpotifyCatalogPlaylist | null {
+  if (!playlistMeta || !isSpotifyCatalogId(playlistId)) return null;
+  const uriId = spotifyEntityId(playlistMeta, "playlist");
+  if (uriId && uriId !== playlistId) return null;
+  const name = toStringValue(playlistMeta.name);
+  if (!name) return null;
+  const description = toStringValue(playlistMeta.description);
+  const ownerName = pathfinderPlaylistOwner(playlistMeta);
+  const content = toObject(playlistMeta.content);
+  const trackCount = toFiniteNumber(content?.totalCount);
+  return {
+    kind: "playlist",
+    provider: "spotify",
+    id: playlistId,
+    name,
+    imageUrl: imageUrlFromPlaylistImages(playlistMeta) || null,
+    ...(description ? { description } : {}),
+    ...(ownerName ? { ownerName } : {}),
+    ...(trackCount !== null && trackCount >= 0 ? { trackCount } : {}),
+    externalUrl: `https://open.spotify.com/playlist/${playlistId}`,
+  };
+}
+
+export async function fetchSpotifyPlaylistCatalog(
+  playlistId: string,
+  spotifyCookie?: string,
+  maxTracks = 100,
+): Promise<SpotifyPlaylistCatalog> {
+  if (!isSpotifyCatalogId(playlistId)) {
+    throw new SpotifyPathfinderError("Invalid Spotify playlist ID", 400);
+  }
+  const boundedMaxTracks = Math.min(100, Math.max(1, Math.floor(maxTracks)));
+  const metadata = await pathfinderQuery(
+    "fetchPlaylistMetadata",
+    { uri: `spotify:playlist:${playlistId}`, offset: 0, limit: 1 },
+    PATHFINDER_QUERIES.fetchPlaylistMetadata,
+    spotifyCookie,
+    CATALOG_REQUEST_TIMEOUT_MS,
+  );
+  const playlistMeta = toObject(toObject(metadata.data)?.playlistV2);
+  const playlist = playlistSummaryFromPathfinder(playlistMeta, playlistId);
+  if (!playlist) throw new SpotifyPathfinderError("Spotify playlist not found", 404);
+
+  const tracks = await fetchPaginatedTracks({
+    maxTracks: boundedMaxTracks,
+    fetchPage: async (offset, limit) => {
+      const payload = await pathfinderQuery(
+        "fetchPlaylistContents",
+        { uri: `spotify:playlist:${playlistId}`, offset, limit },
+        PATHFINDER_QUERIES.fetchPlaylistContents,
+        spotifyCookie,
+        CATALOG_REQUEST_TIMEOUT_MS,
+      );
+      const content = toObject(toObject(toObject(payload.data)?.playlistV2)?.content);
+      const items = Array.isArray(content?.items) ? content.items : [];
+      return {
+        items,
+        totalCount: Number(content?.totalCount ?? items.length),
+      };
+    },
+  });
+  return {
+    playlist: {
+      ...playlist,
+      ...(playlist.trackCount === undefined ? { trackCount: tracks.length } : {}),
+    },
+    tracks,
+  };
+}
+
+export async function fetchSpotifyPlaylistCatalogPage(
+  playlistId: string,
+  spotifyCookie?: string,
+  offset = 0,
+  limit = PAGE_SIZE,
+): Promise<SpotifyPlaylistCatalogPage> {
+  if (!isSpotifyCatalogId(playlistId)) {
+    throw new SpotifyPathfinderError("Invalid Spotify playlist ID", 400);
+  }
+  const boundedOffset = Math.min(10_000, Math.max(0, Math.floor(offset)));
+  const boundedLimit = Math.min(PAGE_SIZE, Math.max(1, Math.floor(limit)));
+  const [metadata, contents] = await Promise.all([
+    pathfinderQuery(
+      "fetchPlaylistMetadata",
+      { uri: `spotify:playlist:${playlistId}`, offset: 0, limit: 1 },
+      PATHFINDER_QUERIES.fetchPlaylistMetadata,
+      spotifyCookie,
+      CATALOG_REQUEST_TIMEOUT_MS,
+    ),
+    pathfinderQuery(
+      "fetchPlaylistContents",
+      { uri: `spotify:playlist:${playlistId}`, offset: boundedOffset, limit: boundedLimit },
+      PATHFINDER_QUERIES.fetchPlaylistContents,
+      spotifyCookie,
+      CATALOG_REQUEST_TIMEOUT_MS,
+    ),
+  ]);
+  const playlistMeta = toObject(toObject(metadata.data)?.playlistV2);
+  const playlist = playlistSummaryFromPathfinder(playlistMeta, playlistId);
+  if (!playlist) throw new SpotifyPathfinderError("Spotify playlist not found", 404);
+
+  const content = toObject(toObject(toObject(contents.data)?.playlistV2)?.content);
+  const items = Array.isArray(content?.items) ? content.items : [];
+  const totalCountValue = toFiniteNumber(content?.totalCount) ?? playlist.trackCount ?? items.length;
+  const totalCount = Math.max(0, Math.floor(totalCountValue));
+  const tracks = dedupeValuesById(
+    items
+      .map((item) => trackFromPathfinderItem(item) ?? trackFromLibraryItem(item))
+      .filter((track): track is SpotifyBatchTrack => track !== null),
+    boundedLimit,
+  );
+  const consumed = boundedOffset + items.length;
+  const nextOffset = items.length > 0 && consumed < totalCount ? consumed : null;
+  return {
+    playlist: {
+      ...playlist,
+      trackCount: totalCount,
+    },
+    tracks,
+    offset: boundedOffset,
+    totalCount,
+    nextOffset,
+  };
 }
 
 export async function fetchSpotifyPlaylistTracks(

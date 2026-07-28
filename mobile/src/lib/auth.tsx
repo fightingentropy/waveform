@@ -1,10 +1,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { API_AUTH_REQUIRED_EVENT, invalidateApiCache } from "@/lib/api";
+import {
+  isCurrentAuthMutation,
+  resolveAuthBootstrap,
+  type AuthSessionStatus,
+} from "@/lib/auth-session-policy";
 import { on } from "@/lib/events";
-import { apiFetch } from "@/lib/http";
+import { apiFetch, apiFetchWithTimeout } from "@/lib/http";
+import { clearImportQueue } from "@/lib/import-queue";
+import { removeLocalPlaybackState } from "@/lib/playback-state";
 import { storage } from "@/lib/storage";
-import { setOfflineAccountScope } from "@/store/offline";
+import { clearOfflineAccountData, setOfflineAccountScope } from "@/store/offline";
 import { useLikesStore } from "@/store/likes";
+import { usePlayerStore } from "@/store/player";
 
 // Ported from src/client/auth.tsx. Logic preserved (auth generation guard, cached
 // user, session refresh with a 2.5s timeout, forced-logout on 401). Changes:
@@ -26,10 +34,11 @@ export type AuthUser = {
 
 type AuthContextValue = {
   user: AuthUser | null;
-  status: "loading" | "authenticated" | "unauthenticated";
+  status: AuthSessionStatus;
   refresh: (options?: { showLoading?: boolean }) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  deleteAccount: (password: string) => Promise<void>;
   updateProfileImage: (asset: ProfileImageAsset) => Promise<void>;
   resendVerification: () => Promise<void>;
 };
@@ -39,6 +48,9 @@ const CACHED_AUTH_USER_KEY = "spotify_cached_auth_user";
 const CACHED_AUTH_SIGNED_OUT_KEY = "spotify_auth_signed_out";
 const ERLIN_PROFILE_IMAGE_URL = "/profile.jpg";
 const SESSION_REFRESH_TIMEOUT_MS = 2_500;
+const AUTH_ACTION_TIMEOUT_MS = 15_000;
+const SIGN_OUT_TIMEOUT_MS = 5_000;
+const PROFILE_UPLOAD_TIMEOUT_MS = 60_000;
 
 function defaultAuthUserImage(email: string, name: string | null): string | null {
   const normalizedName = name?.trim().toLowerCase() || "";
@@ -80,6 +92,14 @@ function readCachedAuthUser(): AuthUser | null {
   }
 }
 
+function readCachedAuthSignedOut(): boolean {
+  try {
+    return storage.getItem(CACHED_AUTH_SIGNED_OUT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function writeCachedAuthUser(user: AuthUser | null, options?: { signedOut?: boolean }): void {
   try {
     if (user) {
@@ -90,10 +110,6 @@ function writeCachedAuthUser(user: AuthUser | null, options?: { signedOut?: bool
       if (options?.signedOut) storage.setItem(CACHED_AUTH_SIGNED_OUT_KEY, "1");
     }
   } catch {}
-}
-
-function initialAuthStatus(user: AuthUser | null): AuthContextValue["status"] {
-  return user ? "authenticated" : "loading";
 }
 
 async function fetchSession(): Promise<Response> {
@@ -116,17 +132,57 @@ async function fetchSession(): Promise<Response> {
   }
 }
 
+function stopAndClearAccountPlayback(): void {
+  const player = usePlayerStore.getState();
+  player.pause();
+  player.setSong(null);
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [initialUser] = useState<AuthUser | null>(() => readCachedAuthUser());
-  const [user, setUser] = useState<AuthUser | null>(initialUser);
-  const [status, setStatus] = useState<AuthContextValue["status"]>(() => initialAuthStatus(initialUser));
-  const userIdRef = useRef<string | null>(initialUser?.id ?? null);
+  const [bootstrap] = useState(() =>
+    resolveAuthBootstrap(readCachedAuthUser(), readCachedAuthSignedOut()),
+  );
+  const [user, setUser] = useState<AuthUser | null>(bootstrap.user);
+  const [status, setStatus] = useState<AuthContextValue["status"]>(bootstrap.status);
+  const userIdRef = useRef<string | null>(bootstrap.user?.id ?? null);
+  const serverSignOutAbortRef = useRef<AbortController | null>(null);
   // Bumped whenever auth state is set authoritatively (sign in/out, forced
   // logout). An in-flight refresh() captures this at its start and bails if it
   // changed, so a slow session check can't resurrect a just-signed-out user.
   const authGenerationRef = useRef(0);
 
+  const cancelPendingServerSignOut = useCallback(() => {
+    serverSignOutAbortRef.current?.abort();
+    serverSignOutAbortRef.current = null;
+  }, []);
+
+  const requestServerSignOut = useCallback(async (): Promise<void> => {
+    cancelPendingServerSignOut();
+    const controller = new AbortController();
+    serverSignOutAbortRef.current = controller;
+    try {
+      await apiFetchWithTimeout(
+        "/api/auth/signout",
+        { method: "POST", signal: controller.signal },
+        SIGN_OUT_TIMEOUT_MS,
+      );
+    } catch {
+      // Local sign-out remains authoritative. A later app launch retries.
+    } finally {
+      if (serverSignOutAbortRef.current === controller) {
+        serverSignOutAbortRef.current = null;
+      }
+    }
+  }, [cancelPendingServerSignOut]);
+
   const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
+    // Never let a surviving native cookie silently undo an explicit local
+    // sign-out. The sign-in action below is the sole path that clears sentinel.
+    if (readCachedAuthSignedOut()) {
+      setUser(null);
+      setStatus("unauthenticated");
+      return;
+    }
     const generation = authGenerationRef.current;
     const isStale = () => authGenerationRef.current !== generation;
     if (options?.showLoading) setStatus("loading");
@@ -136,6 +192,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (response.status === 401 || response.status === 403) {
         invalidateApiCache();
         writeCachedAuthUser(null, { signedOut: true });
+        setOfflineAccountScope("unauthenticated");
+        stopAndClearAccountPlayback();
         setUser(null);
         setStatus("unauthenticated");
         return;
@@ -145,25 +203,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (isStale()) return;
       const nextUser = coerceAuthUser(data.user ?? null);
       writeCachedAuthUser(nextUser, { signedOut: !nextUser });
+      setOfflineAccountScope(nextUser?.id ?? "unauthenticated");
+      if (!nextUser) stopAndClearAccountPlayback();
       setUser(nextUser);
       setStatus(nextUser ? "authenticated" : "unauthenticated");
     } catch {
       if (isStale()) return;
       const cachedUser = readCachedAuthUser();
+      setOfflineAccountScope(cachedUser?.id ?? "unauthenticated");
+      if (!cachedUser) stopAndClearAccountPlayback();
       setUser(cachedUser);
       setStatus(cachedUser ? "authenticated" : "unauthenticated");
     }
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (bootstrap.shouldRetryServerSignOut) {
+      void requestServerSignOut();
+      return cancelPendingServerSignOut;
+    }
+    if (bootstrap.shouldRefreshSession) void refresh();
+  }, [
+    bootstrap.shouldRefreshSession,
+    bootstrap.shouldRetryServerSignOut,
+    cancelPendingServerSignOut,
+    refresh,
+    requestServerSignOut,
+  ]);
 
   useEffect(() => {
     const off = on(API_AUTH_REQUIRED_EVENT, () => {
       authGenerationRef.current += 1;
       invalidateApiCache();
       writeCachedAuthUser(null, { signedOut: true });
+      setOfflineAccountScope("unauthenticated");
+      stopAndClearAccountPlayback();
       setUser(null);
       setStatus("unauthenticated");
     });
@@ -182,11 +256,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user?.id]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const response = await apiFetch("/api/auth/signin", {
+    // A relaunch retry from an earlier sign-out must not race behind this request
+    // and erase the newly-created session cookie.
+    cancelPendingServerSignOut();
+    const response = await apiFetchWithTimeout("/api/auth/signin", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email, password }),
-    });
+    }, AUTH_ACTION_TIMEOUT_MS);
     const data = (await response.json().catch(() => ({}))) as { user?: unknown; error?: string };
     const nextUser = coerceAuthUser(data.user ?? null);
     if (!response.ok || !nextUser) {
@@ -196,21 +273,72 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     invalidateApiCache();
     writeCachedAuthUser(nextUser);
     setOfflineAccountScope(nextUser.id);
+    if (userIdRef.current && userIdRef.current !== nextUser.id) {
+      stopAndClearAccountPlayback();
+    }
     setUser(nextUser);
     setStatus("authenticated");
-  }, []);
+  }, [cancelPendingServerSignOut]);
 
   const signOut = useCallback(async () => {
     authGenerationRef.current += 1;
-    await apiFetch("/api/auth/signout", { method: "POST" }).catch(() => null);
     invalidateApiCache();
     writeCachedAuthUser(null, { signedOut: true });
     setOfflineAccountScope("unauthenticated");
+    stopAndClearAccountPlayback();
     setUser(null);
     setStatus("unauthenticated");
-  }, []);
+    // Local state changes first for immediate UX; the native cookie cleanup is
+    // best-effort and bounded, and will be retried on the next launch if needed.
+    await requestServerSignOut();
+  }, [requestServerSignOut]);
+
+  const deleteAccount = useCallback(async (password: string) => {
+    const accountId = user?.id;
+    if (!accountId) throw new Error("You must be signed in to delete your account");
+    const generation = authGenerationRef.current;
+    const response = await apiFetchWithTimeout(
+      "/api/account",
+      {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password, confirmation: "DELETE" }),
+      },
+      AUTH_ACTION_TIMEOUT_MS,
+    );
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(data.error || "Could not delete your account");
+    }
+
+    // The server has atomically removed the account and every session. Mirror
+    // that authoritative transition immediately. If another explicit auth
+    // transition completed while deletion was in flight, accountId is still
+    // deleted but must not sign out the newer user.
+    // Start the targeted cleanup while this account is still the active offline
+    // scope. That synchronously detaches any native download writer before the
+    // auth transition below changes scopes.
+    const offlineCleanup = clearOfflineAccountData(accountId);
+    if (isCurrentAuthMutation(generation, authGenerationRef.current)) {
+      authGenerationRef.current += 1;
+      cancelPendingServerSignOut();
+      invalidateApiCache();
+      clearImportQueue();
+      removeLocalPlaybackState();
+      writeCachedAuthUser(null, { signedOut: true });
+      setOfflineAccountScope("unauthenticated");
+      stopAndClearAccountPlayback();
+      useLikesStore.getState().resetRemote();
+      setUser(null);
+      setStatus("unauthenticated");
+    }
+    // Targeted cleanup is safe even if a different account became active: it
+    // deletes only rows/outbox items carrying the deleted account's scope.
+    await offlineCleanup;
+  }, [cancelPendingServerSignOut, user?.id]);
 
   const updateProfileImage = useCallback(async (asset: ProfileImageAsset) => {
+    const generation = authGenerationRef.current;
     // RN multipart: FormData accepts a { uri, name, type } file part natively.
     // (The web app's Capacitor base64-JSON workaround is dropped — §9.)
     const form = new FormData();
@@ -219,22 +347,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       name: asset.name,
       type: asset.type,
     } as unknown as Blob);
-    const response = await apiFetch("/api/profile/image", {
+    const response = await apiFetchWithTimeout("/api/profile/image", {
       method: "POST",
       body: form,
-    });
+    }, PROFILE_UPLOAD_TIMEOUT_MS);
     const data = (await response.json().catch(() => ({}))) as { user?: unknown; error?: string };
     const nextUser = coerceAuthUser(data.user ?? null);
     if (!response.ok || !nextUser) {
       throw new Error(data.error || "Failed to update profile image");
     }
+    // Sign-out or another explicit auth transition happened while the upload was
+    // in flight. Ignore the stale profile response; it must never resurrect the
+    // prior account or clear the signed-out sentinel.
+    if (!isCurrentAuthMutation(generation, authGenerationRef.current)) return;
     writeCachedAuthUser(nextUser);
     setUser(nextUser);
     setStatus("authenticated");
   }, []);
 
   const resendVerification = useCallback(async () => {
-    const response = await apiFetch("/api/auth/resend-verification", { method: "POST" });
+    const response = await apiFetchWithTimeout(
+      "/api/auth/resend-verification",
+      { method: "POST" },
+      AUTH_ACTION_TIMEOUT_MS,
+    );
     if (!response.ok) {
       const data = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(data.error || "Failed to resend verification email");
@@ -242,8 +378,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, status, refresh, signIn, signOut, updateProfileImage, resendVerification }),
-    [refresh, signIn, signOut, status, updateProfileImage, resendVerification, user],
+    () => ({
+      user,
+      status,
+      refresh,
+      signIn,
+      signOut,
+      deleteAccount,
+      updateProfileImage,
+      resendVerification,
+    }),
+    [deleteAccount, refresh, signIn, signOut, status, updateProfileImage, resendVerification, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

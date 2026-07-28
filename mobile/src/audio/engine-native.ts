@@ -13,6 +13,7 @@ import { toAbsoluteApiUrl } from "@/lib/config";
 import { getIsOnline, markOffline, subscribeOnline } from "@/lib/connectivity";
 import { isUnstagedDiscoverSong } from "@/lib/discover-queue";
 import { isLikelyNetworkPlaybackError } from "@/lib/playback-continuity";
+import { shouldPublishQueueMutation } from "@/lib/queue-publish-policy";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { createPlayListen, flushPlayListen, type PlayListenEntry } from "@/lib/play-events";
 import {
@@ -52,6 +53,7 @@ type StoreState = ReturnType<typeof usePlayerStore.getState>;
 type NextTrack = { index: number; song: PlayerSong; fromFuture: boolean };
 
 let started = false;
+let initPromise: Promise<void> | null = null;
 let activeDeck: DeckId = "A";
 const deckSong: Record<DeckId, PlayerSong | null> = { A: null, B: null };
 const deckKey: Record<DeckId, string | null> = { A: null, B: null };
@@ -67,6 +69,7 @@ let prefetchFromFuture = false;
 // error circuit-breaker
 let consecutiveErrors = 0;
 let erroredKeyRetry: string | null = null;
+let localSwitchInFlight = false;
 // Set once repeated load failures reveal we're effectively offline for streaming.
 // While set, auto-advance stays on the downloaded subset so playback doesn't flash
 // through un-streamable tracks. Cleared when a streamed (non-downloaded) track
@@ -129,6 +132,7 @@ function onStallTimeout(): void {
   }
   offlinePlayback = true;
   markOffline();
+  if (startPreferredLocalSwitch()) return;
   if (skipToDownloaded()) return;
   s.next(); // nothing downloaded — try the next track (may stream, or trips the breaker)
 }
@@ -137,7 +141,7 @@ function onWaiting(e: WaitingEvent): void {
   if (e.deck !== activeDeck) return; // only the deck driving playback matters
   const s = usePlayerStore.getState();
   const song = s.currentSong;
-  if (!song || !s.isPlaying) return; // not trying to play → a paused buffer isn't a stall
+  if (!song || deckSong[e.deck]?.id !== song.id || !s.isPlaying) return;
   if (isOwnHandledSong(song) || isPodcastSong(song)) return;
   armStallWatchdog(song);
 }
@@ -152,6 +156,31 @@ function other(deck: DeckId): DeckId {
 
 function trackKey(song: PlayerSong): string {
   return `${song.id}|${toAbsoluteApiUrl(song.audioUrl)}`;
+}
+
+// A current stream may gain a ready local copy after it was loaded. Resolve the
+// preferred source against live download state and report only a real remote→file
+// transition; callers preserve the current position while swapping.
+function currentPreferredLocalSong(): PlayerSong | null {
+  const song = usePlayerStore.getState().currentSong;
+  if (!song) return null;
+  const resolved = resolveOfflinePlaybackSong(song);
+  return resolved.source === "offline" && trackKey(resolved) !== deckKey[activeDeck] ? song : null;
+}
+
+function startPreferredLocalSwitch(): boolean {
+  const song = currentPreferredLocalSong();
+  if (!song) return false;
+  if (localSwitchInFlight) return true;
+  localSwitchInFlight = true;
+  void hardLoad(song, usePlayerStore.getState().isPlaying)
+    .catch(() => {
+      usePlayerStore.getState().pause();
+    })
+    .finally(() => {
+      localSwitchInFlight = false;
+    });
+  return true;
 }
 
 function currentVolume(): number {
@@ -187,7 +216,7 @@ function setNowPlayingFor(song: PlayerSong): void {
     album: song.album ?? "",
     duration: song.duration ?? 0,
     artworkUrl: lockScreenArtwork(song),
-  });
+  }).catch(() => {});
 }
 
 function clearPrefetch(): void {
@@ -229,12 +258,13 @@ async function hardLoad(song: PlayerSong | null, isPlaying: boolean): Promise<vo
     await AudioEngine.releaseDeck("B");
     deckSong.A = deckSong.B = null;
     deckKey.A = deckKey.B = null;
+    setLastPosition(0, song.id);
     resetAudioProgress(song.duration ?? 0);
     setNowPlayingFor(song);
     // Explicitly mark the lock screen as paused/at-zero — setNowPlaying alone
     // leaves the system playbackState stale (it would keep showing the prior
     // track as "playing" with a frozen 0:00 while we idle waiting for the stager).
-    void AudioEngine.updateNowPlaying({ position: 0, rate: 0, playing: false });
+    void AudioEngine.updateNowPlaying({ position: 0, rate: 0, playing: false }).catch(() => {});
     return;
   }
 
@@ -251,8 +281,11 @@ async function hardLoad(song: PlayerSong | null, isPlaying: boolean): Promise<vo
   // Switching tracks by hand cancels any in-flight / prepared crossfade.
   await abortCrossfade();
 
-  flushPlayListen(currentListen);
-  currentListen = song ? createPlayListen(song) : null;
+  const sameLogicalSong = !!song && deckSong[activeDeck]?.id === song.id;
+  if (!sameLogicalSong) {
+    flushPlayListen(currentListen);
+    currentListen = song ? createPlayListen(song) : null;
+  }
 
   const seq = ++loadSeq;
   if (!song || !resolved) {
@@ -260,6 +293,7 @@ async function hardLoad(song: PlayerSong | null, isPlaying: boolean): Promise<vo
     await AudioEngine.releaseDeck("B");
     deckSong.A = deckSong.B = null;
     deckKey.A = deckKey.B = null;
+    setLastPosition(0, null);
     resetAudioProgress(0);
     return;
   }
@@ -272,8 +306,12 @@ async function hardLoad(song: PlayerSong | null, isPlaying: boolean): Promise<vo
   deckKey[idle] = null;
 
   await AudioEngine.setActiveDeck(target);
-  const startAt = computeStartAt(song);
-  resetAudioProgress(song.duration ?? 0);
+  // A refreshed signed URL or newly-downloaded file is a source swap for the
+  // same logical song. Keep its audible position and listen accounting.
+  const startAt = sameLogicalSong ? useAudioProgressStore.getState().position : computeStartAt(song);
+  setLastPosition(startAt, song.id);
+  if (sameLogicalSong) setAudioProgress(startAt, song.duration ?? useAudioProgressStore.getState().duration);
+  else resetAudioProgress(song.duration ?? 0);
   await AudioEngine.prepare({ deck: target, url: toAbsoluteApiUrl(resolved.audioUrl), id: song.id, startAt });
   if (seq !== loadSeq) return;
   deckSong[target] = song;
@@ -328,12 +366,14 @@ async function applyRate(song: PlayerSong | null): Promise<void> {
 // --- native event handlers --------------------------------------------------
 function onTime(e: TimeEvent): void {
   if (e.deck !== activeDeck) return; // only the active deck drives the clock
-  setLastPosition(e.currentTime);
-  setAudioProgress(e.currentTime, e.duration);
-
   const s = usePlayerStore.getState();
   const song = s.currentSong;
-  if (!song) return;
+  // Store selection changes synchronously, while releasing/preparing the native
+  // deck is async. Ignore a tail event from the outgoing deck during that gap so
+  // its position/listen/end state cannot be attributed to the newly-selected song.
+  if (!song || deckSong[e.deck]?.id !== song.id) return;
+  setLastPosition(e.currentTime, song.id);
+  setAudioProgress(e.currentTime, e.duration);
 
   // play-listen tracking → fire play-event at 30s OR ≥50%.
   if (currentListen) {
@@ -357,7 +397,11 @@ function onTime(e: TimeEvent): void {
   const now = Date.now();
   if (now - lastNowPlayingMs >= NOW_PLAYING_THROTTLE_MS) {
     lastNowPlayingMs = now;
-    void AudioEngine.updateNowPlaying({ position: e.currentTime, rate: currentRate(song), playing: s.isPlaying });
+    void AudioEngine.updateNowPlaying({
+      position: e.currentTime,
+      rate: currentRate(song),
+      playing: s.isPlaying,
+    }).catch(() => {});
   }
 
   // cross-device resume publish (self-throttled to ~8s).
@@ -403,7 +447,21 @@ async function prefetchNext(next: NextTrack): Promise<void> {
   prefetchDeck = idle;
   prefetchIndex = next.index;
   prefetchFromFuture = next.fromFuture;
-  await AudioEngine.prepare({ deck: idle, url: toAbsoluteApiUrl(resolved.audioUrl), id: next.song.id, startAt: 0 });
+  try {
+    await AudioEngine.prepare({
+      deck: idle,
+      url: toAbsoluteApiUrl(resolved.audioUrl),
+      id: next.song.id,
+      startAt: 0,
+    });
+  } catch {
+    if (seq === loadSeq && prefetchDeck === idle && prefetchIndex === next.index) {
+      deckSong[idle] = null;
+      deckKey[idle] = null;
+      clearPrefetch();
+    }
+    return;
+  }
   if (seq !== loadSeq) return; // a hard load superseded the prefetch
   deckSong[idle] = next.song;
   deckKey[idle] = trackKey(resolved);
@@ -416,7 +474,13 @@ async function startCrossfade(fade: number): Promise<void> {
   const from = activeDeck;
   const to = prefetchDeck;
   crossfading = true;
-  await AudioEngine.crossfade(from, to, Math.max(1, Math.round(fade * 1000)), currentVolume());
+  try {
+    await AudioEngine.crossfade(from, to, Math.max(1, Math.round(fade * 1000)), currentVolume());
+  } catch {
+    // A rejected native ramp must not strand the state machine in "crossfading".
+    crossfading = false;
+    await abortCrossfade().catch(() => {});
+  }
 }
 
 function onCrossfadeComplete(e: CrossfadeCompleteEvent): void {
@@ -440,11 +504,12 @@ function onCrossfadeComplete(e: CrossfadeCompleteEvent): void {
 
   if (newSong) {
     setNowPlayingFor(newSong);
+    setLastPosition(0, newSong.id);
     resetAudioProgress(newSong.duration ?? 0);
   }
 
   // Recycle the outgoing deck for the next prefetch.
-  void AudioEngine.releaseDeck(from);
+  void AudioEngine.releaseDeck(from).catch(() => {});
   deckSong[from] = null;
   deckKey[from] = null;
 
@@ -463,18 +528,24 @@ async function onEnded(e: EndedEvent): Promise<void> {
   if (crossfading) return; // crossfadeComplete drives this transition
   const s = usePlayerStore.getState();
   const song = s.currentSong;
+  if (!song || deckSong[e.deck]?.id !== song.id) return;
   if (song && isPodcastSong(song)) markEpisodeFinished(song.id);
 
-  if (s.repeatMode === "one") {
+  // "Sleep at end of track" is an explicit stop request and must win over repeat
+  // one/all. Checking repeat first made this timer silently ineffective.
+  if (s.sleepAtEndOfTrack) {
+    s.pause();
+    s.cancelSleepTimer();
+    return;
+  }
+  if (s.repeatMode === "one" || (s.repeatMode === "all" && s.queue.length === 1)) {
+    // With a one-item queue, store.next() cannot create a current-song change for
+    // the subscription to observe. Replay directly so repeat-all does not stop on
+    // (or remain parked at the end of) its only track.
     flushPlayListen(currentListen);
     currentListen = song ? createPlayListen(song) : null;
     await AudioEngine.seek(activeDeck, 0);
     await AudioEngine.play(activeDeck);
-    return;
-  }
-  if (s.sleepAtEndOfTrack) {
-    s.pause();
-    s.cancelSleepTimer();
     return;
   }
   flushPlayListen(currentListen);
@@ -482,7 +553,17 @@ async function onEnded(e: EndedEvent): Promise<void> {
   // so transitions don't flash through tracks we can't stream. If the downloads
   // are exhausted, stop cleanly rather than churning.
   if (offlinePlayback) {
-    if (!skipToDownloaded()) s.pause();
+    if (skipToDownloaded()) return;
+    // Repeat-all over an effectively one-item offline subset should replay that
+    // local item even when the canonical queue still contains remote-only rows.
+    if (s.repeatMode === "all" && song && resolveOfflinePlaybackSong(song).source === "offline") {
+      currentListen = createPlayListen(song);
+      setLastPosition(0, song.id);
+      await AudioEngine.seek(activeDeck, 0);
+      await AudioEngine.play(activeDeck);
+    } else {
+      s.pause();
+    }
     return;
   }
   s.next(); // store advances → subscription hard-loads the next track
@@ -504,7 +585,7 @@ async function onError(e: ErrorEvent): Promise<void> {
   clearStallWatchdog(); // a hard error supersedes the stall watchdog's own recovery
   const s = usePlayerStore.getState();
   const song = s.currentSong;
-  if (!song) return;
+  if (!song || deckSong[e.deck]?.id !== song.id) return;
   if (isOwnHandledSong(song)) return; // radio/offline/local manage their own URLs
 
   const baseUrl = toAbsoluteApiUrl(song.audioUrl);
@@ -515,6 +596,7 @@ async function onError(e: ErrorEvent): Promise<void> {
   if (!getIsOnline() || isLikelyNetworkPlaybackError(e.message)) {
     offlinePlayback = true;
     markOffline();
+    if (startPreferredLocalSwitch()) return;
     if (!skipToDownloaded()) s.pause();
     return;
   }
@@ -558,19 +640,22 @@ async function onError(e: ErrorEvent): Promise<void> {
 
 function onPlaying(e: PlayingEvent): void {
   if (e.deck === activeDeck) {
+    const song = usePlayerStore.getState().currentSong;
+    if (!song || deckSong[e.deck]?.id !== song.id) return;
     clearStallWatchdog(); // audio is flowing — this deck isn't stalled
     consecutiveErrors = 0;
     erroredKeyRetry = null;
     // A non-downloaded track actually playing means streaming works again →
     // resume normal full-queue auto-advance.
-    const song = usePlayerStore.getState().currentSong;
     if (song && getIsOnline() && !useOfflineStore.getState().isDownloaded(song.id)) offlinePlayback = false;
   }
 }
 
 function onSeeked(e: SeekedEvent): void {
   if (e.deck === activeDeck) {
-    setLastPosition(e.currentTime);
+    const song = usePlayerStore.getState().currentSong;
+    if (!song || deckSong[e.deck]?.id !== song.id) return;
+    setLastPosition(e.currentTime, song.id);
     setAudioProgress(e.currentTime, useAudioProgressStore.getState().duration);
   }
 }
@@ -607,26 +692,38 @@ function subscribeToStore(): void {
       state.currentSong?.id !== prev.currentSong?.id ||
       state.currentSong?.audioUrl !== prev.currentSong?.audioUrl;
     if (songChanged) {
-      void hardLoad(state.currentSong, state.isPlaying);
+      void hardLoad(state.currentSong, state.isPlaying).catch(() => {});
     } else if (state.isPlaying !== prev.isPlaying) {
       if (!state.isPlaying) clearStallWatchdog(); // user paused → a buffer isn't a stall
-      void syncPlayState(state.isPlaying);
+      if (state.isPlaying && state.currentSong) {
+        // Re-resolve on resume: the download may have completed while paused.
+        // hardLoad degenerates to a cheap play() when the source key is unchanged.
+        void hardLoad(state.currentSong, true).catch(() => {});
+      } else {
+        void syncPlayState(false).catch(() => {});
+      }
       void publishPlaybackState(true);
     }
-    if (state.volume !== prev.volume || state.isMuted !== prev.isMuted) void applyVolume();
-    if (state.playbackRate !== prev.playbackRate) void applyRate(state.currentSong);
+    if (state.volume !== prev.volume || state.isMuted !== prev.isMuted) void applyVolume().catch(() => {});
+    if (state.playbackRate !== prev.playbackRate) void applyRate(state.currentSong).catch(() => {});
     // A brand-new queue (user started a different list) re-evaluates offline
     // inference from scratch, and is persisted IMMEDIATELY rather than only at the
     // end of the async track load (hardLoad) — otherwise starting a queue from a
-    // collection's Play button and quitting right away loses it: a relaunch then
-    // restores the PREVIOUS queue and the "started from Liked Songs" context tag
-    // never sticks, so that collection's big Play button can't resume it. Gated on
-    // "engaged" inside publishPlaybackState, so a cold-launch restore's own
-    // setQueue can't publish over newer cross-device state.
+    // collection's Play button and quitting right away loses it. Ordinary user
+    // edits are also persisted immediately. Background catalog hydration is the
+    // exception: appendToQueue marks those mutations with queueAppendToken and the
+    // playlist loader publishes one trailing snapshot after the page loop. Without
+    // that distinction a 10k-track playlist serialized and uploaded its entire
+    // growing queue after every page (quadratic work and visible jank).
     if (state.queue !== prev.queue) {
-      clearStallWatchdog();
-      offlinePlayback = !getIsOnline();
-      void publishPlaybackState(true);
+      const startedNewQueue = state.queueToken !== prev.queueToken;
+      if (startedNewQueue) {
+        clearStallWatchdog();
+        offlinePlayback = !getIsOnline();
+      }
+      if (shouldPublishQueueMutation(prev, state)) {
+        void publishPlaybackState(true);
+      }
     }
     prev = state;
   });
@@ -635,41 +732,52 @@ function subscribeToStore(): void {
 // UI seek (Scrubber) — routes to the active deck.
 export async function seekNative(seconds: number): Promise<void> {
   const position = Math.max(0, seconds);
-  setLastPosition(position);
+  setLastPosition(position, usePlayerStore.getState().currentSong?.id ?? null);
   setAudioProgress(position, useAudioProgressStore.getState().duration);
   await AudioEngine.seek(activeDeck, position);
 }
 
 export async function initNativeAudio(): Promise<void> {
   if (started) return;
-  started = true;
+  if (!initPromise) {
+    initPromise = (async () => {
+      // Do not flip `started` until failure-prone setup is complete. A transient
+      // native configure rejection must be retryable, and concurrent callers
+      // share this promise so listeners can never be registered twice.
+      await AudioEngine.configure(); // idempotent (OnCreate also runs it)
+      await applyVolume();
 
-  await AudioEngine.configure(); // idempotent (OnCreate also runs it)
+      AudioEngine.addListener("time", onTime);
+      AudioEngine.addListener("ended", (e) => void onEnded(e).catch(() => {}));
+      AudioEngine.addListener("error", (e) => void onError(e).catch(() => {}));
+      AudioEngine.addListener("playing", onPlaying);
+      AudioEngine.addListener("waiting", onWaiting);
+      AudioEngine.addListener("seeked", onSeeked);
+      AudioEngine.addListener("crossfadeComplete", onCrossfadeComplete);
+      AudioEngine.addListener("remote", onRemote);
 
-  AudioEngine.addListener("time", onTime);
-  AudioEngine.addListener("ended", (e) => void onEnded(e));
-  AudioEngine.addListener("error", (e) => void onError(e));
-  AudioEngine.addListener("playing", onPlaying);
-  AudioEngine.addListener("waiting", onWaiting);
-  AudioEngine.addListener("seeked", onSeeked);
-  AudioEngine.addListener("crossfadeComplete", onCrossfadeComplete);
-  AudioEngine.addListener("remote", onRemote);
+      subscribeOnline((online) => {
+        offlinePlayback = !online;
+        if (!online) {
+          // A local source swap cancels any prepared fade inside hardLoad. If the
+          // current song has no local copy, keep its buffered active deck and drop
+          // only the remote idle transition.
+          if (!startPreferredLocalSwitch()) void abortCrossfade().catch(() => {});
+        }
+      });
 
-  subscribeOnline((online) => {
-    offlinePlayback = !online;
-    if (!online) {
-      // Do not kill the active deck: its forward buffer may finish the current
-      // song. Drop only the remote idle-deck transition so the next boundary can
-      // resolve directly to the local queue cache. Keep any active stall timer:
-      // it is what moves a stream that has already stopped onto that cache.
-      void abortCrossfade();
-    }
-  });
+      subscribeToStore();
+      started = true;
 
-  subscribeToStore();
-  await applyVolume();
-
-  // If a song was already current (e.g. restored before init), load it.
-  const { currentSong, isPlaying } = usePlayerStore.getState();
-  if (currentSong) await hardLoad(currentSong, isPlaying);
+      // If a song was already current (e.g. restored before init), load it. The
+      // native error event owns media failure recovery after listeners are live.
+      const { currentSong, isPlaying } = usePlayerStore.getState();
+      if (currentSong) await hardLoad(currentSong, isPlaying).catch(() => {});
+    })();
+  }
+  try {
+    await initPromise;
+  } finally {
+    initPromise = null;
+  }
 }

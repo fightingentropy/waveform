@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Pause, Play } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import {

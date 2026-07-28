@@ -2,7 +2,7 @@ import { ScrollView, Switch, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import Constants from "expo-constants";
 import { ArrowDownToLine, ChevronRight, Info, Languages, Plus, User, Volume2 } from "lucide-react-native";
-import { Screen } from "@/components/ui/Screen";
+import { CONTENT_BOTTOM_INSET, Screen } from "@/components/ui/Screen";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { useAuth } from "@/lib/auth";
 import { usePrefsStore } from "@/store/prefs";
@@ -63,7 +63,12 @@ function SettingsToggleRow({
           {subtitle}
         </Text>
       </View>
-      <Switch value={value} onValueChange={onValueChange} trackColor={{ true: colors.emerald, false: "#3a3a3a" }} thumbColor="#fff" />
+      <Switch
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ true: "rgba(255,255,255,0.42)", false: "#3a3a3a" }}
+        thumbColor="#fff"
+      />
     </View>
   );
 }
@@ -76,12 +81,12 @@ export default function SettingsScreen() {
 
   return (
     <Screen topInset={false}>
-      <ScrollView contentContainerStyle={{ paddingTop: 6, paddingBottom: 48 }}>
+      <ScrollView contentContainerStyle={{ paddingTop: 6, paddingBottom: CONTENT_BOTTOM_INSET }}>
         <SettingsRow
           Icon={User}
           title="Account"
           subtitle={user?.email ?? "Manage your account"}
-          onPress={() => router.push("/profile")}
+          onPress={() => router.push("/settings/account")}
         />
         <SettingsRow Icon={Volume2} title="Playback" subtitle="Crossfade" onPress={() => router.push("/settings/playback")} />
         <SettingsRow

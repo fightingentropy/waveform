@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { apiReadTimeoutMs, isProviderReadThroughRequest } from "@/lib/api-timeout-policy";
 import { markOffline } from "@/lib/connectivity";
 import { API_AUTH_REQUIRED_EVENT, API_CACHE_CLEARED_EVENT, emit, on } from "@/lib/events";
 import { apiFetch } from "@/lib/http";
+import { useOnlineStatus } from "@/lib/use-connectivity";
 import {
   readOfflineApiSnapshot,
   readOfflineApiSnapshotSync,
@@ -38,7 +40,6 @@ type ApiCacheEntry<T = unknown> = {
   promiseStartedAt?: number;
 };
 
-const API_FETCH_TIMEOUT_MS = 5_000;
 const API_SNAPSHOT_READ_TIMEOUT_MS = 1_000;
 const apiCache = new Map<string, ApiCacheEntry>();
 
@@ -75,6 +76,7 @@ export function withAccountScope(url: string, scope: string | null | undefined):
 
 function isPersistableApiUrl(url: string): boolean {
   const path = getApiPath(url);
+  if (isProviderReadThroughRequest(url)) return false;
   return (
     path === "/api/home" ||
     path === "/api/discover/trending" ||
@@ -96,7 +98,7 @@ function getCacheEntry<T>(url: string): ApiCacheEntry<T> | undefined {
   if (!memory) return undefined;
   if (memory.promise) {
     const startedAt = memory.promiseStartedAt ?? (memory.fetchedAt > 0 ? memory.fetchedAt : 0);
-    if (!startedAt || Date.now() - startedAt > API_FETCH_TIMEOUT_MS + API_SNAPSHOT_READ_TIMEOUT_MS + 1_000) {
+    if (!startedAt || Date.now() - startedAt > apiReadTimeoutMs(url) + API_SNAPSHOT_READ_TIMEOUT_MS + 1_000) {
       apiCache.set(url, {
         data: memory.data,
         etag: memory.etag,
@@ -172,12 +174,6 @@ export async function clearApiDataCache(): Promise<void> {
   emit(API_CACHE_CLEARED_EVENT);
 }
 
-// In RN we assume connectivity; offline reads are served from the snapshot cache
-// inside getCacheEntryAsync. (A NetInfo-backed online flag can refine this later.)
-function canSyncApiData(): boolean {
-  return true;
-}
-
 function offlineCacheMissMessage(url: string): string {
   const path = getApiPath(url);
   if (path === "/api/home") return "Your library has not been cached for offline use yet.";
@@ -217,6 +213,7 @@ async function withClientTimeout<T>(promise: Promise<T>, timeoutMs: number, mess
 
 async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timeoutMs = apiReadTimeoutMs(url);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     const request = apiFetch(url, {
@@ -225,13 +222,14 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
     });
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => {
-        // iOS can keep reporting a cellular route in a tunnel. A request that
-        // cannot reach our backend within the client budget is an offline signal
-        // for playback even though the OS route still exists.
-        markOffline();
+        // Core API reads timing out are a reachability signal. Provider
+        // read-through routes are different: Spotify/YouTube may be slow while
+        // our backend and downloaded playback remain healthy, so never flip the
+        // whole player offline for those.
+        if (!isProviderReadThroughRequest(url)) markOffline();
         controller?.abort();
         reject(new Error("Request timed out"));
-      }, API_FETCH_TIMEOUT_MS);
+      }, timeoutMs);
     });
     return await Promise.race([request, timeout]);
   } finally {
@@ -375,9 +373,6 @@ async function fetchApiData<T>(url: string): Promise<T> {
         etag: next.etag,
         fetchedAt: next.fetchedAt,
       });
-      if (next.data !== undefined && isPersistableApiUrl(url)) {
-        void writeOfflineApiSnapshot(url, next.data, next.etag, next.fetchedAt);
-      }
     }
   }
 }
@@ -428,6 +423,7 @@ export function useApiData<T>(
 ) {
   const enabled = options?.enabled ?? true;
   const keepPreviousData = options?.keepPreviousData ?? false;
+  const isOnline = useOnlineStatus();
   // Prefer the live in-memory cache, then fall back to a synchronous read of the
   // persisted snapshot — both available on the first render, so cached screens
   // paint instantly on launch rather than blanking and popping in.
@@ -475,7 +471,7 @@ export function useApiData<T>(
           setLoading(false);
         }
 
-        if (!canSyncApiData()) {
+        if (!isOnline) {
           if (cachedData === undefined && !canReuseCurrentData) {
             setError(offlineCacheMissMessage(url));
           }
@@ -504,7 +500,7 @@ export function useApiData<T>(
         cancelled = true;
       };
     },
-    [enabled, keepPreviousData, url],
+    [enabled, isOnline, keepPreviousData, url],
   );
 
   useEffect(() => {
@@ -518,7 +514,17 @@ export function useApiData<T>(
 
   // After "Clear cache" wipes the cache layers, re-pull fresh without waiting for
   // a remount so already-mounted screens (Home stays mounted) update in place.
-  useEffect(() => on(API_CACHE_CLEARED_EVENT, () => startLoad(false)), [startLoad]);
+  useEffect(() => {
+    let cancelLoad: (() => void) | undefined;
+    const unsubscribe = on(API_CACHE_CLEARED_EVENT, () => {
+      cancelLoad?.();
+      cancelLoad = startLoad(false);
+    });
+    return () => {
+      unsubscribe();
+      cancelLoad?.();
+    };
+  }, [startLoad]);
 
   return { data, loading, error, retry };
 }
@@ -528,7 +534,7 @@ export type HomePayload = {
   // the home screen never rendered it. Kept optional so older cached snapshots
   // that still carry `songs` stay valid.
   songs?: PlayerSong[];
-  likedSongIds: string[];
+  likedSongIds: string[] | null;
 };
 
 export type StatsHomePayload = {
@@ -577,11 +583,48 @@ export type SearchIndexPayload = {
   songs: PlayerSong[];
 };
 
-// Catalog search results (songs NOT in the library) from /api/search/catalog —
-// Spotify-sourced, Discover-style placeholders that preview on tap and promote to
-// lossless on a keep. Query-specific + transient, so deliberately NOT persisted.
+export type CatalogProvider = "spotify" | "youtube";
+export type CatalogProviderStatus = "ok" | "unavailable" | "not_configured";
+
+export type CatalogPlaylist = {
+  kind: "playlist";
+  provider: CatalogProvider;
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  description?: string;
+  ownerName?: string;
+  trackCount?: number;
+  externalUrl: string;
+};
+
+export type CatalogArtist = {
+  kind: "artist";
+  provider: "spotify";
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  externalUrl: string;
+  genres?: string[];
+  followers?: number;
+};
+
+// Catalog search is query-specific + transient, so deliberately NOT persisted.
+// `results` stays backward-compatible with the original song-only endpoint:
+// Spotify songs are Discover-style placeholders that preview on tap and promote
+// to lossless on a keep. Entity summaries navigate to read-through catalog pages.
 export type SearchCatalogPayload = {
+  query: string;
   results: PlayerSong[];
+  playlists: CatalogPlaylist[];
+  artists: CatalogArtist[];
+  providers?: Partial<Record<CatalogProvider, CatalogProviderStatus>>;
+};
+
+export type CatalogArtistPayload = {
+  provider: "spotify";
+  artist: CatalogArtist | null;
+  songs: PlayerSong[];
 };
 
 export type LibraryPayload = {
@@ -591,7 +634,7 @@ export type LibraryPayload = {
 
 export type LikedPayload = {
   songs: PlayerSong[];
-  likedSongIds: string[];
+  likedSongIds: string[] | null;
 };
 
 export type PlaylistPayload = {
@@ -599,8 +642,11 @@ export type PlaylistPayload = {
     id: string;
     name: string;
     imageUrl: string | null;
-    userId: string;
-    createdAt: string;
+    userId?: string;
+    createdAt?: string;
+    trackCount?: number;
+    description?: string;
+    externalUrl?: string;
     // True when served from D1 (editable). Absent for mini-served folders.
     editable?: boolean;
   } | null;
@@ -608,4 +654,10 @@ export type PlaylistPayload = {
   // null when the owner's mini like set was unreachable — the client must SKIP
   // its non-additive merge on null to avoid wiping hearts (see playlist/[id].tsx).
   likedSongIds: string[] | null;
+  page?: {
+    offset: number;
+    limit: number;
+    totalCount: number;
+    nextOffset: number | null;
+  };
 };

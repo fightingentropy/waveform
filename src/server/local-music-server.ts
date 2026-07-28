@@ -36,7 +36,10 @@ import {
   DEFAULT_YOUTUBE_PREVIEW_CONFIG,
   downloadYouTubePreviewAudioResilient,
   fetchYouTubeMusicPlaylist,
+  normalizeYouTubePlaylistSearchQuery,
   resolveYouTubePreviewMatch,
+  searchYouTubePlaylists,
+  type YouTubePlaylistSearchResult,
   type YouTubePreviewConfig,
 } from "./youtube-preview";
 import {
@@ -838,7 +841,7 @@ async function songFromFile(
   // otherwise the path-derived hash changes and orphans the like / playlist rows.
   const id =
     sidecar.songId?.trim() || stableSongId(source.shared ? relativePath : `${source.key}/${relativePath}`);
-  let metadata: IAudioMetadata | null = null;
+  let metadata: IAudioMetadata | null;
 
   try {
     metadata = await parseFile(absolutePath, { duration: true, skipCovers: true });
@@ -2685,6 +2688,76 @@ async function fetchYouTubeMusicPlaylistCached(
   return mix;
 }
 
+const YT_PLAYLIST_SEARCH_LIMIT = 8;
+const YT_PLAYLIST_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const YT_PLAYLIST_SEARCH_CACHE_MAX_ENTRIES = 64;
+const ytPlaylistSearchCache = new Map<string, { at: number; playlists: YouTubePlaylistSearchResult[] }>();
+const ytPlaylistSearchInFlight = new Map<string, Promise<YouTubePlaylistSearchResult[]>>();
+
+function cacheYouTubePlaylistSearch(
+  key: string,
+  playlists: YouTubePlaylistSearchResult[],
+): YouTubePlaylistSearchResult[] {
+  // Map insertion order is our LRU order. Refreshing a key moves it to the end;
+  // when full, evict the oldest query so arbitrary searches cannot grow memory
+  // without bound.
+  ytPlaylistSearchCache.delete(key);
+  while (ytPlaylistSearchCache.size >= YT_PLAYLIST_SEARCH_CACHE_MAX_ENTRIES) {
+    const oldest = ytPlaylistSearchCache.keys().next().value;
+    if (typeof oldest !== "string") break;
+    ytPlaylistSearchCache.delete(oldest);
+  }
+  ytPlaylistSearchCache.set(key, { at: Date.now(), playlists });
+  return playlists;
+}
+
+async function searchYouTubePlaylistsCached(query: string): Promise<YouTubePlaylistSearchResult[]> {
+  const key = query.toLowerCase();
+  const hit = ytPlaylistSearchCache.get(key);
+  if (hit && Date.now() - hit.at < YT_PLAYLIST_SEARCH_CACHE_TTL_MS) {
+    ytPlaylistSearchCache.delete(key);
+    ytPlaylistSearchCache.set(key, hit);
+    return hit.playlists;
+  }
+  if (hit) ytPlaylistSearchCache.delete(key);
+
+  const pending = ytPlaylistSearchInFlight.get(key);
+  if (pending) return pending;
+
+  const work = searchYouTubePlaylists(query, youtubePreviewConfig(), YT_PLAYLIST_SEARCH_LIMIT)
+    .then((playlists) => cacheYouTubePlaylistSearch(key, playlists))
+    .finally(() => {
+      ytPlaylistSearchInFlight.delete(key);
+    });
+  ytPlaylistSearchInFlight.set(key, work);
+  return work;
+}
+
+async function handleYouTubePlaylistSearch(request: Request, url: URL): Promise<Response> {
+  if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+  const query = normalizeYouTubePlaylistSearchQuery(url.searchParams.get("q") || "");
+  if (!query) {
+    return json(
+      { error: "q must be between 2 and 100 characters" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const playlists = await searchYouTubePlaylistsCached(query);
+    return jsonCached(
+      request,
+      { provider: "youtube", playlists },
+      { cacheControl: "private, max-age=60, stale-while-revalidate=300" },
+    );
+  } catch {
+    // Preserve the distinction between "no matching playlists" (200 + []) and
+    // an unavailable yt-dlp/YouTube search surface (502) so the Worker can return
+    // partial Spotify results without misreporting an outage as an empty search.
+    return json({ error: "Couldn't search YouTube playlists" }, { status: 502 });
+  }
+}
+
 // A YouTube Music mix (e.g. a "Discover Mix" RDTMAK5uy_* auto-mix) surfaced as a
 // read-through playlist. Fetched live via yt-dlp with the owner's Premium cookies,
 // so it's their personalized, auto-updating mix. Each track is a placeholder that
@@ -2743,7 +2816,9 @@ async function handleYouTubeMusicPlaylist(request: Request, listId: string): Pro
         createdAt: new Date().toISOString(),
       },
       songs,
-      likedSongIds: [],
+      // A provider playlist is not an authoritative snapshot of the user's
+      // global likes. Null tells clients to preserve their hydrated heart set.
+      likedSongIds: null,
     },
     { cacheControl: "private, max-age=1800, stale-while-revalidate=3600" },
   );
@@ -2868,7 +2943,7 @@ async function handleRefetchYouTube(source: LibrarySource, id: string, request: 
     );
   }
 
-  let audio: { bytes: Buffer; ext: string } | null = null;
+  let audio: { bytes: Buffer; ext: string } | null;
   try {
     audio = await downloadYouTubePreviewAudioResilient(match.videoId, config);
   } catch {
@@ -3727,6 +3802,10 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/licensed-source/materialize" && request.method === "POST") {
     return handleLicensedSourceMaterialize(request);
+  }
+
+  if (pathname === "/api/youtube/search/playlists" && request.method === "GET") {
+    return handleYouTubePlaylistSearch(request, url);
   }
 
   if (pathname.startsWith("/api/youtube/playlists/") && request.method === "GET") {

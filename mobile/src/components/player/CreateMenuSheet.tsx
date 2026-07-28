@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { Alert, ScrollView, Text, View } from "react-native";
+import { Alert, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import Svg, { Circle, Path } from "react-native-svg";
 import { Blend, CodeXml, Folder, Music, SlidersVertical, Users } from "lucide-react-native";
@@ -67,10 +67,8 @@ function OptionRow({ option, onClose }: { option: Option; onClose: () => void })
     >
       <View
         style={{
-          width: 52,
-          height: 52,
-          borderRadius: 26,
-          backgroundColor: "rgba(255,255,255,0.07)",
+          width: 44,
+          height: 44,
           alignItems: "center",
           justifyContent: "center",
         }}
@@ -118,12 +116,15 @@ export function CreateMenuSheet({ visible, onClose }: { visible: boolean; onClos
     .filter((o) => typeof o.onPress === "function");
 
   return (
-    <Sheet visible={visible} onClose={onClose} heightPct={0.8} zIndex={150}>
-      <ScrollView contentContainerStyle={{ paddingTop: 6, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+    <Sheet visible={visible} onClose={onClose} heightPct={0.3} zIndex={150}>
+      <View style={{ paddingTop: 6, paddingBottom: 28 }}>
+        <Text style={{ color: colors.foreground, fontSize: 20, fontWeight: "600", paddingHorizontal: 20, marginBottom: 6 }}>
+          Create
+        </Text>
         {options.map((o) => (
           <OptionRow key={o.key} option={o} onClose={onClose} />
         ))}
-      </ScrollView>
+      </View>
     </Sheet>
   );
 }

@@ -1,11 +1,8 @@
 import type { PlayerSong } from "@/types/player";
 
-// Ported from src/lib/radio-stations.ts; accentClassName (Tailwind) replaced with
-// an accent gradient color array for expo-linear-gradient.
 export type RadioStation = PlayerSong & {
   location: string;
   streamLabel: string;
-  accent: [string, string, string];
 };
 
 export const RADIO_STATIONS: RadioStation[] = [
@@ -19,7 +16,6 @@ export const RADIO_STATIONS: RadioStation[] = [
     imageUrl: "https://e-radio.github.io/station-icons/89-8-dromos-89-8-athens.webp",
     audioUrl: "https://netradio.live24.gr/dromos2",
     source: "radio",
-    accent: ["#ff3f55", "#f59e0b", "#1ed760"],
   },
   {
     id: "radio:bbc-radio-1",
@@ -32,6 +28,5 @@ export const RADIO_STATIONS: RadioStation[] = [
     audioUrl:
       "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/hls/nonuk/audio_syndication_low_sbr_v1/cfs/bbc_radio_one.m3u8",
     source: "radio",
-    accent: ["#ff4f8b", "#7c3aed", "#06b6d4"],
   },
 ];

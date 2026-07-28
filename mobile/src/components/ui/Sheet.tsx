@@ -9,10 +9,10 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-import { LinearGradient } from "expo-linear-gradient";
 import { colors, motion } from "@/theme";
 
 const DRAG_CLOSE_THRESHOLD = 120;
+const SHEET_RADIUS = 28;
 
 // Reusable controlled bottom sheet. Renders nothing while closed; on `visible` it
 // mounts a z-indexed, full-screen absolute overlay (rendered in PlayerSheets at the
@@ -29,15 +29,12 @@ export function Sheet({
   onClose,
   heightPct = 0.94,
   zIndex = 100,
-  backgroundGradient,
   children,
 }: {
   visible: boolean;
   onClose: () => void;
   heightPct?: number;
   zIndex?: number;
-  // Optional album-art tint: colors fade top→bottom behind the panel content.
-  backgroundGradient?: readonly [string, string, ...string[]];
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -135,24 +132,43 @@ export function Sheet({
           style={[
             {
               height: panelH,
-              backgroundColor: colors.background,
-              borderTopLeftRadius: 20,
-              borderTopRightRadius: 20,
-              overflow: "hidden",
+              borderTopLeftRadius: SHEET_RADIUS,
+              borderTopRightRadius: SHEET_RADIUS,
+              borderCurve: "continuous",
+              shadowColor: "#000",
+              shadowOpacity: 0.22,
+              shadowRadius: 16,
+              shadowOffset: { width: 0, height: -5 },
+              elevation: 16,
             },
             panelStyle,
           ]}
         >
-          {backgroundGradient ? (
-            <LinearGradient colors={backgroundGradient} style={StyleSheet.absoluteFill} />
-          ) : null}
-          {/* grab handle */}
-          <View style={{ alignItems: "center", paddingTop: 10, paddingBottom: 4 }}>
-            <View
-              style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.3)" }}
-            />
+          <View
+            style={{
+              flex: 1,
+              overflow: "hidden",
+              backgroundColor: colors.surface,
+              borderTopLeftRadius: SHEET_RADIUS,
+              borderTopRightRadius: SHEET_RADIUS,
+              borderCurve: "continuous",
+              borderWidth: 0.5,
+              borderColor: colors.hairline,
+            }}
+          >
+            {/* grab handle */}
+            <View style={{ alignItems: "center", paddingTop: 11, paddingBottom: 5 }}>
+              <View
+                style={{
+                  width: 36,
+                  height: 4,
+                  borderRadius: 2,
+                  backgroundColor: "rgba(255,255,255,0.28)",
+                }}
+              />
+            </View>
+            <View style={{ flex: 1 }}>{children}</View>
           </View>
-          <View style={{ flex: 1 }}>{children}</View>
         </Animated.View>
       </GestureDetector>
     </View>

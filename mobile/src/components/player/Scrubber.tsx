@@ -7,8 +7,8 @@ import { formatTime } from "@/lib/format";
 import { usePlayerStore } from "@/store/player";
 import { colors } from "@/theme";
 
-const TRACK_H = 3; // thin track, Spotify-style
-const THUMB = 12; // small flat thumb (no shadow), unlike the bulky native slider
+const TRACK_H = 2;
+const THUMB = 8;
 const ROW_H = 48; // accessible touch target while preserving the thin visual track
 
 // Spotify-style scrubber: a delicate 3px track with a small flat white thumb,
@@ -107,7 +107,7 @@ export function Scrubber({ live = false }: { live?: boolean }) {
               top: (ROW_H - TRACK_H) / 2,
               height: TRACK_H,
               borderRadius: TRACK_H / 2,
-              backgroundColor: "rgba(255,255,255,0.3)",
+              backgroundColor: "rgba(255,255,255,0.18)",
             }}
           />
           {/* elapsed (white) fill */}
@@ -137,10 +137,10 @@ export function Scrubber({ live = false }: { live?: boolean }) {
         </View>
       </GestureDetector>
       <View className="flex-row justify-between" style={{ marginTop: 6 }}>
-        <Text style={{ color: colors.muted, fontVariant: ["tabular-nums"] }} className="text-xs">
+        <Text style={{ color: colors.muted, fontSize: 11, fontVariant: ["tabular-nums"] }}>
           {formatTime(value)}
         </Text>
-        <Text style={{ color: colors.muted, fontVariant: ["tabular-nums"] }} className="text-xs">
+        <Text style={{ color: colors.muted, fontSize: 11, fontVariant: ["tabular-nums"] }}>
           {max > 0 ? `-${formatTime(Math.max(0, max - value))}` : formatTime(max)}
         </Text>
       </View>

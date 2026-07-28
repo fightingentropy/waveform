@@ -1,4 +1,4 @@
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router";
 import { useRef, useState } from "react";
 import { Camera, Loader2, LogOut, Settings } from "lucide-react";
 import { useAuth } from "@/client/auth";

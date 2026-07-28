@@ -1,5 +1,5 @@
 import { withAccountScope } from "@/lib/api";
-import { apiFetch } from "@/lib/http";
+import { apiFetchWithTimeout } from "@/lib/http";
 
 // Non-destructive canonical RESOLUTION layer. The mini collapses hard-linked
 // duplicate files (same inode) under one canonical "anchor" id and exposes the
@@ -47,7 +47,11 @@ export function expandLikedSet(ids: string[]): string[] {
 export async function loadIdMap(scope: string | null | undefined): Promise<void> {
   const value = scope?.trim() || "anonymous";
   try {
-    const res = await apiFetch(withAccountScope("/api/songs/id-map", value), { cache: "no-store" });
+    const res = await apiFetchWithTimeout(
+      withAccountScope("/api/songs/id-map", value),
+      { cache: "no-store" },
+      8_000,
+    );
     if (!res.ok) return;
     const data = (await res.json()) as { version?: unknown; map?: unknown };
     const version = typeof data.version === "string" ? data.version : "";

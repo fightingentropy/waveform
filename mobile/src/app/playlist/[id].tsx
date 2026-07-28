@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
 import { MoreHorizontal, Music, Pause, Pencil, Play, Shuffle, Sparkles, Trash2 } from "lucide-react-native";
 import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
@@ -11,26 +10,91 @@ import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { Sheet } from "@/components/ui/Sheet";
 import { EmptyState, ErrorText } from "@/components/ui/States";
-import { type PlaylistPayload, useApiData, withAccountScope } from "@/lib/api";
+import {
+  type PlaylistPayload,
+  type SearchIndexPayload,
+  useApiData,
+  withAccountScope,
+} from "@/lib/api";
+import { isProviderReadThroughRequest } from "@/lib/api-timeout-policy";
 import { useAuth } from "@/lib/auth";
+import { reconcileCatalogSongs } from "@/lib/catalog-reconciliation";
+import { apiFetch } from "@/lib/http";
+import { withRequestTimeout } from "@/lib/request-timeout";
+import { useOnlineStatus } from "@/lib/use-connectivity";
 import { deletePlaylist, renamePlaylist } from "@/lib/playlist-actions";
-import { useArtworkColor } from "@/lib/useArtworkColor";
 import { playSongs } from "@/audio/actions";
+import { publishPlaybackState } from "@/audio/playback-sync";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
-import { sortSongs, useSongSort } from "@/store/song-sort";
+import { keyFor, useOfflineStore } from "@/store/offline";
+import { compareSongsForSort, sortSongs, useSongSort } from "@/store/song-sort";
 import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
-export default function PlaylistScreen() {
+type PlaylistDetailScreenProps = {
+  playlistId?: string;
+  apiPath?: string;
+  queueContextKey?: `playlist:${string}`;
+};
+
+export function PlaylistDetailScreen({
+  playlistId,
+  apiPath,
+  queueContextKey,
+}: PlaylistDetailScreenProps = {}) {
   const insets = useSafeAreaInsets();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id: routeId } = useLocalSearchParams<{ id: string }>();
+  const id = playlistId ?? routeId;
   const { user, status } = useAuth();
-  const { data, loading, error } = useApiData<PlaylistPayload>(
-    withAccountScope(`/api/playlist/${id}`, user?.id ?? status),
-    { playlist: null, songs: [], likedSongIds: [] },
-    { enabled: status !== "loading" && !!id, keepPreviousData: true },
+  const isOnline = useOnlineStatus();
+  const requestPath = apiPath ?? `/api/playlist/${id}`;
+  // Home's Top 50 and YouTube mix routes use the normal /playlist/[id]
+  // navigator, so apiPath is absent even though the resolved request is still
+  // provider-backed. Classify the actual request path to preserve local-first
+  // reconciliation and offline filtering on every entry point.
+  const providerReadThrough = isProviderReadThroughRequest(requestPath);
+  const { data, loading, error, retry } = useApiData<PlaylistPayload>(
+    withAccountScope(requestPath, user?.id ?? status),
+    // Unknown until the server answers. Treating the loading state as an
+    // authoritative empty set would briefly clear every heart in the global
+    // likes store; catalog/read-through playlists deliberately return null too.
+    { playlist: null, songs: [], likedSongIds: null },
+    { enabled: status !== "loading" && !!id, keepPreviousData: !providerReadThrough },
   );
+  const library = useApiData<SearchIndexPayload>(
+    withAccountScope("/api/search-index", user?.id ?? status),
+    { songs: [] },
+    { enabled: status !== "loading" && providerReadThrough, keepPreviousData: true },
+  );
+  const offlineRecords = useOfflineStore((state) => state.records);
+  const accountScope = user?.id ?? "anonymous";
+  const readyDownloadedSongs = useMemo(
+    () =>
+      Object.values(offlineRecords)
+        .filter((record) => record.accountScope === accountScope && record.status === "ready")
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((record) => record.song),
+    [accountScope, offlineRecords],
+  );
+  const spotifyCatalogPlaylist = !!apiPath && apiPath.startsWith("/api/catalog/spotify/playlists/");
+  const [additionalSongs, setAdditionalSongs] = useState<PlaylistPayload["songs"]>([]);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const loadMoreRequestRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setAdditionalSongs([]);
+    setNextOffset(data.page?.nextOffset ?? null);
+    setLoadMoreError(null);
+  }, [apiPath, data.page?.nextOffset, data.page?.offset, id]);
+  useEffect(() => {
+    setLoadingMore(false);
+    return () => {
+      loadMoreRequestRef.current?.abort();
+      loadMoreRequestRef.current = null;
+    };
+  }, [apiPath, id]);
   const mergeInitialLikes = useLikesStore((s) => s.mergeInitial);
   useEffect(() => {
     // Only merge when the server actually sent a like set. A converted folder
@@ -42,7 +106,7 @@ export default function PlaylistScreen() {
 
   // Tag the queue with this playlist so the big Play button mirrors the player
   // (Pause/resume vs. starting over), exactly like the Liked Songs screen.
-  const contextKey = `playlist:${id}` as const;
+  const contextKey = queueContextKey ?? (`playlist:${id}` as const);
   const shuffle = usePlayerStore((s) => s.shuffle);
   const smartShuffleEnabled = usePlayerStore((s) => s.smartShuffleEnabled);
   const openListeningModes = useUiStore((s) => s.openListeningModes);
@@ -53,12 +117,40 @@ export default function PlaylistScreen() {
   // Apply the user's chosen sort for this playlist (Date added / Title / …); the
   // sorted list drives Play, batch download, and the rows so taps stay in sync.
   const sort = useSongSort(contextKey);
-  const songs = useMemo(() => sortSongs(data.songs, sort), [data.songs, sort]);
+  const sourceSongs = useMemo(() => {
+    if (additionalSongs.length === 0) return data.songs;
+    const seen = new Set<string>();
+    return [...data.songs, ...additionalSongs].filter((song) => {
+      if (seen.has(song.id)) return false;
+      seen.add(song.id);
+      return true;
+    });
+  }, [additionalSongs, data.songs]);
+  const reconciledSongs = useMemo(
+    () =>
+      providerReadThrough
+        ? reconcileCatalogSongs(sourceSongs, library.data.songs, readyDownloadedSongs)
+        : sourceSongs,
+    [library.data.songs, providerReadThrough, readyDownloadedSongs, sourceSongs],
+  );
+  const availableSongs = useMemo(
+    () =>
+      providerReadThrough && !isOnline
+        ? reconciledSongs.filter(
+            (song) => offlineRecords[keyFor(user?.id ?? "anonymous", song.id)]?.status === "ready",
+          )
+        : reconciledSongs,
+    [isOnline, offlineRecords, providerReadThrough, reconciledSongs, user?.id],
+  );
+  const songs = useMemo(() => sortSongs(availableSongs, sort), [availableSongs, sort]);
   const count = songs.length;
+  const totalCount = data.page?.totalCount ?? data.playlist?.trackCount ?? sourceSongs.length;
+  const countLabel =
+    spotifyCatalogPlaylist && isOnline && totalCount > sourceSongs.length
+      ? `${sourceSongs.length} of ${totalCount} songs`
+      : `${count} ${count === 1 ? "song" : "songs"}`;
   const name = data.playlist?.name ?? "Playlist";
   const cover = data.playlist?.imageUrl ?? songs[0]?.imageUrl ?? null;
-  const tint = useArtworkColor(cover);
-  const heroColor = tint ?? "#3f3f46";
   const showPause = isThisContext && isPlaying;
 
   // Editable = D1-backed (a converted folder or a native playlist). Folder-backed
@@ -74,6 +166,124 @@ export default function PlaylistScreen() {
     () => (editable && typeof id === "string" ? { id, name } : undefined),
     [editable, id, name],
   );
+
+  const loadPages = useCallback(async (loadAll: boolean) => {
+    if (
+      !spotifyCatalogPlaylist ||
+      !apiPath ||
+      nextOffset === null ||
+      loadMoreRequestRef.current ||
+      !isOnline ||
+      status === "loading"
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    loadMoreRequestRef.current = controller;
+    setLoadingMore(true);
+    setLoadMoreError(null);
+    let extendedActiveQueue = false;
+    try {
+      let offset: number | null = nextOffset;
+      do {
+        // Full-queue hydration belongs to the queue that started it. A context
+        // switch can happen while this screen stays mounted, so stop before the
+        // next provider request instead of downloading the rest of an abandoned
+        // 10k-track playlist. Manual onEndReached paging remains independent.
+        if (loadAll && usePlayerStore.getState().queueContextKey !== contextKey) break;
+        const separator = apiPath.includes("?") ? "&" : "?";
+        const pagePath = withAccountScope(
+          `${apiPath}${separator}offset=${offset}&limit=100`,
+          user?.id ?? status,
+        );
+        const response = await withRequestTimeout(
+          (signal) => apiFetch(pagePath, { cache: "no-store", signal }),
+          { timeoutMs: 15_000, signal: controller.signal },
+        );
+        const payload = (await response.json().catch(() => null)) as
+          | (PlaylistPayload & { error?: string })
+          | null;
+        if (!response.ok || !payload) {
+          throw new Error(payload?.error || `Couldn't load more songs (${response.status})`);
+        }
+        if (controller.signal.aborted) return;
+        if (loadAll && usePlayerStore.getState().queueContextKey !== contextKey) break;
+
+        setAdditionalSongs((current) => {
+          const seen = new Set([...data.songs, ...current].map((song) => song.id));
+          const additions = payload.songs.filter((song) => !seen.has(song.id) && seen.add(song.id));
+          return additions.length > 0 ? [...current, ...additions] : current;
+        });
+
+        // If this playlist is the active queue, extend it in place as pages
+        // arrive. Playback starts immediately from the first page, while the
+        // complete Spotify playlist hydrates in the background without
+        // restarting the current song or corrupting history/shuffle indices.
+        const queueSongs = sortSongs(
+          reconcileCatalogSongs(payload.songs, library.data.songs, readyDownloadedSongs),
+          sort,
+        );
+        const queueBefore = usePlayerStore.getState().queue.length;
+        usePlayerStore.getState().appendToQueue(queueSongs, contextKey, {
+          compare: (a, b) => compareSongsForSort(a, b, sort),
+          // sortSongs reverses stable equal-key runs for descending order. Later
+          // provider pages therefore belong before earlier pages on a tie.
+          incomingBeforeEqual: sort.dir === "desc",
+        });
+        const playerAfter = usePlayerStore.getState();
+        if (playerAfter.queueContextKey === contextKey && playerAfter.queue.length > queueBefore) {
+          extendedActiveQueue = true;
+        }
+
+        const reportedNextOffset = payload.page?.nextOffset ?? null;
+        // Both ends cap Spotify offsets at 10k. Require strict forward progress
+        // so a provider total/count drift can never make the background hydrator
+        // refetch a clamped terminal page forever.
+        offset =
+          reportedNextOffset !== null &&
+          reportedNextOffset > offset &&
+          reportedNextOffset <= 10_000
+            ? reportedNextOffset
+            : null;
+        setNextOffset(offset);
+      } while (loadAll && offset !== null && !controller.signal.aborted);
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      setLoadMoreError(cause instanceof Error ? cause.message : "Couldn't load more songs.");
+    } finally {
+      // appendToQueue deliberately suppresses per-page persistence. Publish the
+      // fully hydrated (or safely partial, if interrupted) queue exactly once.
+      if (extendedActiveQueue && usePlayerStore.getState().queueContextKey === contextKey) {
+        void publishPlaybackState(true);
+      }
+      if (loadMoreRequestRef.current === controller) {
+        loadMoreRequestRef.current = null;
+        setLoadingMore(false);
+      }
+    }
+  }, [
+    apiPath,
+    contextKey,
+    data.songs,
+    isOnline,
+    library.data.songs,
+    nextOffset,
+    readyDownloadedSongs,
+    sort,
+    spotifyCatalogPlaylist,
+    status,
+    user?.id,
+  ]);
+
+  const loadMore = useCallback(() => {
+    void loadPages(false);
+  }, [loadPages]);
+
+  useEffect(() => {
+    if (isThisContext && spotifyCatalogPlaylist && isOnline && nextOffset !== null) {
+      void loadPages(true);
+    }
+  }, [isOnline, isThisContext, loadPages, nextOffset, spotifyCatalogPlaylist]);
 
   const handleRename = () => {
     if (typeof id !== "string") return;
@@ -103,33 +313,35 @@ export default function PlaylistScreen() {
     ]);
   };
 
-  // Spotify-style hero: a gradient tinted by the cover art, the large artwork, the
-  // title + count, then the download · shuffle · play action row. Rendered as the
-  // list header so it scrolls with the songs.
+  // Neutral collection hero: artwork provides the color, while the surrounding
+  // interface stays on a flat material canvas.
   const header = (
     <View>
-      <LinearGradient
-        colors={[heroColor, heroColor, colors.background]}
+      <View
         style={{ paddingTop: insets.top + 52, paddingBottom: 18, paddingHorizontal: 20, alignItems: "center" }}
       >
         <View
           style={{
-            borderRadius: 6,
+            borderRadius: 24,
+            borderCurve: "continuous",
             shadowColor: "#000",
-            shadowOpacity: 0.45,
-            shadowRadius: 16,
-            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.34,
+            shadowRadius: 18,
+            shadowOffset: { width: 0, height: 10 },
           }}
         >
           <View
             style={{
               width: 132,
               height: 132,
-              borderRadius: 6,
+              borderRadius: 24,
+              borderCurve: "continuous",
               overflow: "hidden",
               backgroundColor: colors.card,
               alignItems: "center",
               justifyContent: "center",
+              borderWidth: 0.7,
+              borderColor: colors.hairline,
             }}
           >
             {cover ? (
@@ -143,9 +355,9 @@ export default function PlaylistScreen() {
           {name}
         </Text>
         <Text className="mt-1.5 text-sm font-medium" style={{ color: colors.muted }}>
-          {count} {count === 1 ? "song" : "songs"}
+          {countLabel}
         </Text>
-      </LinearGradient>
+      </View>
 
       {/* action row: download · shuffle · play (Spotify layout) */}
       <View
@@ -204,8 +416,18 @@ export default function PlaylistScreen() {
         ) : null}
       </View>
       {error ? (
-        <View className="px-5 pb-2">
+        <View className="px-5 pb-3" style={{ gap: 8 }}>
           <ErrorText>{error}</ErrorText>
+          <PressableScale
+            onPress={retry}
+            accessibilityRole="button"
+            accessibilityLabel="Retry playlist"
+            style={{ alignSelf: "flex-start", paddingVertical: 4 }}
+          >
+            <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: "700" }}>
+              Try again
+            </Text>
+          </PressableScale>
         </View>
       ) : null}
       {count > 0 ? <SongSortBar context={contextKey} /> : null}
@@ -221,7 +443,40 @@ export default function PlaylistScreen() {
         showToggle={false}
         contextKey={contextKey}
         playlistContext={playlistContext}
-        emptyComponent={loading ? null : <EmptyState title="This playlist is empty" />}
+        onEndReached={spotifyCatalogPlaylist ? loadMore : undefined}
+        footer={
+          loadingMore ? (
+            <View style={{ alignItems: "center", paddingVertical: 20 }}>
+              <ActivityIndicator color={colors.muted} />
+            </View>
+          ) : loadMoreError ? (
+            <View style={{ alignItems: "center", paddingHorizontal: 20, paddingVertical: 20, gap: 10 }}>
+              <ErrorText>{loadMoreError}</ErrorText>
+              <PressableScale
+                onPress={loadMore}
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading more songs"
+                style={{ paddingHorizontal: 14, paddingVertical: 8 }}
+              >
+                <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: "700" }}>
+                  Try again
+                </Text>
+              </PressableScale>
+            </View>
+          ) : null
+        }
+        emptyComponent={
+          loading ? null : (
+            <EmptyState
+              title={providerReadThrough && !isOnline ? "Connect to view this playlist" : "This playlist is empty"}
+              subtitle={
+                providerReadThrough && !isOnline
+                  ? "Downloaded matches from your library stay available offline."
+                  : undefined
+              }
+            />
+          )
+        }
       />
       <Sheet visible={menuOpen} onClose={() => setMenuOpen(false)} heightPct={0.4} zIndex={200}>
         <View className="border-b px-5 pb-3 pt-1" style={{ borderColor: colors.line }}>
@@ -263,4 +518,8 @@ export default function PlaylistScreen() {
       </Sheet>
     </View>
   );
+}
+
+export default function PlaylistScreen() {
+  return <PlaylistDetailScreen />;
 }

@@ -4,14 +4,22 @@ import { Plus, Sparkles, X } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { Sheet } from "@/components/ui/Sheet";
-import { colors } from "@/theme";
+import { useOnlineStatus } from "@/lib/use-connectivity";
 import { addRecommendationToContext, skipRecommendation } from "@/lib/smart-shuffle-actions";
 import { getUpcomingPlaybackIndices, usePlayerStore } from "@/store/player";
+import { getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
+
+const MONO_ACTIVE = "rgba(255,255,255,0.94)";
+const MONO_PRIMARY = "rgba(255,255,255,0.86)";
+const MONO_SECONDARY = "rgba(255,255,255,0.58)";
+const MONO_TERTIARY = "rgba(255,255,255,0.42)";
 
 // Current song highlighted + "Up Next" (in playback order — shuffle shows the
 // redo stack then the pool, via getUpcomingPlaybackIndices). Tap to jump, X to remove.
 export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const isOnline = useOnlineStatus();
+  const offlineRecords = useOfflineStore((s) => s.records);
   const queue = usePlayerStore((s) => s.queue);
   const currentIndex = usePlayerStore((s) => s.currentIndex);
   const currentSong = usePlayerStore((s) => s.currentSong);
@@ -38,42 +46,84 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
   // it to the queue's context (like / add to playlist), and the [X] becomes Skip
   // (removes + blocklists so it isn't recommended again). Membership is the
   // store's recommendedIds Set, not a flag on the song (the id changes on staging).
-  const renderRow = (song: PlayerSong, index: number) => {
+  const renderRow = (song: PlayerSong, index: number, current = false) => {
     const isRec = recommendedIds.has(song.id);
+    const record = offlineRecords[keyFor(getOfflineAccountScope(), song.id)];
+    const deviceLocal =
+      song.source === "offline" ||
+      song.source === "browser-local" ||
+      song.source === "picked-file" ||
+      /^(file|blob|data):/i.test(song.audioUrl);
+    const unavailable = !current && !isOnline && record?.status !== "ready" && !deviceLocal;
     return (
-      <View className="flex-row items-center gap-3 px-4 py-2">
-        <PressableScale scaleTo={1} onPress={() => advanceToIndex(index)} className="min-w-0 flex-1 flex-row items-center gap-3">
-          <View className="h-11 w-11 overflow-hidden rounded">
-            <CoverImage src={song.imageUrl} networkSrc={song.networkImageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={song.id} />
+      <View
+        className="flex-row items-center gap-3 px-4"
+        style={{ minHeight: 60, opacity: unavailable ? 0.45 : 1 }}
+      >
+        <PressableScale
+          scaleTo={1}
+          onPress={current || unavailable ? undefined : () => advanceToIndex(index)}
+          accessibilityRole={current ? "text" : "button"}
+          accessibilityState={{ disabled: unavailable }}
+          accessibilityLabel={current ? `Now playing ${song.title}` : `Play ${song.title}`}
+          className="min-w-0 flex-1 flex-row items-center gap-3"
+        >
+          <View
+            style={{
+              width: 44,
+              height: 44,
+              overflow: "hidden",
+              borderRadius: 8,
+              borderCurve: "continuous",
+            }}
+          >
+            <CoverImage
+              src={song.imageUrl}
+              networkSrc={song.networkImageUrl}
+              style={{ width: "100%", height: "100%" }}
+              recyclingKey={song.id}
+            />
           </View>
           <View className="min-w-0 flex-1">
             <View className="flex-row items-center gap-1.5">
-              {isRec ? <Sparkles size={13} color={colors.emerald} /> : null}
-              <Text numberOfLines={1} className="text-sm font-medium" style={{ color: colors.foreground, flexShrink: 1 }}>
+              {isRec ? <Sparkles size={13} color={MONO_SECONDARY} /> : null}
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: current ? MONO_ACTIVE : MONO_PRIMARY,
+                  flexShrink: 1,
+                  fontSize: 14,
+                  fontWeight: current ? "600" : "500",
+                }}
+              >
                 {song.title}
               </Text>
             </View>
-            <Text numberOfLines={1} className="text-xs" style={{ color: colors.muted }}>
-              {song.artist}
+            <Text numberOfLines={1} className="text-xs" style={{ color: MONO_SECONDARY }}>
+              {unavailable ? `${song.artist} · Not downloaded` : song.artist}
             </Text>
           </View>
         </PressableScale>
         {isRec ? (
-          <PressableScale onPress={() => void addRecommendationToContext(song, index)} hitSlop={8} accessibilityLabel={`Add ${song.title}`}>
-            <View className="p-1">
-              <Plus size={18} color={colors.emerald} />
-            </View>
+          <PressableScale
+            onPress={() => void addRecommendationToContext(song, index)}
+            accessibilityRole="button"
+            accessibilityLabel={`Add ${song.title}`}
+            style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}
+          >
+            <Plus size={19} color={MONO_PRIMARY} />
           </PressableScale>
         ) : null}
-        <PressableScale
-          onPress={() => (isRec ? skipRecommendation(song, index) : removeFromQueue(index))}
-          hitSlop={8}
-          accessibilityLabel={isRec ? `Skip ${song.title}` : `Remove ${song.title}`}
-        >
-          <View className="p-1">
-            <X size={18} color={colors.muted} />
-          </View>
-        </PressableScale>
+        {current ? null : (
+          <PressableScale
+            onPress={() => (isRec ? skipRecommendation(song, index) : removeFromQueue(index))}
+            accessibilityRole="button"
+            accessibilityLabel={isRec ? `Skip ${song.title}` : `Remove ${song.title}`}
+            style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}
+          >
+            <X size={18} color={MONO_SECONDARY} />
+          </PressableScale>
+        )}
       </View>
     );
   };
@@ -86,17 +136,23 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
         extraData={recommendedIds}
         renderItem={({ item }) => renderRow(queue[item], item)}
         ListHeaderComponent={
-          <View className="px-4 pb-2 pt-1">
-            <Text className="mb-3 text-lg font-bold" style={{ color: colors.foreground }}>
+          <View className="pb-2 pt-1">
+            <Text className="mb-3 px-4" style={{ color: MONO_ACTIVE, fontSize: 20, fontWeight: "600" }}>
               Queue
             </Text>
             {currentSong ? (
               <>
-                <Text className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: colors.muted }}>
+                <Text
+                  className="mb-1 px-4 text-xs font-semibold uppercase tracking-wide"
+                  style={{ color: MONO_TERTIARY }}
+                >
                   Now playing
                 </Text>
-                {renderRow(currentSong, currentIndex)}
-                <Text className="mb-1 mt-3 text-xs font-semibold uppercase tracking-wide" style={{ color: colors.muted }}>
+                {renderRow(currentSong, currentIndex, true)}
+                <Text
+                  className="mb-1 mt-3 px-4 text-xs font-semibold uppercase tracking-wide"
+                  style={{ color: MONO_TERTIARY }}
+                >
                   Up next
                 </Text>
               </>
@@ -105,7 +161,7 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
         }
         ListEmptyComponent={
           <View className="items-center py-10">
-            <Text style={{ color: colors.muted }}>Nothing up next</Text>
+            <Text style={{ color: MONO_SECONDARY }}>Nothing up next</Text>
           </View>
         }
         contentContainerStyle={{ paddingBottom: 40 }}

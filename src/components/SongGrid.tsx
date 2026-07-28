@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { LayoutGrid, Pause, Play, Rows3, Shuffle } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";

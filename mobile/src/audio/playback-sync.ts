@@ -14,25 +14,29 @@ import {
   writeServerPlaybackState,
 } from "@/lib/playback-state";
 import { isPlaybackEngaged } from "@/audio/publish-gate";
-import { getOfflineAccountScope } from "@/store/offline";
+import { getOfflineAccountScope, resolvePortablePlaybackSong } from "@/store/offline";
 import { usePlayerStore } from "@/store/player";
 
 export const PLAYBACK_STATE_PUBLISH_INTERVAL_MS = 8000;
 
 let lastPosition = 0;
+let lastPositionSongId: string | null = null;
 let lastStatePublishMs = 0;
+let lastSnapshotUpdatedAt = 0;
 let pendingResumeSeek: { songId: string; time: number } | null = null;
 
-export function setLastPosition(position: number): void {
-  lastPosition = position;
+export function setLastPosition(position: number, songId?: string | null): void {
+  lastPosition = Math.max(0, position);
+  lastPositionSongId = songId === undefined ? (usePlayerStore.getState().currentSong?.id ?? null) : songId;
 }
 
-export function getLastPosition(): number {
-  return lastPosition;
+export function getLastPosition(songId?: string): number {
+  return songId && lastPositionSongId !== songId ? 0 : lastPosition;
 }
 
 export function setPendingResumeSeek(songId: string, time: number): void {
   pendingResumeSeek = { songId, time };
+  setLastPosition(time, songId);
 }
 
 // Returns the pending resume position for `songId` (and consumes it), else null.
@@ -47,10 +51,14 @@ export function takePendingResumeSeek(songId: string): number | null {
 
 function buildSnapshot(): PlaybackStateSnapshot | null {
   const s = usePlayerStore.getState();
-  const song = s.currentSong;
+  const current = s.currentSong;
+  if (!current) return null;
+  const song = resolvePortablePlaybackSong(current);
   if (!song || !isPersistablePlayerSong(song)) return null;
-  const queue = s.queue.filter(isPersistablePlayerSong);
+  const queue = s.queue.map(resolvePortablePlaybackSong).filter(isPersistablePlayerSong);
   const currentIndex = Math.max(0, queue.findIndex((item) => item.id === song.id));
+  const updatedAt = Math.max(Date.now(), lastSnapshotUpdatedAt + 1);
+  lastSnapshotUpdatedAt = updatedAt;
   return {
     version: PLAYBACK_STATE_VERSION,
     accountScope: getOfflineAccountScope(),
@@ -58,9 +66,11 @@ function buildSnapshot(): PlaybackStateSnapshot | null {
     currentIndex,
     queueContextKey: s.queueContextKey,
     song,
-    currentTime: lastPosition,
+    // Time events from the previous deck/player can race a rapid queue switch.
+    // Never attach that prior track's position to a newly-selected song.
+    currentTime: lastPositionSongId === current.id ? lastPosition : 0,
     isPlaying: s.isPlaying,
-    updatedAt: Date.now(),
+    updatedAt,
     deviceId: getPlaybackDeviceId(),
   };
 }
@@ -84,6 +94,7 @@ export async function publishPlaybackState(force: boolean): Promise<void> {
 }
 
 function applyPlaybackSnapshot(snapshot: PlaybackStateSnapshot): void {
+  lastSnapshotUpdatedAt = Math.max(lastSnapshotUpdatedAt, snapshot.updatedAt);
   setPendingResumeSeek(snapshot.song.id, snapshot.currentTime);
   // Keep the local cache aligned with whatever we restored (e.g. a newer server
   // snapshot) WITHOUT a server write — restore stays read-only server-side so it

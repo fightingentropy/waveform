@@ -7,14 +7,22 @@
     "icon": "./assets/images/icon.png",
     "scheme": "spotifymobile",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
     "backgroundColor": "#0a0a0a",
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "xyz.streamarena.spotify",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
-        "UIBackgroundModes": ["audio"],
-        "NSAppTransportSecurity": { "NSAllowsArbitraryLoads": false }
+        "UIBackgroundModes": [
+          "audio"
+        ],
+        "UIViewControllerBasedStatusBarAppearance": true,
+        "UIStatusBarStyle": "UIStatusBarStyleLightContent",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false
+        }
       }
     },
     "android": {
@@ -38,8 +46,17 @@
     },
     "plugins": [
       "./plugins/withSigning",
+      "./plugins/withXcode27DeploymentTarget",
+      "./plugins/withIOS27SceneLifecycle",
       "expo-router",
-      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Spotify to choose cover and profile images.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -47,7 +64,11 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 96
         }
-      ]
+      ],
+      "expo-font",
+      "expo-image",
+      "expo-sqlite",
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,

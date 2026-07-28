@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { rewindHistory } from "../mobile/src/store/player-nav";
+import { findPlayableQueueIndex, rewindHistory } from "../mobile/src/store/player-nav";
 
 // Regression for the offline "previous" bug: in shuffle, online `previous()` walks
 // the real play-history, but offline it used to route through the forward-biased
@@ -42,5 +42,68 @@ describe("rewindHistory (shuffle 'previous')", () => {
 
   test("skips out-of-range indices left over from a shrunk queue", () => {
     expect(rewindHistory([3, 99, 12], 10, ALL_PLAYABLE)).toEqual({ index: 3, remaining: [] });
+  });
+});
+
+describe("findPlayableQueueIndex (offline queue boundaries)", () => {
+  const base = {
+    queueLength: 5,
+    currentIndex: 3,
+    direction: 1 as const,
+    shuffle: false,
+    repeatMode: "off" as const,
+    shuffleRemaining: [] as number[],
+  };
+
+  test("repeat off skips remote-only rows ahead but never wraps", () => {
+    expect(findPlayableQueueIndex(base, (index) => index === 4)).toBe(4);
+    expect(findPlayableQueueIndex(base, (index) => index === 1)).toBeNull();
+  });
+
+  test("repeat all may wrap in either linear direction", () => {
+    expect(
+      findPlayableQueueIndex({ ...base, repeatMode: "all" }, (index) => index === 1),
+    ).toBe(1);
+    expect(
+      findPlayableQueueIndex(
+        {
+          ...base,
+          currentIndex: 1,
+          direction: -1,
+          repeatMode: "all",
+        },
+        (index) => index === 4,
+      ),
+    ).toBe(4);
+  });
+
+  test("shuffle repeat off uses only the unplayed pool", () => {
+    const state = {
+      ...base,
+      shuffle: true,
+      shuffleRemaining: [4, 1],
+    };
+    expect(findPlayableQueueIndex(state, (index) => index === 1)).toBe(1);
+    expect(
+      findPlayableQueueIndex({ ...state, shuffleRemaining: [] }, (index) => index === 1),
+    ).toBeNull();
+  });
+
+  test("shuffle repeat all refills from playable queue rows", () => {
+    expect(
+      findPlayableQueueIndex(
+        {
+          ...base,
+          shuffle: true,
+          repeatMode: "all",
+          shuffleRemaining: [],
+        },
+        (index) => index === 1,
+      ),
+    ).toBe(1);
+  });
+
+  test("never returns the current item as an advance target", () => {
+    expect(findPlayableQueueIndex(base, (index) => index === base.currentIndex)).toBeNull();
   });
 });

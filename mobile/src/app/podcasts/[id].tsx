@@ -1,17 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Text, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { fetch as expoFetch } from "expo/fetch";
 import { Pause, Play } from "lucide-react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
 import { DownloadButton } from "@/components/song/DownloadButton";
 import { EmptyState, ErrorText } from "@/components/ui/States";
 import { CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
-import { apiFetch } from "@/lib/http";
-import { parsePodcastFeed, PODCAST_SHOWS, type PodcastEpisode } from "@/lib/podcasts";
+import { apiUrl } from "@/lib/http";
+import {
+  parsePodcastFeed,
+  PODCAST_SHOWS,
+  readPodcastFeedPrefix,
+  type PodcastEpisode,
+} from "@/lib/podcasts";
 import { useUserPodcastsStore } from "@/store/user-podcasts";
 import { formatTime } from "@/lib/format";
-import { isEpisodeFinished, readEpisodeProgress } from "@/lib/podcast-progress";
+import { isEpisodeFinished, readAllEpisodeProgress } from "@/lib/podcast-progress";
 import { playSongs } from "@/audio/actions";
 import { usePlayerStore } from "@/store/player";
 import { colors } from "@/theme";
@@ -31,27 +37,53 @@ export default function PodcastShowScreen() {
   useEffect(() => {
     if (!show) return;
     let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
     setEpisodes(null);
     setError(null);
     (async () => {
       try {
         // User-added feeds are fetched directly (native has no CORS); built-in
         // shows go through the SSRF-guarded Worker proxy keyed by show id.
-        const res = show.userAdded
-          ? await fetch(show.feedUrl, { headers: { accept: "application/rss+xml, application/xml, text/xml, */*" } })
-          : await apiFetch(`/api/podcast-feeds/${encodeURIComponent(show.id)}`);
+        const feedUrl = show.userAdded
+          ? show.feedUrl
+          : apiUrl(`/api/podcast-feeds/${encodeURIComponent(show.id)}`);
+        const res = await expoFetch(feedUrl, {
+          credentials: "include",
+          signal: controller.signal,
+          headers: { accept: "application/rss+xml, application/xml, text/xml, */*" },
+        });
         if (!res.ok) throw new Error(`Could not load episodes (${res.status})`);
-        const xml = await res.text();
+        const xml = await readPodcastFeedPrefix(res);
         const parsed = parsePodcastFeed(xml, show);
         if (!cancelled) setEpisodes(parsed);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Could not load episodes");
+        if (!cancelled) {
+          setError(
+            controller.signal.aborted
+              ? "Podcast feed timed out"
+              : e instanceof Error
+                ? e.message
+                : "Could not load episodes",
+          );
+        }
+      } finally {
+        clearTimeout(timeout);
       }
     })();
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
     };
-  }, [show?.id]);
+  }, [show]);
+
+  // MMKV reads are synchronous and the progress map can hold 200 entries. Read
+  // and parse it once per screen refresh, not once for every rendered episode.
+  const episodeProgress = useMemo(
+    () => (episodes ? readAllEpisodeProgress() : null),
+    [episodes, currentSongId, isPlaying],
+  );
 
   if (!show) {
     return (
@@ -63,7 +95,7 @@ export default function PodcastShowScreen() {
 
   const renderEpisode = ({ item, index }: { item: PodcastEpisode; index: number }) => {
     const active = currentSongId === item.id;
-    const progress = readEpisodeProgress(item.id);
+    const progress = episodeProgress?.[item.id] ?? null;
     const finished = progress ? isEpisodeFinished(progress) : false;
     const inProgress = !finished && progress != null && progress.duration > 0 && progress.time > 0;
     const progressPct = inProgress
@@ -97,7 +129,11 @@ export default function PodcastShowScreen() {
         <DownloadButton song={item} size={20} />
         <PressableScale onPress={() => (active ? toggle() : playSongs(episodes ?? [], index))} hitSlop={8}>
           <View className="h-9 w-9 items-center justify-center rounded-full" style={{ backgroundColor: colors.emerald }}>
-            {active && isPlaying ? <Pause size={16} color="#fff" fill="#fff" /> : <Play size={16} color="#fff" fill="#fff" style={{ marginLeft: 1 }} />}
+            {active && isPlaying ? (
+              <Pause size={16} color="#050505" fill="#050505" />
+            ) : (
+              <Play size={16} color="#050505" fill="#050505" style={{ marginLeft: 1 }} />
+            )}
           </View>
         </PressableScale>
       </View>

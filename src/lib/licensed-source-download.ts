@@ -385,7 +385,7 @@ export async function resolveLicensedSourceStreamUrl(options: {
   // ("url":"MANIFEST:<base64 mpd>"), not an HTTP URL — decode it into a dash stream.
   const inlineUrl = firstString(payload.url, data.url, audio.url, stream.url, payload.streamUrl, data.streamUrl);
   if (inlineUrl.startsWith("MANIFEST:")) {
-    let manifestXml = "";
+    let manifestXml: string;
     try {
       const binary = atob(inlineUrl.slice("MANIFEST:".length));
       const bytes = new Uint8Array(binary.length);

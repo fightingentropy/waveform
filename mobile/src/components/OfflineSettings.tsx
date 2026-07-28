@@ -125,6 +125,7 @@ export function OfflineSettings() {
   const syncStatus = useOfflineStore((s) => s.syncStatus);
   const syncError = useOfflineStore((s) => s.syncError);
   const pendingMutations = useOfflineStore((s) => s.pendingMutations);
+  const failedMutations = useOfflineStore((s) => s.failedMutations);
   const verificationStatus = useOfflineStore((s) => s.verificationStatus);
   const verificationCheckedAt = useOfflineStore((s) => s.verificationCheckedAt);
   const verifiedDownloads = useOfflineStore((s) => s.verifiedDownloads);
@@ -133,6 +134,7 @@ export function OfflineSettings() {
   const verifyDownloads = useOfflineStore((s) => s.verifyDownloads);
   const retryFailedDownloads = useOfflineStore((s) => s.retryFailedDownloads);
   const syncOfflineMutations = useOfflineStore((s) => s.syncOfflineMutations);
+  const retryFailedMutations = useOfflineStore((s) => s.retryFailedMutations);
   const clearDownloads = useOfflineStore((s) => s.clearDownloads);
   const autoDownloadLiked = useOfflineStore((s) => s.autoDownloadLiked);
   const setAutoDownloadLiked = useOfflineStore((s) => s.setAutoDownloadLiked);
@@ -202,12 +204,22 @@ export function OfflineSettings() {
         ? AMBER
         : colors.muted;
 
-  const syncHealthy = pendingMutations === 0 && syncStatus !== "auth-required" && syncStatus !== "failed";
+  const syncHealthy =
+    pendingMutations === 0 &&
+    failedMutations === 0 &&
+    syncStatus !== "auth-required" &&
+    syncStatus !== "failed";
   const syncSummary =
-    pendingMutations === 0
+    failedMutations > 0
+      ? `${failedMutations} failed${pendingMutations > 0 ? ` · ${pendingMutations} pending` : ""}`
+      : pendingMutations === 0
       ? "Up to date"
       : `${pendingMutations} pending${syncStatus === "auth-required" ? " · sign in" : ""}`;
-  const showSyncAction = pendingMutations > 0 || syncStatus === "failed" || syncStatus === "auth-required";
+  const showSyncAction =
+    pendingMutations > 0 ||
+    failedMutations > 0 ||
+    syncStatus === "failed" ||
+    syncStatus === "auth-required";
 
   const handleRefresh = () => {
     void refreshStorage();
@@ -287,7 +299,20 @@ export function OfflineSettings() {
           busy={syncStatus === "syncing"}
           title="Sync"
           value={syncSummary}
-          right={showSyncAction ? <MiniButton label="Sync now" busy={syncStatus === "syncing"} onPress={() => void syncOfflineMutations()} /> : undefined}
+          right={
+            showSyncAction ? (
+              <MiniButton
+                label={failedMutations > 0 ? "Retry" : "Sync now"}
+                tone={failedMutations > 0 ? "warn" : "default"}
+                busy={syncStatus === "syncing"}
+                onPress={() =>
+                  void (failedMutations > 0
+                    ? retryFailedMutations()
+                    : syncOfflineMutations())
+                }
+              />
+            ) : undefined
+          }
         />
 
         {/* Failed downloads → retry (only when present) */}
@@ -309,7 +334,7 @@ export function OfflineSettings() {
             <Switch
               value={autoDownloadLiked}
               onValueChange={setAutoDownloadLiked}
-              trackColor={{ true: colors.emerald, false: "#3a3a3a" }}
+              trackColor={{ true: "rgba(255,255,255,0.42)", false: "#3a3a3a" }}
               thumbColor="#fff"
             />
           }

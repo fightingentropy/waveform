@@ -57,7 +57,7 @@ export default function ProfileScreen() {
                 </View>
               )}
               <View className="absolute bottom-1 right-1 h-8 w-8 items-center justify-center rounded-full" style={{ backgroundColor: colors.emerald }}>
-                <Camera size={16} color="#fff" />
+                <Camera size={16} color="#050505" />
               </View>
             </View>
           </PressableScale>
