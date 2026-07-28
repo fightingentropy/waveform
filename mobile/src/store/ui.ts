@@ -23,13 +23,19 @@ export type NamePromptTarget = {
   onSubmit: (name: string) => void;
 } | null;
 
-// Long-press actions for a Your Library row (pin / unpin). `cover` is the same
-// size-aware render fn LibraryScreen builds, reused for the sheet's header art.
+// Long-press actions for a Your Library row. `cover` is the same size-aware
+// render fn LibraryScreen builds, reused for the sheet's header art. Playlist
+// metadata is only present for real playlist entries; shortcuts and podcasts
+// remain pin-only.
 export type LibraryActionsTarget = {
   key: string;
   title: string;
   subtitle: string;
   cover: (size: number) => ReactNode;
+  playlist?: {
+    id: string;
+    canDelete: boolean;
+  };
 } | null;
 
 // Optional collection context when the Listening Modes sheet is opened from a

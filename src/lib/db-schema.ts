@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS "Playlist" (
   "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "source" TEXT,
   "convertedAt" TEXT,
+  "deletedAt" TEXT,
   FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 

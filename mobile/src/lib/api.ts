@@ -31,6 +31,9 @@ export type PlaylistEntry = {
   // True for D1-backed playlists the app can edit (native + converted folders).
   // Undefined/false for still-unconverted mini folders (read-only) and pre-flag.
   editable?: boolean;
+  // Explicit server capability. When absent on an older payload, clients fall
+  // back to editable + the protected local-folder id convention.
+  deletable?: boolean;
 };
 
 type ApiCacheEntry<T = unknown> = {
@@ -650,6 +653,7 @@ export type PlaylistPayload = {
     externalUrl?: string;
     // True when served from D1 (editable). Absent for mini-served folders.
     editable?: boolean;
+    deletable?: boolean;
   } | null;
   songs: PlayerSong[];
   // null when the owner's mini like set was unreachable — the client must SKIP

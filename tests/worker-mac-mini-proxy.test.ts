@@ -13,6 +13,8 @@ describe("Mac mini proxy user forwarding", () => {
     expect(shouldForwardMacMiniUserForPathname("/api/liked")).toBe(true);
     expect(shouldForwardMacMiniUserForPathname("/api/songs")).toBe(true);
     expect(shouldForwardMacMiniUserForPathname("/api/songs/local-server%3Aabc123")).toBe(true);
+    expect(shouldForwardMacMiniUserForPathname("/api/files/local/Album%2Ftrack.flac")).toBe(true);
+    expect(shouldForwardMacMiniUserForPathname("/api/artwork/local/local-server%3Aabc123")).toBe(true);
   });
 
   test("does not steal Spotify import routes from the Worker", () => {

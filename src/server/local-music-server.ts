@@ -161,6 +161,7 @@ const LYRICS_EXTENSIONS = new Set([".lrc", ".txt"]);
 const SCAN_CACHE_VERSION = 4;
 const LIKES_CACHE_VERSION = 1;
 const ARTWORK_CACHE_VERSION = 2;
+const ARTWORK_EMPTY_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const LOCAL_USER = {
   id: "local-mac-mini",
   email: "erlin@spotify.local",
@@ -3484,16 +3485,20 @@ async function lookupRemoteArtwork(song: PlayerSong): Promise<DownloadedArtwork 
   return { data, contentType, sourceUrl: artworkUrl };
 }
 
-// Response.redirect requires an absolute URL per spec; a 302 with a relative
-// `location` header is what we actually want for the fallback icon.
-function fallbackArtworkRedirect(): Response {
-  return new Response(null, { status: 302, headers: { location: "/apple-icon.png" } });
+function missingArtworkResponse(): Response {
+  // A missing cover should advance CoverImage's fallback chain. Returning the
+  // branded app icon as a successful image made an entire playlist look like a
+  // wall of identical Spotify logos whenever artwork auth or lookup failed.
+  return new Response(null, {
+    status: 404,
+    headers: { "cache-control": "private, max-age=3600" },
+  });
 }
 
 async function handleArtwork(source: LibrarySource, id: string, request: Request): Promise<Response> {
   const snapshot = await getLibrary(source);
   const entry = snapshot.entriesById.get(id);
-  if (!entry) return fallbackArtworkRedirect();
+  if (!entry) return missingArtworkResponse();
 
   // A cover sidecar wins over the extraction cache: clients holding old
   // /api/artwork/local/<id> URLs (play-event snapshots, offline records) start
@@ -3521,9 +3526,15 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
       fileName?: string;
       empty?: boolean;
       sourceUrl?: string;
+      checkedAt?: string;
     };
     if (meta.version === ARTWORK_CACHE_VERSION && meta.signature === signature) {
-      if (meta.empty) return fallbackArtworkRedirect();
+      if (meta.empty) {
+        const checkedAt = Date.parse(meta.checkedAt || "");
+        if (Number.isFinite(checkedAt) && Date.now() - checkedAt < ARTWORK_EMPTY_RETRY_MS) {
+          return missingArtworkResponse();
+        }
+      }
       if (meta.fileName) {
         const cachedArtwork = resolve(source.artworkDir, meta.fileName);
         return serveFile(cachedArtwork, request, "public, max-age=86400");
@@ -3563,17 +3574,27 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
 
     await writeFile(
       cacheMetaPath,
-      `${JSON.stringify({ version: ARTWORK_CACHE_VERSION, signature, empty: true })}\n`,
+      `${JSON.stringify({
+        version: ARTWORK_CACHE_VERSION,
+        signature,
+        empty: true,
+        checkedAt: new Date().toISOString(),
+      })}\n`,
       "utf8",
     );
-    return fallbackArtworkRedirect();
+    return missingArtworkResponse();
   } catch {
     await writeFile(
       cacheMetaPath,
-      `${JSON.stringify({ version: ARTWORK_CACHE_VERSION, signature, empty: true })}\n`,
+      `${JSON.stringify({
+        version: ARTWORK_CACHE_VERSION,
+        signature,
+        empty: true,
+        checkedAt: new Date().toISOString(),
+      })}\n`,
       "utf8",
     ).catch(() => {});
-    return fallbackArtworkRedirect();
+    return missingArtworkResponse();
   }
 }
 

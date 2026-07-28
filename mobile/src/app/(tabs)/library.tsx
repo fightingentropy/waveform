@@ -23,6 +23,7 @@ import { ProfileButton } from "@/components/profile/ProfileButton";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { type LibraryPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { canDeletePlaylist } from "@/lib/playlist-policy";
 import { PODCAST_SHOWS } from "@/lib/podcasts";
 import { useLibraryPinsStore } from "@/store/library-pins";
 import { useLibraryViewStore } from "@/store/library-view";
@@ -48,6 +49,10 @@ type LibItem = {
   // Epoch ms used by the "Recently added" sort. Undefined for items without a
   // creation date (the nav shortcuts) — they sort as newest and stay on top.
   addedAt?: number;
+  playlist?: {
+    id: string;
+    canDelete: boolean;
+  };
   onPress: () => void;
 };
 
@@ -307,6 +312,7 @@ export default function LibraryScreen() {
         subtitle: `Playlist • ${owner}`,
         pinnable: true,
         addedAt: Number.isNaN(added) ? undefined : added,
+        playlist: { id: pl.id, canDelete: canDeletePlaylist(pl) },
         onPress: () => router.push(`/playlist/${pl.id}`),
       };
     });
@@ -345,7 +351,13 @@ export default function LibraryScreen() {
 
   const handleLongPress = (item: LibItem) => {
     if (!item.pinnable) return;
-    openLibraryActions({ key: item.key, title: item.title, subtitle: item.subtitle, cover: item.cover });
+    openLibraryActions({
+      key: item.key,
+      title: item.title,
+      subtitle: item.subtitle,
+      cover: item.cover,
+      playlist: item.playlist,
+    });
   };
 
   const showPlaylistSkeleton = loading && data.playlists.length === 0 && filter !== "podcasts";

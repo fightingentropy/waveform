@@ -23,6 +23,7 @@ import { apiFetch } from "@/lib/http";
 import { withRequestTimeout } from "@/lib/request-timeout";
 import { useOnlineStatus } from "@/lib/use-connectivity";
 import { deletePlaylist, renamePlaylist } from "@/lib/playlist-actions";
+import { canDeletePlaylist } from "@/lib/playlist-policy";
 import { playSongs } from "@/audio/actions";
 import { publishPlaybackState } from "@/audio/playback-sync";
 import { useLikesStore } from "@/store/likes";
@@ -160,7 +161,7 @@ export function PlaylistDetailScreen({
   const openNamePrompt = useUiStore((s) => s.openNamePrompt);
   const [menuOpen, setMenuOpen] = useState(false);
   const editable = !!data.playlist?.editable;
-  const canDelete = editable && !(typeof id === "string" && id.startsWith("local-folder-"));
+  const canDelete = data.playlist ? canDeletePlaylist(data.playlist) : false;
   // Stable so memoized song rows don't re-render every frame.
   const playlistContext = useMemo(
     () => (editable && typeof id === "string" ? { id, name } : undefined),
@@ -300,7 +301,11 @@ export function PlaylistDetailScreen({
 
   const handleDelete = () => {
     if (typeof id !== "string") return;
-    Alert.alert("Delete playlist?", `“${name}” will be removed from your library.`, [
+    if (!isOnline) {
+      Alert.alert("You're offline", "Connect to the internet to delete this playlist.");
+      return;
+    }
+    Alert.alert("Delete playlist?", `“${name}” will be removed. Its songs will stay in your library.`, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",

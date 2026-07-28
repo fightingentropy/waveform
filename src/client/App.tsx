@@ -185,6 +185,26 @@ function useIdleRoutePrefetch() {
 
 const AUTH_PUBLIC_PATHS = new Set(["/signin"]);
 
+function ResponsiveLibraryRoute() {
+  const [isDesktop, setIsDesktop] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(min-width: 1024px)").matches,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const desktopQuery = window.matchMedia("(min-width: 1024px)");
+    const update = () => setIsDesktop(desktopQuery.matches);
+    update();
+    desktopQuery.addEventListener("change", update);
+    return () => desktopQuery.removeEventListener("change", update);
+  }, []);
+
+  return isDesktop ? <Navigate to="/playlists" replace /> : <LibraryPage />;
+}
+
 const MOBILE_STACK_ROUTES = [
   { match: (path: string) => path.startsWith("/playlist/"), label: "Playlist", fallback: "/library" },
   { match: (path: string) => path === "/liked", label: "Liked Songs", fallback: "/library" },
@@ -293,7 +313,6 @@ function Shell() {
           />
           <nav className="hidden lg:col-start-3 lg:flex items-center gap-4 xl:gap-6 lg:justify-self-end">
             <Link to="/" className="text-white/[0.68] transition hover:text-white">Home</Link>
-            <Link to="/library" className="text-white/[0.68] transition hover:text-white">Library</Link>
             <Link to="/upload" className="text-white/[0.68] transition hover:text-white">Upload</Link>
             <AuthButtons />
           </nav>
@@ -311,7 +330,14 @@ function Shell() {
         <Routes location={location}>
           <Route path="/" element={<HomePage />} />
           <Route path="/search" element={lazyRoute(<SearchPage />, "Loading search...")} />
-          <Route path="/library" element={lazyRoute(<LibraryPage />, "Loading library...")} />
+          <Route
+            path="/library"
+            element={lazyRoute(<ResponsiveLibraryRoute />, "Loading library...")}
+          />
+          <Route
+            path="/playlists"
+            element={lazyRoute(<LibraryPage playlistOnly />, "Loading playlists...")}
+          />
           <Route path="/songs" element={lazyRoute(<SongsPage />, "Loading songs...")} />
           <Route path="/liked" element={lazyRoute(<LikedPage />, "Loading liked songs...")} />
           <Route path="/radio" element={lazyRoute(<RadioPage />, "Loading radio stations...")} />

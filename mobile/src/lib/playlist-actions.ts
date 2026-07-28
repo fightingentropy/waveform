@@ -1,6 +1,7 @@
 import { invalidateLibraryApiCache, type PlaylistEntry } from "@/lib/api";
 import { API_CACHE_CLEARED_EVENT, emit } from "@/lib/events";
 import { apiFetchWithTimeout } from "@/lib/http";
+import { useLibraryPinsStore } from "@/store/library-pins";
 import { getOfflineAccountScope } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
 
@@ -65,6 +66,7 @@ export async function deletePlaylist(playlistId: string): Promise<void> {
     cache: "no-store",
   });
   if (!res.ok) throw await readError(res);
+  useLibraryPinsStore.getState().removePin(`pl-${playlistId}`);
   refreshLibrary();
 }
 

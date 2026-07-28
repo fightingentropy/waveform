@@ -1,6 +1,17 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useParams } from "react-router";
-import { ArrowDown, ArrowUp, Pause, Pencil, Play, Trash2, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ListChecks,
+  MoreHorizontal,
+  Pause,
+  Pencil,
+  Play,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   useApiData,
   withAccountScope,
@@ -11,28 +22,243 @@ import { useAuth } from "@/client/auth";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { usePlayerStore } from "@/store/player";
 import { CoverImage } from "@/components/CoverImage";
+import { PlaylistArtwork } from "@/components/PlaylistArtwork";
 import { SongGrid } from "@/components/SongGrid";
 import { cn } from "@/lib/utils";
+import { useModalDialogFocus } from "@/lib/use-modal-dialog";
 import type { PlayerSong } from "@/types/player";
 import { deletePlaylist, removeSongFromPlaylist, renamePlaylist, reorderPlaylist } from "@/client/playlist-actions";
 
 function PlaylistLoadingSkeleton() {
   return (
-    <div className="px-6 py-8 max-w-7xl mx-auto">
-      <div className="mb-8 space-y-3">
-        <div className="wf-skeleton h-7 w-56 max-w-full rounded-full" />
-        <div className="wf-skeleton h-4 w-24 rounded-full" />
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+      <div className="mb-7 flex items-end gap-5 border-b border-white/[0.08] pb-7">
+        <div className="wf-skeleton hidden h-40 w-40 shrink-0 rounded-xl sm:block" />
+        <div className="min-w-0 flex-1 space-y-3">
+          <div className="wf-skeleton h-3 w-20 rounded-full" />
+          <div className="wf-skeleton h-9 w-72 max-w-full rounded-full" />
+          <div className="wf-skeleton h-4 w-24 rounded-full" />
+        </div>
       </div>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5" aria-hidden>
+      <div className="space-y-2" aria-hidden>
         {[0, 1, 2, 3, 4, 5].map((item) => (
-          <div key={item} className="space-y-3">
-            <div className="wf-skeleton aspect-square rounded-lg" />
-            <div className="wf-skeleton h-4 rounded-full" />
-            <div className="wf-skeleton h-3 w-2/3 rounded-full" />
+          <div key={item} className="flex h-16 items-center gap-3 px-2">
+            <div className="wf-skeleton h-3 w-5 rounded-full" />
+            <div className="wf-skeleton h-11 w-11 rounded-md" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="wf-skeleton h-4 w-48 max-w-full rounded-full" />
+              <div className="wf-skeleton h-3 w-28 max-w-full rounded-full" />
+            </div>
           </div>
         ))}
       </div>
     </div>
+  );
+}
+
+function PlaylistActionsMenu({
+  managing,
+  pending,
+  deletable,
+  onRename,
+  onToggleManaging,
+  onDelete,
+}: {
+  managing: boolean;
+  pending: boolean;
+  deletable: boolean;
+  onRename: () => void;
+  onToggleManaging: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    });
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    window.addEventListener("pointerdown", closeOnPointerDown);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("pointerdown", closeOnPointerDown);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const runAndClose = (action: () => void) => {
+    setOpen(false);
+    triggerRef.current?.focus();
+    action();
+  };
+
+  const moveMenuFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+    if (items.length === 0) return;
+    event.preventDefault();
+    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? items.length - 1
+          : event.key === "ArrowUp"
+            ? (currentIndex - 1 + items.length) % items.length
+            : (currentIndex + 1) % items.length;
+    items[nextIndex]?.focus();
+  };
+
+  return (
+    <div ref={containerRef} className="relative shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label="Playlist options"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Playlist options"
+        disabled={pending}
+        onClick={() => setOpen((value) => !value)}
+        className="wf-control-button grid h-11 w-11 place-items-center rounded-full border border-white/[0.12] text-white/70 hover:bg-white/[0.07] hover:text-white disabled:cursor-wait disabled:opacity-45"
+      >
+        <MoreHorizontal size={20} />
+      </button>
+      {open ? (
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label="Playlist options"
+          onKeyDown={moveMenuFocus}
+          className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-52 rounded-xl border border-white/[0.12] bg-[#121213] p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => runAndClose(onRename)}
+            className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-white/85 hover:bg-white/[0.08] focus:outline-none focus-visible:bg-white/[0.08]"
+          >
+            <Pencil size={17} className="text-white/60" />
+            Rename
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => runAndClose(onToggleManaging)}
+            className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-white/85 hover:bg-white/[0.08] focus:outline-none focus-visible:bg-white/[0.08]"
+          >
+            <ListChecks size={17} className="text-white/60" />
+            {managing ? "Finish managing" : "Manage tracks"}
+          </button>
+          {deletable ? (
+            <>
+              <div className="my-1 border-t border-white/[0.08]" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runAndClose(onDelete)}
+                className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-red-300 hover:bg-red-400/[0.09] focus:outline-none focus-visible:bg-red-400/[0.09]"
+              >
+                <Trash2 size={17} />
+                Delete playlist
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PlaylistDeleteDialog({
+  name,
+  songsCount,
+  pending,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  name: string;
+  songsCount: number;
+  pending: boolean;
+  error?: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  useModalDialogFocus(true, dialogRef);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !pending) onCancel();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onCancel, pending]);
+
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !pending) onCancel();
+      }}
+    >
+      <section
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-playlist-title"
+        aria-describedby="delete-playlist-description"
+        tabIndex={-1}
+        className="w-full max-w-sm rounded-2xl border border-white/[0.12] bg-[#121213] p-5 text-white shadow-[0_24px_80px_rgba(0,0,0,0.65)] outline-none"
+      >
+        <h2 id="delete-playlist-title" className="text-lg font-semibold">
+          Delete “{name}”?
+        </h2>
+        <p id="delete-playlist-description" className="mt-2 text-sm leading-6 text-white/60">
+          This removes only the playlist. Its {songsCount} {songsCount === 1 ? "song stays" : "songs stay"} in your library.
+        </p>
+        {error ? (
+          <p role="alert" className="mt-3 rounded-lg border border-red-400/25 bg-red-400/[0.08] px-3 py-2 text-sm text-red-200">
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={pending}
+            onClick={onCancel}
+            className="wf-control-button rounded-full px-4 py-2 text-sm font-semibold text-white/75 hover:bg-white/[0.08] hover:text-white disabled:opacity-45"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={onConfirm}
+            className="wf-control-button rounded-full bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-400 disabled:cursor-wait disabled:opacity-60"
+          >
+            {pending ? "Deleting..." : "Delete playlist"}
+          </button>
+        </div>
+      </section>
+    </div>,
+    document.body,
   );
 }
 
@@ -202,15 +428,20 @@ export default function PlaylistPage() {
     },
   );
   const [managing, setManaging] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
-  const runAction = async (key: string, action: () => Promise<unknown>) => {
+  const runAction = async (
+    key: string,
+    action: () => Promise<unknown>,
+    refreshAfter = true,
+  ) => {
     setPendingAction(key);
     setActionError(null);
     try {
       await action();
-      retry();
+      if (refreshAfter) retry();
       return true;
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "The playlist couldn't be updated.");
@@ -232,54 +463,65 @@ export default function PlaylistPage() {
 
   if (!data.playlist) return <div className="px-6 py-8 max-w-7xl mx-auto opacity-70">Playlist not found.</div>;
 
+  const deletable = data.playlist.deletable ?? !id.startsWith("local-folder-");
+  const serverCoverImageUrls = data.playlist.coverImageUrls ?? [];
+  const songCoverImageUrls = Array.from(
+    new Set(
+      data.songs
+        .map((song) => song.imageUrl?.trim())
+        .filter((imageUrl): imageUrl is string => Boolean(imageUrl)),
+    ),
+  ).slice(0, 4);
+  const coverImageUrls =
+    serverCoverImageUrls.length > 0
+      ? serverCoverImageUrls
+      : id.startsWith("local-folder-") || !data.playlist.imageUrl
+        ? songCoverImageUrls
+        : [];
+
   return (
-    <div className="px-6 py-8 max-w-7xl mx-auto">
-      <div className="mb-4 flex flex-col items-start gap-3 sm:mb-6 sm:flex-row sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="truncate text-2xl font-semibold">{data.playlist.name}</h1>
-          <div className="mt-1 text-sm opacity-70">{data.songs.length} tracks</div>
-        </div>
-        {data.playlist.editable ? (
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => {
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+      <header className="mb-6 flex flex-col items-center gap-5 border-b border-white/[0.08] pb-7 text-center sm:flex-row sm:items-end sm:text-left">
+        <PlaylistArtwork
+          coverImageUrls={coverImageUrls}
+          imageUrl={data.playlist.imageUrl}
+          className="w-[132px] shrink-0 shadow-[0_14px_40px_rgba(0,0,0,0.42)] sm:w-44"
+          sizes="176px"
+          loading="eager"
+        />
+        <div className="flex min-w-0 w-full flex-1 items-end gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-semibold uppercase tracking-[1.35px] text-white/45">
+              Playlist
+            </div>
+            <h1 className="mt-1 truncate text-3xl font-bold tracking-[-0.8px] text-[#f2f2f2] sm:text-[42px] sm:leading-[1.05]">
+              {data.playlist.name}
+            </h1>
+            <div className="mt-3 text-sm text-white/55">
+              {data.songs.length} {data.songs.length === 1 ? "track" : "tracks"}
+            </div>
+          </div>
+          {data.playlist.editable ? (
+            <PlaylistActionsMenu
+              managing={managing}
+              pending={pendingAction !== null}
+              deletable={deletable}
+              onRename={() => {
                 const next = window.prompt("Playlist name", data.playlist?.name ?? "");
                 if (next?.trim() && next.trim() !== data.playlist?.name) {
                   void runAction("rename", () => renamePlaylist(id, next));
                 }
               }}
-              disabled={pendingAction !== null}
-              className="inline-flex items-center gap-2 rounded-full border border-white/[0.16] px-3 py-2 text-sm disabled:opacity-45"
-            >
-              <Pencil size={15} /> Rename
-            </button>
-            <button
-              type="button"
-              onClick={() => setManaging((value) => !value)}
-              className="rounded-full border border-white/[0.16] px-3 py-2 text-sm"
-            >
-              {managing ? "Done" : "Manage tracks"}
-            </button>
-            {!id.startsWith("local-folder-") ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!window.confirm(`Delete “${data.playlist?.name}”?`)) return;
-                  void runAction("delete", () => deletePlaylist(id)).then((deleted) => {
-                    if (deleted) navigate("/library");
-                  });
-                }}
-                disabled={pendingAction !== null}
-                className="inline-flex items-center gap-2 rounded-full border border-red-400/40 px-3 py-2 text-sm text-red-300 disabled:opacity-45"
-              >
-                <Trash2 size={15} /> Delete
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-      {actionError ? <div className="mb-4 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">{actionError}</div> : null}
+              onToggleManaging={() => setManaging((value) => !value)}
+              onDelete={() => {
+                setActionError(null);
+                setDeleteDialogOpen(true);
+              }}
+            />
+          ) : null}
+        </div>
+      </header>
+      {actionError ? <div role="alert" className="mb-4 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">{actionError}</div> : null}
       {managing && data.playlist.editable && data.songs.length > 0 ? (
         <ol className="mb-7 space-y-1 rounded-xl border border-white/[0.12] bg-white/[0.03] p-2">
           {data.songs.map((song, index) => (
@@ -324,11 +566,27 @@ export default function PlaylistPage() {
       ) : (
         <SongGrid
           songs={data.songs}
+          variant="playlist"
           likedSongIds={data.likedSongIds}
           canLike={!!user}
-          viewToggleClassName="mb-8 sm:-mt-14"
         />
       )}
+      {deleteDialogOpen ? (
+        <PlaylistDeleteDialog
+          name={data.playlist.name}
+          songsCount={data.songs.length}
+          pending={pendingAction === "delete"}
+          error={actionError}
+          onCancel={() => setDeleteDialogOpen(false)}
+          onConfirm={() => {
+            void runAction("delete", () => deletePlaylist(id), false).then((deleted) => {
+              if (!deleted) return;
+              setDeleteDialogOpen(false);
+              navigate("/playlists");
+            });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

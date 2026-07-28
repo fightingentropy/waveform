@@ -14,6 +14,7 @@ type SongCardProps = {
   song: PlayerSong;
   songIndex?: number;
   onPlayAt?: (index: number) => void;
+  variant?: "default" | "playlist";
   liked?: boolean;
   likePending?: boolean;
   canLike?: boolean;
@@ -28,6 +29,7 @@ const SongCardComponent = function SongCard({
   song,
   songIndex,
   onPlayAt,
+  variant = "default",
   liked = false,
   likePending = false,
   canLike = false,
@@ -66,6 +68,82 @@ const SongCardComponent = function SongCard({
   }, [isActive, isActiveAndPlaying, onPlayAt, pause, play, setSong, song, songIndex]);
 
   if (hideIfUnliked && !liked) return null;
+
+  if (variant === "playlist") {
+    return (
+      <div
+        onPointerEnter={() => warmPlaybackSong(song, true)}
+        className="wf-song-card group relative min-w-0"
+      >
+        <div
+          className={cn(
+            "relative aspect-square overflow-hidden rounded-[10px] bg-[#0c0c0d]",
+            isActive && "ring-1 ring-white/40",
+          )}
+        >
+          <button
+            type="button"
+            aria-label={isActiveAndPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
+            aria-pressed={isActiveAndPlaying}
+            onClick={handlePlay}
+            onFocus={() => warmPlaybackSong(song, true)}
+            className="absolute inset-0 z-10 cursor-pointer rounded-[10px] text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+          />
+          <CoverImage
+            src={song.imageUrl}
+            networkSrc={song.networkImageUrl}
+            alt={song.title}
+            fill
+            sizes="(max-width: 640px) 44vw, 190px"
+            className="wf-song-cover object-cover"
+            priority={priority}
+            loading={priority ? "eager" : "lazy"}
+          />
+        </div>
+
+        <div className="mt-2 flex min-w-0 items-start gap-1">
+          <button
+            type="button"
+            aria-label={isActiveAndPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
+            aria-pressed={isActiveAndPlaying}
+            onClick={handlePlay}
+            onFocus={() => warmPlaybackSong(song, true)}
+            className="min-w-0 flex-1 rounded-md text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+          >
+            <span className={cn("block truncate text-[14px] leading-5 text-[#f2f2f2]", isActive ? "font-semibold" : "font-medium")}>
+              {song.title}
+            </span>
+            <span className="block truncate text-xs leading-5 text-white/55">
+              {song.artist || "Unknown Artist"}
+            </span>
+          </button>
+          {isActive ? (
+            <span
+              aria-hidden
+              className="wf-control-button grid h-8 w-8 shrink-0 place-items-center rounded-full text-white"
+            >
+              {isActiveAndPlaying ? (
+                <Pause size={15} fill="currentColor" />
+              ) : (
+                <Play size={15} fill="currentColor" className="translate-x-px" />
+              )}
+            </span>
+          ) : null}
+          <TrackActionsButton
+            song={song}
+            liked={liked}
+            likePending={likePending}
+            canLike={canLike}
+            onToggleLike={onToggleLike}
+            showLike={showLike}
+            showQueue={showQueue}
+            className="h-8 w-8 text-white/60 hover:bg-white/[0.08] hover:text-white"
+            iconSize={17}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -138,6 +216,7 @@ export const SongCard = memo(SongCardComponent, (prevProps, nextProps) => {
   return (
     prevProps.song === nextProps.song &&
     prevProps.songIndex === nextProps.songIndex &&
+    prevProps.variant === nextProps.variant &&
     prevProps.liked === nextProps.liked &&
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&

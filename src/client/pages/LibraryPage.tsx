@@ -126,13 +126,17 @@ function PlaylistGridSkeleton() {
   );
 }
 
-export default function LibraryPage() {
+export default function LibraryPage({ playlistOnly = false }: { playlistOnly?: boolean }) {
   const { user, status } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedFilter = searchParams.get("filter");
   const filter: LibraryFilter =
-    requestedFilter === "playlists" || requestedFilter === "podcasts" ? requestedFilter : "all";
+    playlistOnly
+      ? "playlists"
+      : requestedFilter === "playlists" || requestedFilter === "podcasts"
+        ? requestedFilter
+        : "all";
   const [creating, setCreating] = useState(false);
   const [playlistName, setPlaylistName] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -206,19 +210,21 @@ export default function LibraryPage() {
           </div>
         </div>
 
-        <div className="mb-3 flex">
-          <FilterButton label="All" active={filter === "all"} onClick={() => toggleFilter("all")} />
-          <FilterButton
-            label="Playlists"
-            active={filter === "playlists"}
-            onClick={() => toggleFilter("playlists")}
-          />
-          <FilterButton
-            label="Podcasts"
-            active={filter === "podcasts"}
-            onClick={() => toggleFilter("podcasts")}
-          />
-        </div>
+        {!playlistOnly ? (
+          <div className="mb-3 flex">
+            <FilterButton label="All" active={filter === "all"} onClick={() => toggleFilter("all")} />
+            <FilterButton
+              label="Playlists"
+              active={filter === "playlists"}
+              onClick={() => toggleFilter("playlists")}
+            />
+            <FilterButton
+              label="Podcasts"
+              active={filter === "podcasts"}
+              onClick={() => toggleFilter("podcasts")}
+            />
+          </div>
+        ) : null}
 
         <div>
           {filter === "all" ? (

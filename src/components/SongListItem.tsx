@@ -14,6 +14,7 @@ type SongListItemProps = {
   song: PlayerSong;
   songIndex?: number;
   onPlayAt?: (index: number) => void;
+  variant?: "default" | "playlist";
   liked?: boolean;
   likePending?: boolean;
   canLike?: boolean;
@@ -23,10 +24,19 @@ type SongListItemProps = {
   priority?: boolean;
 };
 
+function formatDuration(duration: number | undefined): string {
+  if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) return "—";
+  const totalSeconds = Math.round(duration);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 const SongListItemComponent = function SongListItem({
   song,
   songIndex,
   onPlayAt,
+  variant = "default",
   liked = false,
   likePending = false,
   canLike = false,
@@ -61,6 +71,80 @@ const SongListItemComponent = function SongListItem({
     setSong(song);
     play();
   }, [isActive, isActiveAndPlaying, onPlayAt, pause, play, setSong, song, songIndex]);
+
+  if (variant === "playlist") {
+    return (
+      <div
+        onPointerEnter={() => warmPlaybackSong(song, true)}
+        className={cn(
+          "wf-list-row group grid min-h-16 grid-cols-[minmax(0,1fr)_2.25rem] items-center gap-2 rounded-lg px-2 py-1.5 [contain-intrinsic-size:auto_64px] [content-visibility:auto]",
+          "sm:grid-cols-[minmax(14rem,2fr)_minmax(7rem,1fr)_3.5rem_2.25rem] sm:gap-3",
+          isActive ? "bg-white/[0.055]" : "hover:bg-white/[0.035]",
+        )}
+      >
+        <button
+          type="button"
+          aria-label={isActiveAndPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
+          aria-pressed={isActiveAndPlaying}
+          onClick={handlePlay}
+          onFocus={() => warmPlaybackSong(song, true)}
+          className="wf-pressable grid min-w-0 grid-cols-[1.75rem_2.75rem_minmax(0,1fr)] items-center gap-3 rounded-md bg-transparent text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+        >
+          <span className="grid h-8 w-7 shrink-0 place-items-center text-xs tabular-nums text-white/45">
+            {isActive ? (
+              isActiveAndPlaying ? (
+                <Pause size={15} fill="currentColor" className="text-white" />
+              ) : (
+                <Play size={15} fill="currentColor" className="translate-x-px text-white" />
+              )
+            ) : (
+              <>
+                <span className="group-hover:hidden">{typeof songIndex === "number" ? songIndex + 1 : "—"}</span>
+                <Play size={15} fill="currentColor" className="hidden translate-x-px text-white group-hover:block" />
+              </>
+            )}
+          </span>
+          <span className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md bg-white/[0.055]">
+            <CoverImage
+              src={song.imageUrl}
+              networkSrc={song.networkImageUrl}
+              alt={song.title}
+              fill
+              sizes="44px"
+              className="wf-song-cover object-cover"
+              priority={priority}
+              loading={priority ? "eager" : "lazy"}
+            />
+          </span>
+          <span className="min-w-0">
+            <span className={cn("block truncate text-[14px] leading-5 text-[#f2f2f2]", isActive ? "font-semibold" : "font-medium")}>
+              {song.title}
+            </span>
+            <span className="block truncate text-xs leading-5 text-white/55">
+              {song.artist || "Unknown Artist"}
+            </span>
+          </span>
+        </button>
+
+        <span className="hidden min-w-0 truncate text-[13px] text-white/50 sm:block">
+          {song.album || "—"}
+        </span>
+        <span className="hidden text-right text-xs tabular-nums text-white/45 sm:block">
+          {formatDuration(song.duration)}
+        </span>
+        <TrackActionsButton
+          song={song}
+          liked={liked}
+          likePending={likePending}
+          canLike={canLike}
+          onToggleLike={onToggleLike}
+          showLike={showLike}
+          showQueue={showQueue}
+          className="h-9 w-9 text-white/55 hover:bg-white/[0.08] hover:text-white"
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -128,6 +212,7 @@ export const SongListItem = memo(SongListItemComponent, (prevProps, nextProps) =
   return (
     prevProps.song === nextProps.song &&
     prevProps.songIndex === nextProps.songIndex &&
+    prevProps.variant === nextProps.variant &&
     prevProps.liked === nextProps.liked &&
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&

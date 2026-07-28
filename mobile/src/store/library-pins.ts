@@ -34,6 +34,7 @@ type LibraryPinsState = {
   pinned: string[];
   isPinned: (key: string) => boolean;
   togglePin: (key: string) => void;
+  removePin: (key: string) => void;
 };
 
 export const useLibraryPinsStore = create<LibraryPinsState>((set, get) => ({
@@ -47,6 +48,14 @@ export const useLibraryPinsStore = create<LibraryPinsState>((set, get) => ({
     const next = current.includes(key)
       ? current.filter((k) => k !== key)
       : [key, ...current];
+    writePins(next);
+    set({ pinned: next });
+  },
+  removePin: (key) => {
+    if (!key) return;
+    const current = get().pinned;
+    const next = current.filter((item) => item !== key);
+    if (next.length === current.length) return;
     writePins(next);
     set({ pinned: next });
   },

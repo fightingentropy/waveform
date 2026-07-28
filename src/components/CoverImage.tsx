@@ -48,7 +48,7 @@ function artworkSrcSet(src: string): string | undefined {
 export function CoverImage({
   src,
   networkSrc,
-  fallbackSrc = "/apple-icon.png",
+  fallbackSrc = "/music-placeholder.svg",
   alt,
   ...props
 }: CoverImageProps) {
@@ -59,8 +59,15 @@ export function CoverImage({
   }, [fallbackSrc, networkSrc, src]);
 
   const candidates: string[] = [];
-  if (src && src.trim().length > 0) candidates.push(src);
-  if (networkSrc && networkSrc.trim().length > 0 && !candidates.includes(networkSrc)) {
+  // Older API rows used the branded app icon as a missing-cover sentinel. Do
+  // not render it as track artwork; move straight to the quiet neutral cover.
+  if (src && src.trim().length > 0 && src !== "/apple-icon.png") candidates.push(src);
+  if (
+    networkSrc &&
+    networkSrc.trim().length > 0 &&
+    networkSrc !== "/apple-icon.png" &&
+    !candidates.includes(networkSrc)
+  ) {
     candidates.push(networkSrc);
   }
   if (!candidates.includes(fallbackSrc)) candidates.push(fallbackSrc);

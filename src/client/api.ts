@@ -469,9 +469,13 @@ export type LibraryPlaylistPayload = {
     id: string;
     name: string;
     imageUrl: string | null;
+    coverImageUrls?: string[];
     userId: string;
     createdAt: string;
     editable?: boolean;
+    // Server-owned capability. Older payloads omit it, so clients retain the
+    // conservative local-folder fallback until every backend is upgraded.
+    deletable?: boolean;
   } | null;
   songs: PlayerSong[];
   // null when the server couldn't determine the like set (owner's mini unreachable

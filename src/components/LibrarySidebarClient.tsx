@@ -78,7 +78,7 @@ export default function LibrarySidebarClient({
           </Link>
 
           <Link
-            to="/library?filter=playlists"
+            to="/playlists"
             title="Playlists"
             className={cn(
               "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",

@@ -19,6 +19,11 @@ import {
 import { buildSql, statementReturnsRows, type SqlRow, type SqlTag, type TemplateValue } from "@/lib/sql-tag";
 import { songToPlayerSong } from "@/lib/song-utils";
 import { inferContentTypeFromKey, normalizeStorageKey } from "@/lib/storage-keys";
+import {
+  canonicalizeLocalMediaUrl,
+  coarseLocalMediaExpiry,
+  createLocalMediaUrlSigner,
+} from "@/lib/local-media-signing";
 import type { PlayerSong } from "@/types/player";
 import {
   QobuzDownloadError,
@@ -328,6 +333,7 @@ async function ensureSchema(env: CloudflareEnv): Promise<void> {
     for (const statement of [
       'ALTER TABLE "Playlist" ADD COLUMN "source" TEXT',
       'ALTER TABLE "Playlist" ADD COLUMN "convertedAt" TEXT',
+      'ALTER TABLE "Playlist" ADD COLUMN "deletedAt" TEXT',
     ]) {
       try {
         await env.DB.prepare(statement).bind().run();
@@ -2779,6 +2785,7 @@ async function playlistCoverImageUrlsById(db: SqlTag, userId: string): Promise<M
       LEFT JOIN "Song" s1 ON s1."id" = ps."songId"
       LEFT JOIN "SongRef" s2 ON s2."id" = ps."songId"
       WHERE p."userId" = ${userId}
+        AND p."deletedAt" IS NULL
         AND COALESCE(NULLIF(s1."imageUrl", ''), NULLIF(s2."imageUrl", '')) IS NOT NULL
       GROUP BY
         ps."playlistId",
@@ -2815,6 +2822,7 @@ async function listPlaylists(db: SqlTag, userId: string | null) {
     FROM "Playlist" p
     LEFT JOIN "PlaylistSong" ps ON ps."playlistId" = p."id"
     WHERE p."userId" = ${userId}
+      AND p."deletedAt" IS NULL
     GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source"
     ORDER BY p."createdAt" DESC
   `;
@@ -2828,6 +2836,8 @@ async function listPlaylists(db: SqlTag, userId: string | null) {
       imageUrl: row.imageUrl ?? songCoverImageUrls[0] ?? null,
       coverImageUrls,
       songsCount: Number(row.songsCount ?? 0),
+      editable: true,
+      deletable: true,
     };
   });
 }
@@ -3052,6 +3062,8 @@ const MAC_MINI_USER_CONTEXT_PATHS = new Set([
 
 export function shouldForwardMacMiniUserForPathname(pathname: string): boolean {
   if (MAC_MINI_USER_CONTEXT_PATHS.has(pathname)) return true;
+  if (pathname.startsWith("/api/files/local/")) return true;
+  if (pathname.startsWith("/api/artwork/local/")) return true;
   if (pathname.startsWith("/api/playlist/")) return true;
   return pathname.startsWith("/api/songs/") && !pathname.startsWith("/api/songs/spotify");
 }
@@ -4536,7 +4548,15 @@ app.get("/api/library", async (c) => {
   // mini proxy for this path when the flag is on, so this is the live handler.
   if (playlistsEditableEnabled(c.env)) return handleLibraryMerge(c);
   const user = c.get("user");
-  return jsonCached(c, { playlists: await listPlaylists(c.get("db"), user?.id ?? null), userId: user?.id ?? null }, {
+  const playlists = await listPlaylists(c.get("db"), user?.id ?? null);
+  let signedPlaylists = playlists;
+  if (user) {
+    const signMediaUrl = await localMediaUrlSignerFor(c, user);
+    signedPlaylists = await Promise.all(
+      playlists.map((playlist) => signPlaylistArtwork(signMediaUrl, playlist)),
+    );
+  }
+  return jsonCached(c, { playlists: signedPlaylists, userId: user?.id ?? null }, {
     cacheControl: "private, max-age=300, stale-while-revalidate=600",
   });
 });
@@ -5157,7 +5177,7 @@ app.get("/api/playlist/:id", async (c) => {
   const playlists = await db<PlaylistRow & { source: string | null }>`
     SELECT "id", "name", "imageUrl", "userId", "createdAt", "source"
     FROM "Playlist"
-    WHERE "id" = ${id}
+    WHERE "id" = ${id} AND "deletedAt" IS NULL
     LIMIT 1
   `;
   const playlist = playlists[0];
@@ -5204,13 +5224,26 @@ app.get("/api/playlist/:id", async (c) => {
   } else {
     likedSongIds = await listLikedSongIds(db, user.id);
   }
+  const signMediaUrl = await localMediaUrlSignerFor(c, user);
+  // Sign the raw D1 values before songToPlayerSong sees them. That normalizer
+  // deliberately decodes unsigned /api/files paths, which would alter the
+  // percent-encoded pathname covered by the mini's HMAC.
+  const signedSongRows = await Promise.all(songRows.map((row) => signSongRowMedia(signMediaUrl, row)));
+  const rawCoverImageUrls = Array.from(
+    new Set(songRows.map((song) => song.imageUrl).filter(Boolean)),
+  ).slice(0, 4);
+  const signedPlaylist = await signPlaylistArtwork(signMediaUrl, {
+    ...playlist,
+    imageUrl: playlist.imageUrl ?? rawCoverImageUrls[0] ?? null,
+    coverImageUrls: rawCoverImageUrls,
+  });
   return jsonCached(c, {
     kind: "library",
     // editable=true: this detail came from D1 (a converted folder or native
     // playlist), so the app may rename / add / remove. Unconverted mini folders
     // are proxied straight to the mini and never reach here.
-    playlist: { ...playlist, editable: true },
-    songs: songRows.map(songToPlayerSong),
+    playlist: { ...signedPlaylist, editable: true, deletable: true },
+    songs: signedSongRows.map(songToPlayerSong),
     likedSongIds,
   });
 });
@@ -5706,9 +5739,9 @@ app.post("/api/songs/:id/assets", async (c) => {
 // SongRef / legacy Song row; a 0-row no-op when the owner's song lives only on the
 // mini. Wrapped per-statement so a missing table/column can't fail the request.
 async function refreshLocalSongRowAudio(db: SqlTag, userId: string, song: PlayerSong): Promise<void> {
-  const audioUrl = song.audioUrl ?? "";
+  const audioUrl = canonicalizeLocalMediaUrl(song.audioUrl ?? "");
   const duration = song.duration ?? null;
-  const imageUrl = song.imageUrl ?? "";
+  const imageUrl = canonicalizeLocalMediaUrl(song.imageUrl ?? "");
   const bitDepth = song.audioBitDepth ?? null;
   const sampleRate = song.audioSampleRate ?? null;
   try {
@@ -5825,7 +5858,9 @@ app.post("/api/playlist/:id/reorder", async (c) => {
   const id = c.req.param("id");
   const db = c.get("db");
   const playlistRows = await db<{ id: string; userId: string; source: string | null }>`
-    SELECT "id", "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+    SELECT "id", "userId", "source" FROM "Playlist"
+    WHERE "id" = ${id} AND "deletedAt" IS NULL
+    LIMIT 1
   `;
   const playlist = playlistRows[0];
   if (!playlist) return jsonError("Playlist not found", 404);
@@ -5885,6 +5920,51 @@ function isLibraryOwner(c: Context<AppEnv>, user: AuthUser | null): boolean {
   );
 }
 
+type LocalMediaUrlSigner = (value: string) => Promise<string>;
+
+async function localMediaUrlSignerFor(
+  c: Context<AppEnv>,
+  user: AuthUser,
+): Promise<LocalMediaUrlSigner> {
+  const secret = getMacMiniProxyToken(c.env);
+  // Local preview reaches the mini directly and authorizes the implicit local
+  // owner. Canonicalize stale persisted query params there, but signatures are
+  // only needed for production's direct public Caddy media path.
+  if (!secret || user.id === LOCAL_MAC_MINI_AUTH_USER.id) {
+    return async (value) => canonicalizeLocalMediaUrl(value);
+  }
+  return createLocalMediaUrlSigner({
+    secret,
+    userId: user.id,
+    scope: isLibraryOwner(c, user) ? "shared" : "user",
+    expiresAt: coarseLocalMediaExpiry(Math.floor(Date.now() / 1_000)),
+  });
+}
+
+async function signSongRowMedia<T extends {
+  imageUrl: string;
+  audioUrl: string;
+  lyricsUrl?: string | null;
+}>(sign: LocalMediaUrlSigner, row: T): Promise<T> {
+  const [imageUrl, audioUrl, lyricsUrl] = await Promise.all([
+    sign(row.imageUrl),
+    sign(row.audioUrl),
+    row.lyricsUrl ? sign(row.lyricsUrl) : Promise.resolve(null),
+  ]);
+  return { ...row, imageUrl, audioUrl, lyricsUrl } as T;
+}
+
+async function signPlaylistArtwork<T extends {
+  imageUrl?: string | null;
+  coverImageUrls?: string[];
+}>(sign: LocalMediaUrlSigner, playlist: T): Promise<T> {
+  const [imageUrl, coverImageUrls] = await Promise.all([
+    playlist.imageUrl ? sign(playlist.imageUrl) : Promise.resolve(playlist.imageUrl),
+    Promise.all((playlist.coverImageUrls ?? []).map(sign)),
+  ]);
+  return { ...playlist, imageUrl, coverImageUrls };
+}
+
 // A user owns a playlist if it's theirs by id, or it's an owner-owned folder
 // conversion (source='local-folder') and they're the library owner — so the
 // owner can always open/edit a converted folder regardless of which id seeded
@@ -5918,7 +5998,9 @@ async function convertedFolderIds(env: CloudflareEnv): Promise<Set<string>> {
   if (convertedFolderCache && now - convertedFolderCache.at < 30_000) return convertedFolderCache.ids;
   try {
     const result = await env.DB.prepare(
-      `SELECT "id" FROM "Playlist" WHERE "source" = 'local-folder' AND "convertedAt" IS NOT NULL`,
+      `SELECT "id" FROM "Playlist"
+       WHERE "source" = 'local-folder'
+         AND ("convertedAt" IS NOT NULL OR "deletedAt" IS NOT NULL)`,
     ).all<{ id: string }>();
     const ids = new Set((result.results ?? []).map((row) => row.id));
     convertedFolderCache = { ids, at: now };
@@ -5960,13 +6042,16 @@ async function likedSongIdsForOwnerFromMini(c: Context<AppEnv>, user: AuthUser):
 }
 
 async function upsertSongRef(db: SqlTag, userId: string, song: PlayerSong): Promise<void> {
+  const imageUrl = canonicalizeLocalMediaUrl(song.imageUrl ?? "");
+  const audioUrl = canonicalizeLocalMediaUrl(song.audioUrl ?? "");
+  const lyricsUrl = song.lyricsUrl ? canonicalizeLocalMediaUrl(song.lyricsUrl) : null;
   await db`
     INSERT INTO "SongRef" (
       "id", "title", "artist", "album", "imageUrl", "audioUrl", "lyricsUrl",
       "duration", "audioBitDepth", "audioSampleRate", "localPath", "userId", "createdAt", "updatedAt"
     ) VALUES (
-      ${song.id}, ${song.title}, ${song.artist}, ${song.album ?? null}, ${song.imageUrl ?? ""},
-      ${song.audioUrl ?? ""}, ${song.lyricsUrl ?? null}, ${song.duration ?? null},
+      ${song.id}, ${song.title}, ${song.artist}, ${song.album ?? null}, ${imageUrl},
+      ${audioUrl}, ${lyricsUrl}, ${song.duration ?? null},
       ${song.audioBitDepth ?? null}, ${song.audioSampleRate ?? null}, ${song.localPath ?? null},
       ${userId}, ${song.createdAt ?? null}, CURRENT_TIMESTAMP
     )
@@ -5997,19 +6082,27 @@ async function handleLibraryMerge(c: Context<AppEnv>): Promise<Response> {
     createdAt: string;
     songsCount: number;
     source: string | null;
+    deletedAt: string | null;
   }>`
-    SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source", COUNT(ps."id") AS "songsCount"
+    SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source", p."deletedAt",
+      COUNT(ps."id") AS "songsCount"
     FROM "Playlist" p
     LEFT JOIN "PlaylistSong" ps ON ps."playlistId" = p."id"
     WHERE p."userId" = ${user.id}
-      AND (p."source" IS NULL OR (p."source" = 'local-folder' AND p."convertedAt" IS NOT NULL))
-    GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source"
+      AND (
+        p."source" IS NULL
+        OR (
+          p."source" = 'local-folder'
+          AND (p."convertedAt" IS NOT NULL OR p."deletedAt" IS NOT NULL)
+        )
+      )
+    GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source", p."deletedAt"
     ORDER BY p."createdAt" DESC
   `;
   const coversByPlaylistId = await playlistCoverImageUrlsById(db, user.id);
   // editable=true marks a D1-backed playlist the app can add/remove/rename. The
   // mini's still-unconverted folders are read-only until the seed converts them.
-  const d1Playlists = d1Rows.map((row) => {
+  const d1Playlists = d1Rows.filter((row) => !row.deletedAt).map((row) => {
     const songCoverImageUrls = coversByPlaylistId.get(row.id) ?? [];
     const coverImageUrls = row.imageUrl && row.source !== "local-folder" ? [] : songCoverImageUrls;
     return {
@@ -6021,9 +6114,12 @@ async function handleLibraryMerge(c: Context<AppEnv>): Promise<Response> {
       createdAt: row.createdAt,
       songsCount: Number(row.songsCount ?? 0),
       editable: true,
+      deletable: true,
     };
   });
-  const d1Ids = new Set(d1Playlists.map((p) => p.id));
+  // Tombstoned folder ids still shadow the mini copy. Otherwise a deleted folder
+  // would immediately reappear in the merged library on the next request.
+  const d1Ids = new Set(d1Rows.map((p) => p.id));
   let miniPlaylists: typeof d1Playlists = [];
   if (isLibraryOwner(c, user) && canUseMacMiniProxy(c.env)) {
     // No query string forwarded: the merged mini set must be deterministic and
@@ -6050,10 +6146,16 @@ async function handleLibraryMerge(c: Context<AppEnv>): Promise<Response> {
               ? [p.imageUrl]
               : [],
           editable: false,
+          deletable: false,
         }));
     }
   }
-  const playlists = [...d1Playlists, ...miniPlaylists].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  const signMediaUrl = await localMediaUrlSignerFor(c, user);
+  const playlists = await Promise.all(
+    [...d1Playlists, ...miniPlaylists]
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+      .map((playlist) => signPlaylistArtwork(signMediaUrl, playlist)),
+  );
   return c.json({ playlists, userId: user.id });
 }
 
@@ -6061,7 +6163,8 @@ app.post("/api/playlists", async (c) => {
   const user = requireUser(c.get("user"));
   const body = await readJson<{ name?: unknown; imageUrl?: unknown }>(c.req.raw);
   const name = toStringValue(body?.name) || "New Playlist";
-  const imageUrl = toStringValue(body?.imageUrl) || null;
+  const rawImageUrl = toStringValue(body?.imageUrl);
+  const imageUrl = rawImageUrl ? canonicalizeLocalMediaUrl(rawImageUrl) : null;
   const id = crypto.randomUUID();
   const db = c.get("db");
   await db`
@@ -6076,6 +6179,8 @@ app.post("/api/playlists", async (c) => {
     userId: user.id,
     createdAt: new Date().toISOString(),
     songsCount: 0,
+    editable: true,
+    deletable: true,
   }, 201);
 });
 
@@ -6084,15 +6189,23 @@ app.patch("/api/playlist/:id", async (c) => {
   const id = c.req.param("id");
   const db = c.get("db");
   const rows = await db<{ userId: string; source: string | null }>`
-    SELECT "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+    SELECT "userId", "source" FROM "Playlist"
+    WHERE "id" = ${id} AND "deletedAt" IS NULL
+    LIMIT 1
   `;
   if (!rows[0]) return jsonError("Playlist not found", 404);
   if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
   const body = await readJson<{ name?: unknown; imageUrl?: unknown }>(c.req.raw);
   const name = toStringValue(body?.name);
-  if (name) await db`UPDATE "Playlist" SET "name" = ${name} WHERE "id" = ${id}`;
+  if (name) {
+    await db`UPDATE "Playlist" SET "name" = ${name} WHERE "id" = ${id} AND "deletedAt" IS NULL`;
+  }
   if (typeof body?.imageUrl === "string") {
-    await db`UPDATE "Playlist" SET "imageUrl" = ${body.imageUrl} WHERE "id" = ${id}`;
+    const imageUrl = canonicalizeLocalMediaUrl(body.imageUrl);
+    await db`
+      UPDATE "Playlist" SET "imageUrl" = ${imageUrl}
+      WHERE "id" = ${id} AND "deletedAt" IS NULL
+    `;
   }
   return c.json({ ok: true });
 });
@@ -6102,18 +6215,27 @@ app.delete("/api/playlist/:id", async (c) => {
   const id = c.req.param("id");
   const db = c.get("db");
   const rows = await db<{ userId: string; source: string | null }>`
-    SELECT "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+    SELECT "userId", "source" FROM "Playlist"
+    WHERE "id" = ${id} AND "deletedAt" IS NULL
+    LIMIT 1
   `;
   if (!rows[0]) return jsonError("Playlist not found", 404);
   if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
-  // A folder-backed playlist is still real files on the mini — deleting it in-app
-  // must never delete those. Removing songs / renaming / reordering is allowed.
+  // A folder-backed playlist is a view over real files on the mini. Tombstone the
+  // view so it disappears from every client without deleting membership, songs,
+  // or audio. Keeping the row also prevents the live mini merge from resurrecting
+  // the same folder on the next library request.
   if (rows[0].source === "local-folder") {
-    return jsonError("Folder-backed playlists can't be deleted in-app", 400);
+    await db`
+      UPDATE "Playlist" SET "deletedAt" = CURRENT_TIMESTAMP
+      WHERE "id" = ${id} AND "deletedAt" IS NULL
+    `;
+    convertedFolderCache = null;
+    return c.json({ ok: true, mode: "hidden" });
   }
   await db`DELETE FROM "PlaylistSong" WHERE "playlistId" = ${id}`;
   await db`DELETE FROM "Playlist" WHERE "id" = ${id}`;
-  return c.json({ ok: true });
+  return c.json({ ok: true, mode: "deleted" });
 });
 
 app.post("/api/playlist/:id/songs", async (c) => {
@@ -6121,7 +6243,9 @@ app.post("/api/playlist/:id/songs", async (c) => {
   const id = c.req.param("id");
   const db = c.get("db");
   const rows = await db<{ userId: string; source: string | null }>`
-    SELECT "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+    SELECT "userId", "source" FROM "Playlist"
+    WHERE "id" = ${id} AND "deletedAt" IS NULL
+    LIMIT 1
   `;
   if (!rows[0]) return jsonError("Playlist not found", 404);
   if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
@@ -6168,7 +6292,9 @@ app.delete("/api/playlist/:id/songs/:songId", async (c) => {
   const songId = c.req.param("songId");
   const db = c.get("db");
   const rows = await db<{ userId: string; source: string | null }>`
-    SELECT "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+    SELECT "userId", "source" FROM "Playlist"
+    WHERE "id" = ${id} AND "deletedAt" IS NULL
+    LIMIT 1
   `;
   if (!rows[0]) return jsonError("Playlist not found", 404);
   if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
@@ -6220,9 +6346,9 @@ app.post("/api/admin/convert-folders", async (c) => {
       song.title,
       song.artist,
       song.album ?? null,
-      song.imageUrl ?? "",
-      song.audioUrl ?? "",
-      song.lyricsUrl ?? null,
+      canonicalizeLocalMediaUrl(song.imageUrl ?? ""),
+      canonicalizeLocalMediaUrl(song.audioUrl ?? ""),
+      song.lyricsUrl ? canonicalizeLocalMediaUrl(song.lyricsUrl) : null,
       song.duration ?? null,
       song.audioBitDepth ?? null,
       song.audioSampleRate ?? null,
@@ -6246,7 +6372,8 @@ app.post("/api/admin/convert-folders", async (c) => {
     // contiguous and the verify count matches the distinct membership.
     const seen = new Set<string>();
     const members = rawMembers.filter((song) => (seen.has(song.id) ? false : (seen.add(song.id), true)));
-    const imageUrl = folder.imageUrl ?? members.find((s) => s.imageUrl)?.imageUrl ?? null;
+    const rawImageUrl = folder.imageUrl ?? members.find((s) => s.imageUrl)?.imageUrl ?? null;
+    const imageUrl = rawImageUrl ? canonicalizeLocalMediaUrl(rawImageUrl) : null;
     const createdAt = folder.createdAt ?? now;
 
     // Build the batches. Batch 0 resets the row + clears membership (convertedAt
