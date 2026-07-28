@@ -5,23 +5,13 @@ import { Link } from "react-router";
 import { ChevronLeft, ChevronRight, Heart, Library, ListMusic, Music2, Podcast, RadioTower, Ticket } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type PlaylistEntry = {
-  id: string;
-  name: string;
-  songsCount: number;
-};
-
 type LibrarySidebarClientProps = {
-  userId: string | null;
-  playlists: PlaylistEntry[];
   initialCollapsed: boolean;
 };
 
 const SIDEBAR_STATE_KEY = "spotify_left_sidebar_collapsed";
 
 export default function LibrarySidebarClient({
-  userId,
-  playlists,
   initialCollapsed,
 }: LibrarySidebarClientProps) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
@@ -42,7 +32,7 @@ export default function LibrarySidebarClient({
   return (
     <aside
       className={cn(
-        "hidden lg:flex fixed top-14 bottom-0 left-0 z-40 border-r border-white/[0.12] bg-background text-white transition-[width] duration-200",
+        "hidden lg:flex fixed top-14 bottom-0 left-0 z-40 border-r border-white/[0.08] bg-black text-white transition-[width] duration-200",
         collapsed ? "w-16" : "w-64",
       )}
     >
@@ -77,7 +67,7 @@ export default function LibrarySidebarClient({
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
-            <div className="h-10 w-10 rounded-[5px] bg-[#1ed760] text-black grid place-items-center shrink-0">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white">
               <Heart size={18} />
             </div>
             {!collapsed && (
@@ -88,6 +78,20 @@ export default function LibrarySidebarClient({
           </Link>
 
           <Link
+            to="/library?filter=playlists"
+            title="Playlists"
+            className={cn(
+              "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+              collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
+            )}
+          >
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
+              <ListMusic size={18} />
+            </div>
+            {!collapsed && <div className="text-[16px] font-medium leading-6 text-white">Playlists</div>}
+          </Link>
+
+          <Link
             to="/songs"
             title="All Songs"
             className={cn(
@@ -95,7 +99,7 @@ export default function LibrarySidebarClient({
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] bg-emerald-500/15 text-emerald-200">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
               <Music2 size={18} />
             </div>
             {!collapsed && <div className="text-[16px] font-medium leading-6 text-white">All Songs</div>}
@@ -109,7 +113,7 @@ export default function LibrarySidebarClient({
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] bg-cyan-500/15 text-cyan-200">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
               <RadioTower size={18} />
             </div>
             {!collapsed && (
@@ -127,7 +131,7 @@ export default function LibrarySidebarClient({
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] bg-fuchsia-500/15 text-fuchsia-200">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
               <Podcast size={18} />
             </div>
             {!collapsed && (
@@ -145,7 +149,7 @@ export default function LibrarySidebarClient({
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] bg-violet-500/15 text-violet-200">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
               <Ticket size={18} />
             </div>
             {!collapsed && (
@@ -155,52 +159,6 @@ export default function LibrarySidebarClient({
             )}
           </Link>
 
-          {userId && playlists.length > 0 ? (
-            <div className="mt-4 pt-4 border-t border-white/[0.12]">
-              {!collapsed && (
-                <div className="px-2.5 mb-2 text-[13px] uppercase tracking-wide text-white/[0.55]">
-                  Custom playlists
-                </div>
-              )}
-              <div className="space-y-1.5">
-                {playlists.map((pl) => (
-                  <Link
-                    key={pl.id}
-                    to={`/playlist/${pl.id}`}
-                    title={pl.name}
-                    className={cn(
-                      "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
-                      collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
-                    )}
-                  >
-                    <div className="h-10 w-10 rounded-[5px] bg-white/[0.08] text-white/[0.78] grid place-items-center shrink-0">
-                      <ListMusic size={18} />
-                    </div>
-                    {!collapsed && (
-                      <div className="min-w-0">
-                        <div className="text-[16px] font-medium leading-6 truncate text-white">{pl.name}</div>
-                        <div className="text-[13px] leading-5 text-white/[0.62]">{pl.songsCount ?? 0} tracks</div>
-                      </div>
-                    )}
-                  </Link>
-                ))}
-              </div>
-            </div>
-          ) : !userId ? (
-            <div className="mt-4 pt-4 border-t border-white/[0.12]">
-              {!collapsed && (
-                <>
-                  <div className="px-2.5 mb-2 text-[13px] uppercase tracking-wide text-white/[0.55]">Custom playlists</div>
-                  <div className="px-2.5 text-[15px] leading-6 text-white/[0.62]">
-                    <Link className="underline underline-offset-2 hover:text-white" to="/signin">
-                      Sign in
-                    </Link>{" "}
-                    to manage custom playlists.
-                  </div>
-                </>
-              )}
-            </div>
-          ) : null}
         </div>
       </div>
     </aside>

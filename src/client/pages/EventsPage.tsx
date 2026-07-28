@@ -18,7 +18,6 @@ function EventCard({ event, eager }: { event: LiveEvent; eager: boolean }) {
           loading={eager ? "eager" : "lazy"}
           sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 200px"
         />
-        <div className="absolute inset-x-0 top-0 h-1/3 bg-gradient-to-b from-black/45 to-transparent" />
         <div className="absolute left-2 top-2 flex flex-col items-center rounded-lg bg-black/60 px-2.5 py-1 text-center backdrop-blur">
           <span className="text-[11px] uppercase leading-3 tracking-wide text-white/85">{month}</span>
           <span className="text-lg font-extrabold leading-6 text-white">{day}</span>
@@ -34,7 +33,7 @@ function EventCard({ event, eager }: { event: LiveEvent; eager: boolean }) {
   );
   return event.url ? (
     <a
-      className="group rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+      className="group rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
       href={event.url}
       target="_blank"
       rel="noopener noreferrer"
@@ -75,7 +74,7 @@ export default function EventsPage() {
     <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex items-center gap-3">
-          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-gradient-to-b from-[#7c3aed] to-[#4c1d95] text-white">
+          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white/[0.075] text-white/60">
             <Ticket size={23} />
           </div>
           <div className="min-w-0">

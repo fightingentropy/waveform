@@ -33,7 +33,7 @@ export default function RadioPage() {
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-cyan-500/15 text-cyan-200">
+            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white/[0.075] text-white/60">
               <RadioTower size={23} />
             </div>
             <div className="min-w-0">
@@ -57,8 +57,8 @@ export default function RadioPage() {
                 aria-label={`${playing ? "Pause" : "Play"} ${station.title}`}
                 aria-pressed={playing}
                 className={cn(
-                  "group relative aspect-square overflow-hidden rounded-lg bg-white/[0.05] text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-                  active && "ring-2 ring-emerald-500",
+                  "group relative aspect-square overflow-hidden rounded-[10px] bg-white/[0.045] text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+                  active && "ring-1 ring-white/30",
                 )}
               >
                 <CoverImage
@@ -69,8 +69,7 @@ export default function RadioPage() {
                   loading={index === 0 ? "eager" : "lazy"}
                   sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 200px"
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/45 to-black/10" />
-                <div className={cn("absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r", station.accentClassName)} />
+                <div className="absolute inset-x-0 bottom-0 h-24 bg-black/[0.76]" />
                 <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/80 backdrop-blur">
                   <Radio size={11} />
                   Live

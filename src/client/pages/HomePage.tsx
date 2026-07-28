@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { Link } from "react-router";
 import { Pause, Play } from "lucide-react";
+import { AuthButtons } from "@/components/AuthButtons";
 import { CoverImage } from "@/components/CoverImage";
 import {
   useApiData,
@@ -22,6 +23,13 @@ type HomeSong = PlayerSong & {
   duration?: number | null;
   durationMs?: number | null;
 };
+
+function greetingForNow(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
 
 export default function HomePage() {
   const { user, status } = useAuth();
@@ -117,11 +125,16 @@ export default function HomePage() {
         // pointer users don't double-toggle.
         onClick={() => handlePlayScrollerSong(songs, index)}
         className={cn(
-          "wf-song-card group w-36 shrink-0 cursor-pointer rounded-md p-3 transition touch-manipulation sm:w-40",
-          active ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
+          "wf-song-card group w-[164px] shrink-0 cursor-pointer touch-manipulation",
+          "focus-within:outline-none",
         )}
       >
-        <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
+        <div
+          className={cn(
+            "relative aspect-square overflow-hidden rounded-xl bg-white/[0.045]",
+            active && "ring-1 ring-inset ring-white/30",
+          )}
+        >
           <CoverImage
             src={displaySong.imageUrl}
             networkSrc={displaySong.networkImageUrl}
@@ -139,7 +152,7 @@ export default function HomePage() {
               handlePlayScrollerSong(songs, index);
             }}
             className={cn(
-              "absolute bottom-3 right-3 grid h-11 w-11 place-items-center rounded-full bg-[#1ed760] text-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212]",
+              "absolute bottom-2.5 right-2.5 grid h-[42px] w-[42px] place-items-center rounded-full border border-white/25 bg-black/55 text-white shadow-lg backdrop-blur-xl transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
               "wf-control-button",
               active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
             )}
@@ -151,13 +164,15 @@ export default function HomePage() {
             )}
           </button>
         </div>
-        <div className="mt-3 min-w-0">
-          <div className={cn("truncate text-[16px] font-medium leading-6 text-white", active && "text-[#1ed760]")}>
+        <div className="min-h-12 min-w-0 px-px pt-[9px]">
+          <div className="truncate text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
             {displaySong.title}
           </div>
-          <div className="truncate text-[14px] leading-5 text-white/[0.62]">{displaySong.artist || "Unknown Artist"}</div>
+          <div className="mt-px truncate text-[13.5px] leading-[19px] text-white/[0.62]">
+            {displaySong.artist || "Unknown Artist"}
+          </div>
           {subtitle ? (
-            <div className="mt-0.5 truncate text-[13px] text-white/[0.46]">{subtitle}</div>
+            <div className="mt-0.5 truncate text-[12.5px] leading-[17px] text-white/40">{subtitle}</div>
           ) : null}
         </div>
       </div>
@@ -168,9 +183,9 @@ export default function HomePage() {
     <Link
       key={playlist.id}
       to={`/playlist/${playlist.id}`}
-      className="wf-song-card group w-36 shrink-0 cursor-pointer rounded-md p-3 transition touch-manipulation hover:bg-white/[0.09] sm:w-40"
+      className="wf-song-card group w-[164px] shrink-0 cursor-pointer touch-manipulation"
     >
-      <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
+      <div className="relative aspect-square overflow-hidden rounded-xl bg-white/[0.045]">
         <CoverImage
           src={playlist.imageUrl || undefined}
           alt={playlist.name}
@@ -180,9 +195,11 @@ export default function HomePage() {
           loading="lazy"
         />
       </div>
-      <div className="mt-3 min-w-0">
-        <div className="truncate text-[16px] font-medium leading-6 text-white">{playlist.name}</div>
-        <div className="truncate text-[14px] leading-5 text-white/[0.62]">
+      <div className="min-h-12 min-w-0 px-px pt-[9px]">
+        <div className="truncate text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
+          {playlist.name}
+        </div>
+        <div className="mt-px truncate text-[13.5px] leading-[19px] text-white/[0.58]">
           {playlist.songsCount > 0 ? `Playlist • ${playlist.songsCount} songs` : "Playlist"}
         </div>
       </div>
@@ -217,29 +234,45 @@ export default function HomePage() {
 
   return (
     <div className="relative min-h-[calc(100vh-3.5rem)] overflow-x-hidden bg-background text-white">
-      <div className="relative px-4 pb-10 pt-12 sm:px-6 md:pt-16 lg:px-6 xl:px-8 2xl:px-10">
+      <div className="relative px-4 pb-10 pt-3.5 sm:px-6 lg:px-6 lg:pt-8 xl:px-8 2xl:px-10">
+        <div className="mb-7 flex items-center gap-3.5">
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-semibold leading-[18px] text-white/60">
+              {user?.name?.trim()
+                ? `${greetingForNow()}, ${user.name.trim().split(/\s+/)[0]}`
+                : greetingForNow()}
+            </p>
+            <h1 className="mt-1 text-[34px] font-bold leading-[39px] tracking-[-0.9px] text-[#f2f2f2]">
+              Listen now
+            </h1>
+          </div>
+          <div className="lg:hidden">
+            <AuthButtons compact />
+          </div>
+        </div>
+
         {discoverPlaylists.length > 0 ? (
-          <section aria-label="Discover" className="mb-9 md:mb-10">
-            <h2 className="mb-4 text-2xl font-bold">Discover</h2>
-            <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+          <section aria-label="Discover" className="mb-[34px]">
+            <h2 className="mb-3.5 text-[22px] font-bold tracking-[-0.35px]">Discover</h2>
+            <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
               {discoverPlaylists.map((playlist) => renderDiscoverPlaylistTile(playlist))}
             </div>
           </section>
         ) : null}
 
         {recentlyPlayedSongs.length > 0 ? (
-          <section aria-label="Recently played" className="mb-9 md:mb-10">
-            <h2 className="mb-4 text-2xl font-bold">Recently played</h2>
-            <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+          <section aria-label="Continue listening" className="mb-[34px]">
+            <h2 className="mb-3.5 text-[22px] font-bold tracking-[-0.35px]">Continue listening</h2>
+            <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
               {recentlyPlayedSongs.map((_, index) => renderScrollerTile(recentlyPlayedSongs, index))}
             </div>
           </section>
         ) : null}
 
         {statsData.mostPlayed.length > 0 ? (
-          <section aria-label="Most played" className="mb-9 md:mb-10">
-            <h2 className="mb-4 text-2xl font-bold">Most played</h2>
-            <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+          <section aria-label="Most played" className="mb-[34px]">
+            <h2 className="mb-3.5 text-[22px] font-bold tracking-[-0.35px]">Most played</h2>
+            <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
               {statsData.mostPlayed.map((entry, index) =>
                 renderScrollerTile(
                   mostPlayedSongs,
@@ -251,6 +284,17 @@ export default function HomePage() {
               )}
             </div>
           </section>
+        ) : null}
+
+        {discoverPlaylists.length === 0 &&
+        recentlyPlayedSongs.length === 0 &&
+        statsData.mostPlayed.length === 0 ? (
+          <div className="mx-auto mt-9 max-w-[270px] px-7 py-6 text-center">
+            <h2 className="text-[17px] font-bold text-[#f2f2f2]">Nothing here yet</h2>
+            <p className="mt-1.5 text-sm leading-5 text-white/60">
+              Start playing something and it will appear here.
+            </p>
+          </div>
         ) : null}
 
         <div className="h-8 lg:h-20" />

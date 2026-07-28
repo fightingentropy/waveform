@@ -71,8 +71,8 @@ const SongCardComponent = function SongCard({
     <div
       onPointerEnter={() => warmPlaybackSong(song, true)}
       className={cn(
-        "wf-song-card wf-pressable group relative aspect-square rounded-lg overflow-hidden bg-black/5 dark:bg-white/5",
-        isActive && "ring-2 ring-emerald-500"
+        "wf-song-card wf-pressable group relative aspect-square overflow-hidden rounded-[10px] bg-[#0c0c0d]",
+        isActive && "ring-1 ring-white/30"
       )}
     >
       <button
@@ -81,7 +81,7 @@ const SongCardComponent = function SongCard({
         aria-pressed={isActiveAndPlaying}
         onClick={handlePlay}
         onFocus={() => warmPlaybackSong(song, true)}
-        className="absolute inset-0 z-10 rounded-lg cursor-pointer text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+        className="absolute inset-0 z-10 cursor-pointer rounded-[10px] text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
       />
       <CoverImage
         src={song.imageUrl}
@@ -93,7 +93,7 @@ const SongCardComponent = function SongCard({
         priority={priority}
         loading={priority ? "eager" : "lazy"}
       />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+      <div className="absolute inset-x-0 bottom-0 h-16 bg-black/[0.76]" />
 
       <TrackActionsButton
         song={song}
@@ -119,8 +119,12 @@ const SongCardComponent = function SongCard({
               : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
           )}
         >
-          <div className="wf-control-button h-10 w-10 rounded-full bg-emerald-500 text-white grid place-items-center">
-            {isActiveAndPlaying ? <Pause size={18} /> : <Play size={18} />}
+          <div className="wf-control-button grid h-10 w-10 place-items-center text-white">
+            {isActiveAndPlaying ? (
+              <Pause size={18} fill="currentColor" />
+            ) : (
+              <Play size={18} fill="currentColor" />
+            )}
           </div>
         </div>
       </div>

@@ -1,12 +1,21 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  --background: #000000;
+  --foreground: #f2f2f2;
+  --surface: #0c0c0d;
+  --surface-raised: rgba(255, 255, 255, 0.045);
+  --surface-active: rgba(255, 255, 255, 0.09);
+  --line: rgba(255, 255, 255, 0.08);
+  --hairline: rgba(255, 255, 255, 0.12);
+  --muted: rgba(255, 255, 255, 0.6);
+  --dim: rgba(255, 255, 255, 0.4);
   --wf-left-sidebar-width: 16rem;
   --wf-right-sidebar-width: 20rem;
-  --wf-mobile-nav-height: 3.25rem;
-  --wf-mobile-player-height: 4.25rem;
+  --wf-mobile-nav-height: 3.625rem;
+  --wf-mobile-player-height: 4.125rem;
+  --wf-floating-inset: 0.625rem;
+  --wf-floating-gap: 0.5rem;
   --wf-mobile-player-reserve-height: 0px;
   --wf-mobile-bottom-gutter: env(safe-area-inset-bottom, 0px);
   --wf-mobile-nav-bottom-offset: calc(var(--wf-mobile-nav-height) + var(--wf-mobile-bottom-gutter));
@@ -31,7 +40,9 @@ body {
 }
 
 body.wf-has-mobile-player {
-  --wf-mobile-player-reserve-height: var(--wf-mobile-player-height);
+  --wf-mobile-player-reserve-height: calc(
+    var(--wf-mobile-player-height) + var(--wf-floating-gap) + var(--wf-floating-inset)
+  );
 }
 
 html,
@@ -162,7 +173,7 @@ body.wf-now-playing-open {
 .wf-skeleton {
   position: relative;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .wf-skeleton::after {
@@ -170,7 +181,7 @@ body.wf-now-playing-open {
   inset: 0;
   content: "";
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.13), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.09), transparent);
   animation: wf-skeleton-shimmer 1.25s ease-in-out infinite;
 }
 
@@ -310,7 +321,7 @@ body.wf-now-playing-open {
   .wf-main {
     position: fixed;
     min-height: 0;
-    top: calc(3.5rem + env(safe-area-inset-top));
+    top: env(safe-area-inset-top);
     right: 0;
     bottom: calc(
       var(--wf-mobile-nav-height) + var(--wf-mobile-player-reserve-height) + var(--wf-mobile-bottom-gutter)
@@ -328,6 +339,7 @@ body.wf-now-playing-open {
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
+  accent-color: var(--foreground);
 }
 
 input[type="range"]::-webkit-slider-thumb {
@@ -336,7 +348,7 @@ input[type="range"]::-webkit-slider-thumb {
   width: 14px;
   height: 14px;
   border-radius: 9999px;
-  background: rgb(16 185 129);
+  background: var(--foreground);
   border: none;
   box-shadow: 0 0 0 2px var(--background);
 }
@@ -345,7 +357,7 @@ input[type="range"]::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 9999px;
-  background: rgb(16 185 129);
+  background: var(--foreground);
   border: none;
 }
 

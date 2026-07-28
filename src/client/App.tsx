@@ -1,5 +1,6 @@
 import { Component, lazy, Suspense, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
-import { Link, Navigate, Route, Routes, useLocation } from "react-router";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
+import { ChevronLeft } from "lucide-react";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
 import EmailVerificationBanner from "@/components/EmailVerificationBanner";
@@ -12,7 +13,6 @@ import { DiscoverQueueStager } from "@/client/DiscoverQueueStager";
 import PwaRegister from "@/components/PwaRegister";
 import HomePage from "@/client/pages/HomePage";
 import ProfilePage from "@/client/pages/ProfilePage";
-import { useApiData, withAccountScope, type LibraryPayload } from "@/client/api";
 import { usePlayerStore } from "@/store/player";
 
 const loadSearchPage = () => import("@/client/pages/SearchPage");
@@ -185,6 +185,47 @@ function useIdleRoutePrefetch() {
 
 const AUTH_PUBLIC_PATHS = new Set(["/signin"]);
 
+const MOBILE_STACK_ROUTES = [
+  { match: (path: string) => path.startsWith("/playlist/"), label: "Playlist", fallback: "/library" },
+  { match: (path: string) => path === "/liked", label: "Liked Songs", fallback: "/library" },
+  { match: (path: string) => path === "/songs", label: "Songs", fallback: "/library" },
+  { match: (path: string) => path === "/radio", label: "Radio", fallback: "/library" },
+  { match: (path: string) => path === "/podcasts", label: "Podcasts", fallback: "/library" },
+  { match: (path: string) => path === "/events", label: "Events", fallback: "/library" },
+  { match: (path: string) => path === "/upload", label: "Create", fallback: "/library" },
+  { match: (path: string) => path === "/settings", label: "Settings", fallback: "/" },
+  { match: (path: string) => path === "/profile", label: "Profile", fallback: "/" },
+] as const;
+
+function MobileStackHeader() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const route = MOBILE_STACK_ROUTES.find(({ match }) => match(location.pathname));
+
+  if (!route) return null;
+
+  return (
+    <div className="sticky top-0 z-30 grid h-11 grid-cols-[44px_minmax(0,1fr)_44px] items-center border-b border-white/[0.06] bg-black px-1 text-white lg:hidden">
+      <button
+        type="button"
+        aria-label="Back"
+        onClick={() => {
+          if (location.key === "default") {
+            navigate(route.fallback, { replace: true });
+            return;
+          }
+          navigate(-1);
+        }}
+        className="wf-control-button grid h-11 w-11 place-items-center rounded-full text-[#f2f2f2] active:bg-white/[0.06]"
+      >
+        <ChevronLeft size={26} strokeWidth={2.1} />
+      </button>
+      <div className="truncate text-center text-[15px] font-semibold text-[#f2f2f2]">{route.label}</div>
+      <div aria-hidden className="h-11 w-11" />
+    </div>
+  );
+}
+
 function Shell() {
   const { user, status } = useAuth();
   const location = useLocation();
@@ -193,32 +234,16 @@ function Shell() {
     () => localStorage.getItem("spotify_left_sidebar_collapsed") === "1",
   );
   const isAuthPublicPath = AUTH_PUBLIC_PATHS.has(location.pathname);
-  const { data: library } = useApiData<LibraryPayload>(
-    withAccountScope("/api/library", user?.id ?? status),
-    {
-      playlists: [],
-      userId: null,
-    },
-    {
-      enabled: status === "authenticated",
-      keepPreviousData: true,
-    },
-  );
   useIdleRoutePrefetch();
   useLayoutEffect(() => {
     document.querySelector(".wf-main")?.scrollTo(0, 0);
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
   useEffect(() => {
     document.body.classList.toggle("wf-has-mobile-player", Boolean(currentSong));
     return () => {
       document.body.classList.remove("wf-has-mobile-player");
     };
   }, [currentSong]);
-  const visibleLibrary =
-    library.userId && library.userId === user?.id
-      ? library
-      : { playlists: [], userId: user?.id ?? null };
-
   if (status === "loading") {
     return (
       <div className="min-h-dvh bg-background px-4 py-16 text-center text-white/[0.7]">
@@ -252,7 +277,7 @@ function Shell() {
   return (
     <>
       <PwaRegister />
-      <header className="fixed top-0 inset-x-0 z-50 border-b border-white/[0.12] bg-background text-white pt-[env(safe-area-inset-top)]">
+      <header className="fixed top-0 inset-x-0 z-50 hidden border-b border-white/[0.08] bg-black text-white pt-[env(safe-area-inset-top)] lg:block">
         <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {/* On lg+ the logo leaves the centered grid and pins to the header's
               left edge (the fixed header is its containing block), so it hugs
@@ -277,13 +302,10 @@ function Shell() {
           </div>
         </div>
       </header>
-      <LibrarySidebarClient
-        userId={user?.id ?? null}
-        playlists={visibleLibrary.playlists}
-        initialCollapsed={initialSidebarCollapsed}
-      />
+      <LibrarySidebarClient initialCollapsed={initialSidebarCollapsed} />
       <NowPlayingSidebar />
-      <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]">
+      <main className="wf-main bg-black">
+        <MobileStackHeader />
         <EmailVerificationBanner />
         <div key={location.pathname} className="wf-route-surface">
         <Routes location={location}>

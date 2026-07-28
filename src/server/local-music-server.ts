@@ -3710,14 +3710,24 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     const snapshot = await getLibrary(source);
     const songs = songsForRequest(snapshot.songs, request);
     const playlists = [...folderPlaylistGroups(songs).entries()]
-      .map(([name, list]) => ({
-        id: folderPlaylistId(name),
-        name,
-        imageUrl: list.find((song) => song.imageUrl)?.imageUrl ?? null,
-        userId,
-        createdAt: earliestCreatedAt(list),
-        songsCount: list.length,
-      }))
+      .map(([name, list]) => {
+        const coverImageUrls = Array.from(
+          new Set(
+            list
+              .map((song) => song.imageUrl?.trim())
+              .filter((imageUrl): imageUrl is string => Boolean(imageUrl)),
+          ),
+        ).slice(0, 4);
+        return {
+          id: folderPlaylistId(name),
+          name,
+          imageUrl: coverImageUrls[0] ?? null,
+          coverImageUrls,
+          userId,
+          createdAt: earliestCreatedAt(list),
+          songsCount: list.length,
+        };
+      })
       .sort((left, right) => left.name.localeCompare(right.name));
     return jsonCached(request, { playlists, userId }, {
       cacheControl: "private, max-age=300, stale-while-revalidate=600",

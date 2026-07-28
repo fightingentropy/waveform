@@ -24,6 +24,7 @@ export type PlaylistEntry = {
   id: string;
   name: string;
   imageUrl?: string | null;
+  coverImageUrls?: string[];
   userId?: string;
   createdAt?: string;
   songsCount: number;

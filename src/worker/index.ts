@@ -2767,17 +2767,69 @@ async function readJson<T>(req: Request): Promise<T | null> {
   return (await req.json().catch(() => null)) as T | null;
 }
 
+async function playlistCoverImageUrlsById(db: SqlTag, userId: string): Promise<Map<string, string[]>> {
+  const rows = await db<{ playlistId: string; imageUrl: string; position: number }>`
+    WITH cover_candidates AS (
+      SELECT
+        ps."playlistId" AS "playlistId",
+        COALESCE(NULLIF(s1."imageUrl", ''), NULLIF(s2."imageUrl", '')) AS "imageUrl",
+        MIN(ps."order") AS "firstOrder"
+      FROM "PlaylistSong" ps
+      JOIN "Playlist" p ON p."id" = ps."playlistId"
+      LEFT JOIN "Song" s1 ON s1."id" = ps."songId"
+      LEFT JOIN "SongRef" s2 ON s2."id" = ps."songId"
+      WHERE p."userId" = ${userId}
+        AND COALESCE(NULLIF(s1."imageUrl", ''), NULLIF(s2."imageUrl", '')) IS NOT NULL
+      GROUP BY
+        ps."playlistId",
+        COALESCE(NULLIF(s1."imageUrl", ''), NULLIF(s2."imageUrl", ''))
+    ),
+    ranked_covers AS (
+      SELECT
+        "playlistId",
+        "imageUrl",
+        ROW_NUMBER() OVER (
+          PARTITION BY "playlistId"
+          ORDER BY "firstOrder" ASC, "imageUrl" ASC
+        ) AS "position"
+      FROM cover_candidates
+    )
+    SELECT "playlistId", "imageUrl", "position"
+    FROM ranked_covers
+    WHERE "position" <= 4
+    ORDER BY "playlistId" ASC, "position" ASC
+  `;
+  const result = new Map<string, string[]>();
+  for (const row of rows) {
+    const covers = result.get(row.playlistId);
+    if (covers) covers.push(row.imageUrl);
+    else result.set(row.playlistId, [row.imageUrl]);
+  }
+  return result;
+}
+
 async function listPlaylists(db: SqlTag, userId: string | null) {
   if (!userId) return [];
-  const rows = await db<PlaylistRow & { songsCount: number }>`
-    SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", COUNT(ps."id") AS "songsCount"
+  const rows = await db<PlaylistRow & { songsCount: number; source: string | null }>`
+    SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source", COUNT(ps."id") AS "songsCount"
     FROM "Playlist" p
     LEFT JOIN "PlaylistSong" ps ON ps."playlistId" = p."id"
     WHERE p."userId" = ${userId}
-    GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt"
+    GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source"
     ORDER BY p."createdAt" DESC
   `;
-  return rows.map((row) => ({ ...row, songsCount: Number(row.songsCount ?? 0) }));
+  const coversByPlaylistId = await playlistCoverImageUrlsById(db, userId);
+  return rows.map((row) => {
+    const { source, ...playlist } = row;
+    const songCoverImageUrls = coversByPlaylistId.get(row.id) ?? [];
+    const coverImageUrls = row.imageUrl && source !== "local-folder" ? [] : songCoverImageUrls;
+    return {
+      ...playlist,
+      imageUrl: row.imageUrl ?? songCoverImageUrls[0] ?? null,
+      coverImageUrls,
+      songsCount: Number(row.songsCount ?? 0),
+    };
+  });
 }
 
 async function listSongs(db: SqlTag, userId: string | null) {
@@ -5944,38 +5996,61 @@ async function handleLibraryMerge(c: Context<AppEnv>): Promise<Response> {
     userId: string;
     createdAt: string;
     songsCount: number;
+    source: string | null;
   }>`
-    SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", COUNT(ps."id") AS "songsCount"
+    SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source", COUNT(ps."id") AS "songsCount"
     FROM "Playlist" p
     LEFT JOIN "PlaylistSong" ps ON ps."playlistId" = p."id"
     WHERE p."userId" = ${user.id}
       AND (p."source" IS NULL OR (p."source" = 'local-folder' AND p."convertedAt" IS NOT NULL))
-    GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt"
+    GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source"
     ORDER BY p."createdAt" DESC
   `;
+  const coversByPlaylistId = await playlistCoverImageUrlsById(db, user.id);
   // editable=true marks a D1-backed playlist the app can add/remove/rename. The
   // mini's still-unconverted folders are read-only until the seed converts them.
-  const d1Playlists = d1Rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    imageUrl: row.imageUrl ?? null,
-    userId: row.userId,
-    createdAt: row.createdAt,
-    songsCount: Number(row.songsCount ?? 0),
-    editable: true,
-  }));
+  const d1Playlists = d1Rows.map((row) => {
+    const songCoverImageUrls = coversByPlaylistId.get(row.id) ?? [];
+    const coverImageUrls = row.imageUrl && row.source !== "local-folder" ? [] : songCoverImageUrls;
+    return {
+      id: row.id,
+      name: row.name,
+      imageUrl: row.imageUrl ?? songCoverImageUrls[0] ?? null,
+      coverImageUrls,
+      userId: row.userId,
+      createdAt: row.createdAt,
+      songsCount: Number(row.songsCount ?? 0),
+      editable: true,
+    };
+  });
   const d1Ids = new Set(d1Playlists.map((p) => p.id));
   let miniPlaylists: typeof d1Playlists = [];
   if (isLibraryOwner(c, user) && canUseMacMiniProxy(c.env)) {
     // No query string forwarded: the merged mini set must be deterministic and
     // not vary with client sort/cache-bust params the worker's D1 read ignores.
-    const data = await fetchMacMiniJson<{ playlists?: Omit<(typeof d1Playlists)[number], "editable">[] }>(
+    const data = await fetchMacMiniJson<{
+      playlists?: Array<
+        Omit<(typeof d1Playlists)[number], "editable" | "coverImageUrls"> & {
+          coverImageUrls?: string[];
+        }
+      >;
+    }>(
       c,
       user,
       "/api/library",
     );
     if (data?.playlists) {
-      miniPlaylists = data.playlists.filter((p) => !d1Ids.has(p.id)).map((p) => ({ ...p, editable: false }));
+      miniPlaylists = data.playlists
+        .filter((p) => !d1Ids.has(p.id))
+        .map((p) => ({
+          ...p,
+          coverImageUrls: Array.isArray(p.coverImageUrls)
+            ? p.coverImageUrls.filter(Boolean).slice(0, 4)
+            : p.imageUrl
+              ? [p.imageUrl]
+              : [],
+          editable: false,
+        }));
     }
   }
   const playlists = [...d1Playlists, ...miniPlaylists].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
@@ -5993,7 +6068,15 @@ app.post("/api/playlists", async (c) => {
     INSERT INTO "Playlist" ("id", "name", "imageUrl", "userId", "createdAt")
     VALUES (${id}, ${name}, ${imageUrl}, ${user.id}, CURRENT_TIMESTAMP)
   `;
-  return c.json({ id, name, imageUrl, userId: user.id, createdAt: new Date().toISOString(), songsCount: 0 }, 201);
+  return c.json({
+    id,
+    name,
+    imageUrl,
+    coverImageUrls: [],
+    userId: user.id,
+    createdAt: new Date().toISOString(),
+    songsCount: 0,
+  }, 201);
 });
 
 app.patch("/api/playlist/:id", async (c) => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
+import { AuthButtons } from "@/components/AuthButtons";
 import { useAuth } from "@/client/auth";
 import { type SearchCatalogPayload, useApiData, withAccountScope } from "@/client/api";
 import { usePlayerStore } from "@/store/player";
@@ -67,60 +68,72 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
       key={song.id}
       type="button"
       onClick={() => playQueueSong(queue, index)}
-      className="wf-list-row wf-pressable w-full min-h-[56px] px-2 rounded-xl flex items-center gap-3 text-left active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
+      className="wf-list-row wf-pressable flex min-h-[64px] w-full items-center gap-3 px-0 text-left touch-manipulation hover:bg-white/[0.045] active:bg-white/[0.06]"
     >
-      <div className="relative h-12 w-12 rounded-md overflow-hidden shrink-0">
+      <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg">
         <CoverImage src={song.imageUrl} alt={song.title} className="wf-song-cover h-full w-full object-cover" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium truncate">{song.title}</div>
-        <div className="text-xs opacity-70 truncate">{song.artist}</div>
+        <div className="truncate text-[15px] font-medium text-[#f2f2f2]">{song.title}</div>
+        <div className="truncate text-xs text-white/60">{song.artist}</div>
       </div>
     </button>
   );
 
   return (
-    <div className="px-4 py-6 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold mb-5">Search</h1>
+    <div className="mx-auto max-w-7xl px-5 pb-8 pt-[18px] sm:px-6">
+      <div className="mb-4 flex items-center gap-3">
+        <div className="lg:hidden">
+          <AuthButtons compact />
+        </div>
+        <h1 className="text-[34px] font-bold leading-10 tracking-[-0.9px] text-[#f2f2f2]">
+          Search
+        </h1>
+      </div>
 
       <div className="relative mb-6">
         <Search
-          size={18}
-          className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/50 pointer-events-none"
+          size={21}
+          strokeWidth={2.2}
+          className="pointer-events-none absolute left-[17px] top-1/2 -translate-y-1/2 text-white/50"
         />
         <input
           type="search"
           aria-label="Search songs"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="What do you want to play?"
+          placeholder="Songs, artists and playlists"
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          className="w-full h-12 pl-11 pr-4 rounded-full border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 text-base outline-none transition focus:ring-2 focus:ring-emerald-500/40"
+          className="h-[50px] w-full rounded-xl border border-white/[0.08] bg-[#0c0c0d] pl-12 pr-4 text-base font-medium text-[#f2f2f2] outline-none transition placeholder:text-white/60 focus:border-white/20 focus:ring-2 focus:ring-white/10"
         />
       </div>
 
       <div className="space-y-1">
         {query.trim().length === 0 ? (
-          <div className="py-12 text-center text-sm opacity-70">Start typing to search songs</div>
+          <div className="py-12 text-center text-sm text-white/60">Start typing to search music</div>
         ) : (
           <>
             {results.length > 0 ? (
               <section>
-                <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/[0.55]">In your library</h2>
+                <h2 className="mb-1 pt-2 text-lg font-bold tracking-[-0.3px] text-[#f2f2f2]">
+                  In your library
+                </h2>
                 {results.map((song) => renderSong(song, results, results.indexOf(song)))}
               </section>
             ) : null}
 
             {catalogQuery.length >= 2 ? (
               <section className={results.length > 0 ? "mt-7" : ""}>
-                <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/[0.55]">More on Spotify</h2>
+                <h2 className="mb-1 text-lg font-bold tracking-[-0.3px] text-[#f2f2f2]">
+                  More on Spotify
+                </h2>
                 {catalogState.loading ? <div className="py-5 text-sm opacity-70">Searching the catalog...</div> : null}
                 {catalogState.error ? (
                   <div className="py-5 text-sm text-red-300">
                     <p>{catalogState.error}</p>
-                    <button type="button" onClick={catalogState.retry} className="mt-3 rounded-full border border-white/[0.2] px-3 py-1.5 text-white">Try again</button>
+                    <button type="button" onClick={catalogState.retry} className="mt-3 rounded-lg border border-white/[0.16] px-3 py-1.5 text-white">Try again</button>
                   </div>
                 ) : null}
                 {!catalogState.loading && !catalogState.error

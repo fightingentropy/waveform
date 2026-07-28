@@ -38,7 +38,7 @@ export default function CrossfadeSettings() {
               value={crossfadeSeconds}
               aria-label="Crossfade duration"
               onChange={(e) => setCrossfadeSeconds(Number(e.target.value))}
-              className="w-full h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
               disabled={!crossfadeEnabled}
             />
           </div>

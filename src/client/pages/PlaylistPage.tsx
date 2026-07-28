@@ -98,13 +98,13 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
   const headerIsPlaying = playlistIsActive && isPlaying;
 
   return (
-    <div className="px-6 py-8 max-w-5xl mx-auto">
-      <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end">
-        <div className="relative h-44 w-44 shrink-0 overflow-hidden rounded-lg bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.45)]">
+    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+      <header className="mb-7 flex flex-col items-center gap-4 text-center sm:flex-row sm:items-end sm:text-left">
+        <div className="relative h-[132px] w-[132px] shrink-0 overflow-hidden rounded-3xl bg-white/[0.045] shadow-[0_10px_28px_rgba(0,0,0,0.45)] sm:h-44 sm:w-44 sm:rounded-2xl">
           <CoverImage src={playlist.imageUrl || undefined} alt={playlist.name} fill sizes="176px" className="object-cover" />
         </div>
         <div className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Playlist</div>
+          <div className="text-xs font-semibold uppercase tracking-[1.2px] text-white/60">Playlist</div>
           <h1 className="mt-1 truncate text-3xl font-bold sm:text-4xl">{playlist.name}</h1>
           {playlist.description ? (
             <p className="mt-2 line-clamp-2 text-sm text-white/[0.62]">{playlist.description}</p>
@@ -119,12 +119,12 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
         <div className="opacity-70">This playlist is empty.</div>
       ) : (
         <>
-          <div className="mb-5">
+          <div className="mb-5 flex justify-end">
             <button
               type="button"
               onClick={handleHeaderPlay}
               aria-label={headerIsPlaying ? `Pause ${playlist.name}` : `Play ${playlist.name}`}
-              className="grid h-14 w-14 place-items-center rounded-full bg-[#1ed760] text-black shadow-lg transition hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212] wf-control-button"
+              className="wf-control-button grid h-14 w-14 place-items-center rounded-full bg-white text-black shadow-lg transition hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
             >
               {headerIsPlaying ? (
                 <Pause size={26} fill="currentColor" />
@@ -153,9 +153,9 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
                       {loading ? (
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/25 border-t-white" />
                       ) : activePlaying ? (
-                        <Pause size={16} className="text-[#1ed760]" fill="currentColor" />
+                        <Pause size={16} className="text-white" fill="currentColor" />
                       ) : active ? (
-                        <Play size={16} className="text-[#1ed760]" fill="currentColor" />
+                        <Play size={16} className="text-white" fill="currentColor" />
                       ) : (
                         <>
                           <span className="group-hover:hidden">{index + 1}</span>
@@ -167,7 +167,7 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
                       <CoverImage src={track.imageUrl} alt="" fill sizes="40px" className="object-cover" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className={cn("truncate text-[15px] leading-snug text-white", active && "text-[#1ed760]")}>
+                      <div className={cn("truncate text-[15px] leading-snug text-white", active && "font-semibold")}>
                         {track.title}
                       </div>
                       <div className="truncate text-[13px] leading-snug text-white/[0.6]">

@@ -49,7 +49,7 @@ export default function NowPlayingSidebar() {
   return (
     <aside
       className={cn(
-        "hidden lg:flex fixed top-14 bottom-[84px] right-0 z-30 border-l border-white/[0.12] bg-background text-white transition-all duration-200",
+        "hidden lg:flex fixed top-14 bottom-[84px] right-0 z-30 border-l border-white/[0.08] bg-black text-white transition-all duration-200",
         collapsed ? "w-16" : "w-80",
       )}
     >
@@ -89,7 +89,7 @@ export default function NowPlayingSidebar() {
               networkSrc={displaySong.networkImageUrl}
               alt={displaySong.title}
               loading="eager"
-              className="w-full aspect-square rounded-md object-cover bg-white/[0.08]"
+              className="w-full aspect-square rounded-xl object-cover bg-white/[0.045]"
             />
 
             <div>
@@ -98,9 +98,9 @@ export default function NowPlayingSidebar() {
             </div>
 
             {liveStream ? (
-              <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5">
+              <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3.5">
                 <div className="flex items-center gap-3">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] bg-cyan-500/15 text-cyan-200">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
                     <RadioTower size={18} />
                   </div>
                   <div>
@@ -109,9 +109,9 @@ export default function NowPlayingSidebar() {
                 </div>
               </div>
             ) : podcastEpisode ? (
-              <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5">
+              <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3.5">
                 <div className="flex items-center gap-3">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] bg-fuchsia-500/15 text-fuchsia-200">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
                     <Podcast size={18} />
                   </div>
                   <div>
@@ -126,7 +126,7 @@ export default function NowPlayingSidebar() {
               </div>
             ) : (
               <>
-                <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5 space-y-3">
+                <div className="space-y-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3.5">
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-medium text-[16px] text-white">Lyrics</div>
                     <button
@@ -151,7 +151,7 @@ export default function NowPlayingSidebar() {
                   )}
                 </div>
 
-                <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5">
+                <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3.5">
                   <div className="font-medium text-[16px] text-white mb-3">Credits</div>
                   <div className="space-y-2.5">
                     {credits.map((credit) => (

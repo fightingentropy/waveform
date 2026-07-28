@@ -11,6 +11,7 @@ import {
   Podcast,
   RefreshCw,
 } from "lucide-react";
+import { useSearchParams } from "react-router";
 import { CoverImage } from "@/components/CoverImage";
 import {
   PODCAST_SHOWS,
@@ -68,7 +69,8 @@ function EpisodeSkeletonRows() {
 }
 
 export default function PodcastsPage() {
-  const [selectedShowId, setSelectedShowId] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedShowId = searchParams.get("show") ?? "";
   const selectedShow = useMemo(
     () => PODCAST_SHOWS.find((podcastShow) => podcastShow.id === selectedShowId) ?? null,
     [selectedShowId],
@@ -160,12 +162,18 @@ export default function PodcastsPage() {
     setQueue(episodes, index);
   }
 
+  function selectShow(showId: string) {
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.set("show", showId);
+    setSearchParams(nextSearchParams);
+  }
+
   return (
     <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-fuchsia-500/15 text-fuchsia-200">
+            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white/[0.075] text-white/60">
               <Podcast size={23} />
             </div>
             <div className="min-w-0">
@@ -184,13 +192,13 @@ export default function PodcastsPage() {
               <button
                 key={podcastShow.id}
                 type="button"
-                onClick={() => setSelectedShowId(podcastShow.id)}
+                onClick={() => selectShow(podcastShow.id)}
                 aria-expanded={selected}
                 aria-controls={selected ? "podcast-episodes" : undefined}
                 aria-label={`Show episodes for ${podcastShow.title}`}
                 className={cn(
-                  "group relative aspect-square overflow-hidden rounded-lg bg-white/[0.05] text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400",
-                  selected && "ring-2 ring-fuchsia-400",
+                  "group relative aspect-square overflow-hidden rounded-[10px] bg-white/[0.045] text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+                  selected && "ring-1 ring-white/30",
                 )}
               >
                 <CoverImage
@@ -201,8 +209,7 @@ export default function PodcastsPage() {
                   className="object-cover"
                   sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 200px"
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/45 to-black/10" />
-                <div className={cn("absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r", podcastShow.accentClassName)} />
+                <div className="absolute inset-x-0 bottom-0 h-28 bg-black/[0.76]" />
                 <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/80 backdrop-blur">
                   <Podcast size={11} />
                   Show
@@ -237,7 +244,7 @@ export default function PodcastsPage() {
                   sizes="72px"
                 />
                 <div className="min-w-0">
-                  <div className="text-sm font-medium text-fuchsia-200">Episodes</div>
+                  <div className="text-sm font-medium text-white/60">Episodes</div>
                   <h2 className="mt-0.5 text-2xl font-semibold leading-tight text-white">
                     {selectedShow.title}
                   </h2>
@@ -291,7 +298,7 @@ export default function PodcastsPage() {
                       key={episode.id}
                       className={cn(
                         "wf-list-row flex min-h-[92px] items-center gap-3 rounded-lg px-3 py-3 transition hover:bg-white/[0.07] sm:gap-4",
-                        active && "bg-white/[0.08] ring-1 ring-emerald-500/40",
+                        active && "bg-white/[0.08] ring-1 ring-white/20",
                       )}
                     >
                       <button
@@ -301,7 +308,7 @@ export default function PodcastsPage() {
                         aria-pressed={playing}
                         className={cn(
                           "wf-control-button grid h-11 w-11 shrink-0 place-items-center rounded-full transition",
-                          playing ? "bg-emerald-500 text-black" : "bg-white text-black",
+                          "bg-white text-black",
                         )}
                       >
                         {playing ? <Pause size={18} /> : <Play size={18} className="translate-x-[1px]" />}
@@ -340,7 +347,7 @@ export default function PodcastsPage() {
                             </span>
                           ) : null}
                           {finished ? (
-                            <span className="inline-flex items-center gap-1 text-emerald-400">
+                            <span className="inline-flex items-center gap-1 text-white/80">
                               <CheckCircle2 size={13} />
                               Played
                             </span>
@@ -348,7 +355,7 @@ export default function PodcastsPage() {
                             <span className="inline-flex items-center gap-2">
                               <span className="h-1 w-16 overflow-hidden rounded-full bg-white/[0.12]">
                                 <span
-                                  className="block h-full rounded-full bg-emerald-500"
+                                  className="block h-full rounded-full bg-white/80"
                                   style={{
                                     width: `${Math.min(100, Math.max(0, (progress.time / progress.duration) * 100))}%`,
                                   }}

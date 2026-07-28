@@ -134,7 +134,7 @@ export function LyricsPanel({ lyricsState, currentTime, onSeek, size = "lg", cla
       onTouchMove={markUserScroll}
       onPointerDown={markUserScroll}
       className={cn(
-        "relative overflow-y-auto overscroll-contain rounded-2xl bg-gradient-to-b from-emerald-800 to-emerald-950",
+        "relative overflow-y-auto overscroll-contain rounded-2xl border border-white/[0.08] bg-[#0c0c0d]",
         className,
       )}
     >

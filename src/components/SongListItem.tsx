@@ -66,8 +66,8 @@ const SongListItemComponent = function SongListItem({
     <div
       onPointerEnter={() => warmPlaybackSong(song, true)}
       className={cn(
-        "wf-list-row group flex items-center gap-3 px-3 py-2",
-        isActive ? "bg-emerald-500/10 rounded-lg" : "hover:bg-black/5 hover:dark:bg-white/5 rounded-lg",
+        "wf-list-row group flex items-center gap-3 px-4 py-2",
+        isActive ? "bg-white/[0.045]" : "hover:bg-white/[0.035]",
       )}
     >
       <button
@@ -92,7 +92,7 @@ const SongListItemComponent = function SongListItem({
         </span>
 
         <span className="min-w-0 flex-1">
-          <span className={cn("block truncate text-sm font-medium", isActive && "text-emerald-500")}>
+          <span className={cn("block truncate text-[15px] text-[#f2f2f2]", isActive ? "font-semibold" : "font-medium")}>
             {song.title}
           </span>
           <span className="block truncate text-xs opacity-70">{song.artist}</span>
@@ -101,8 +101,12 @@ const SongListItemComponent = function SongListItem({
 
       {/* Now-playing affordance — only on the active row so quiet rows stay clean. */}
       {isActive ? (
-        <div aria-hidden className="pointer-events-none wf-control-button h-9 w-9 rounded-full bg-emerald-500 text-white grid place-items-center shrink-0">
-          {isActiveAndPlaying ? <Pause size={17} /> : <Play size={17} className="translate-x-[1px]" />}
+        <div aria-hidden className="pointer-events-none wf-control-button grid h-9 w-9 shrink-0 place-items-center text-white">
+          {isActiveAndPlaying ? (
+            <Pause size={17} fill="currentColor" />
+          ) : (
+            <Play size={17} fill="currentColor" className="translate-x-[1px]" />
+          )}
         </div>
       ) : null}
 

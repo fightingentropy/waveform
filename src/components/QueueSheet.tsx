@@ -126,7 +126,7 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
         key={`${entry.song.id}-${entry.queueIndex}`}
         className={cn(
           "wf-list-row group flex items-center gap-3 rounded-lg px-2 py-2",
-          highlighted ? "bg-emerald-500/10" : "hover:bg-black/5 hover:dark:bg-white/5",
+          highlighted ? "bg-white/[0.045]" : "hover:bg-white/[0.035]",
         )}
       >
         <button
@@ -148,7 +148,7 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
             />
           </span>
           <span className="min-w-0 flex-1">
-            <span className={cn("block truncate text-sm font-medium", highlighted && "text-emerald-500")}>
+            <span className={cn("block truncate text-sm", highlighted ? "font-semibold text-white" : "font-medium")}>
               {displaySong.title}
             </span>
             <span className="block truncate text-xs opacity-70">{displaySong.artist}</span>

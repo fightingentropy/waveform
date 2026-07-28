@@ -1,9 +1,95 @@
-import { type FormEvent, useState } from "react";
-import { Link, useNavigate } from "react-router";
-import { Heart, ListMusic, Music2, Plus, Podcast, RadioTower, Ticket, Upload } from "lucide-react";
+import { type FormEvent, type ReactNode, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router";
+import { Heart, ListMusic, Music2, Plus, Podcast, RadioTower, Search, Ticket, Upload } from "lucide-react";
+import { AuthButtons } from "@/components/AuthButtons";
+import { CoverImage } from "@/components/CoverImage";
+import { PlaylistArtwork } from "@/components/PlaylistArtwork";
 import { useApiData, withAccountScope, type LibraryPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { createPlaylist } from "@/client/playlist-actions";
+import { PODCAST_SHOWS, podcastMediaProxyUrl } from "@/lib/podcasts";
+
+type LibraryFilter = "all" | "playlists" | "podcasts";
+
+function FilterButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={[
+        "relative mr-6 min-h-11 px-0 text-sm transition-colors",
+        active ? "font-semibold text-[#f2f2f2]" : "font-medium text-white/60 hover:text-white",
+      ].join(" ")}
+    >
+      {label}
+      <span
+        aria-hidden
+        className={[
+          "absolute inset-x-0 bottom-0 h-[1.5px] bg-[#f2f2f2] transition-opacity",
+          active ? "opacity-100" : "opacity-0",
+        ].join(" ")}
+      />
+    </button>
+  );
+}
+
+function LibraryShortcut({
+  to,
+  title,
+  subtitle,
+  artwork,
+  children,
+}: {
+  to: string;
+  title: string;
+  subtitle: string;
+  artwork?: {
+    src?: string | null;
+  };
+  children: ReactNode;
+}) {
+  return (
+    <Link
+      to={to}
+      className="wf-list-row wf-pressable flex min-h-[62px] items-center gap-3 px-0 py-[7px] touch-manipulation hover:bg-white/[0.045]"
+    >
+      <span
+        className={[
+          "grid shrink-0 place-items-center overflow-hidden rounded-lg bg-white/[0.075] text-white/60",
+          artwork ? "h-[62px] w-[62px]" : "h-11 w-11",
+        ].join(" ")}
+      >
+        {artwork?.src ? (
+          <CoverImage
+            src={artwork.src}
+            alt=""
+            width={62}
+            height={62}
+            className="h-full w-full object-cover"
+            sizes="62px"
+          />
+        ) : (
+          children
+        )}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-base font-semibold tracking-[-0.2px] text-[#f2f2f2]">
+          {title}
+        </span>
+        <span className="mt-0.5 block truncate text-sm text-white/60">{subtitle}</span>
+      </span>
+    </Link>
+  );
+}
 
 function PlaylistSkeletonRows() {
   return (
@@ -21,9 +107,32 @@ function PlaylistSkeletonRows() {
   );
 }
 
+function PlaylistGridSkeleton() {
+  return (
+    <div
+      className="grid gap-x-3 gap-y-6 [grid-template-columns:repeat(auto-fill,minmax(164px,1fr))]"
+      aria-hidden
+    >
+      {[0, 1, 2, 3, 4, 5].map((item) => (
+        <div key={item} className="min-w-0">
+          <div className="wf-skeleton aspect-square rounded-xl" />
+          <div className="mt-3 space-y-2">
+            <div className="wf-skeleton h-4 w-4/5 rounded-full" />
+            <div className="wf-skeleton h-3 w-1/2 rounded-full" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function LibraryPage() {
   const { user, status } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedFilter = searchParams.get("filter");
+  const filter: LibraryFilter =
+    requestedFilter === "playlists" || requestedFilter === "podcasts" ? requestedFilter : "all";
   const [creating, setCreating] = useState(false);
   const [playlistName, setPlaylistName] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -58,140 +167,214 @@ export default function LibraryPage() {
     }
   };
 
+  const showPlaylists = filter === "all" || filter === "playlists";
+  const toggleFilter = (nextFilter: LibraryFilter) => {
+    const resolvedFilter = filter === nextFilter ? "all" : nextFilter;
+    const nextSearchParams = new URLSearchParams(searchParams);
+    if (resolvedFilter === "all") nextSearchParams.delete("filter");
+    else nextSearchParams.set("filter", resolvedFilter);
+    setSearchParams(nextSearchParams);
+  };
+
   return (
-    <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
+    <div className="min-h-[calc(100dvh-3.5rem)] bg-black px-4 pb-8 pt-[18px] text-white sm:px-6">
       <div className="mx-auto max-w-7xl">
-        <h1 className="mb-5 text-2xl font-bold">Your Library</h1>
-        <div className="space-y-2">
-          <Link to="/liked" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
-            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-b from-[#4c1d95] to-emerald-500 text-white">
-              <Heart size={24} fill="currentColor" />
+        <div className="mb-[18px] flex items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="lg:hidden">
+              <AuthButtons compact />
             </div>
-            <div>
-              <div className="text-[15px] leading-snug">Liked Songs</div>
-              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Your favorites</div>
-            </div>
-          </Link>
+            <h1 className="truncate text-[34px] font-bold leading-10 tracking-[-0.9px] text-[#f2f2f2]">
+              {filter === "playlists" ? "Playlists" : "Library"}
+            </h1>
+          </div>
+          <div className="flex items-center">
+            <Link
+              to="/search"
+              aria-label="Search"
+              className="wf-control-button grid h-11 w-11 place-items-center rounded-full text-[#f2f2f2] hover:bg-white/[0.06]"
+            >
+              <Search size={20} strokeWidth={2.2} />
+            </Link>
+            <Link
+              to="/upload"
+              aria-label="Add music"
+              className="wf-control-button grid h-11 w-11 place-items-center rounded-full text-[#f2f2f2] hover:bg-white/[0.06]"
+            >
+              <Plus size={22} strokeWidth={2.2} />
+            </Link>
+          </div>
+        </div>
 
-          <Link to="/songs" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
-            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-b from-emerald-700 to-emerald-400 text-white">
-              <Music2 size={24} />
-            </div>
-            <div>
-              <div className="text-[15px] leading-snug">All Songs</div>
-              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Browse your full library</div>
-            </div>
-          </Link>
+        <div className="mb-3 flex">
+          <FilterButton label="All" active={filter === "all"} onClick={() => toggleFilter("all")} />
+          <FilterButton
+            label="Playlists"
+            active={filter === "playlists"}
+            onClick={() => toggleFilter("playlists")}
+          />
+          <FilterButton
+            label="Podcasts"
+            active={filter === "podcasts"}
+            onClick={() => toggleFilter("podcasts")}
+          />
+        </div>
 
-          <Link to="/radio" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
-            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-b from-[#0e7490] to-[#22d3ee] text-white">
-              <RadioTower size={24} />
-            </div>
-            <div>
-              <div className="text-[15px] leading-snug">Radio Stations</div>
-              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Dromos 89.8 and BBC Radio 1</div>
-            </div>
-          </Link>
+        <div>
+          {filter === "all" ? (
+            <LibraryShortcut to="/liked" title="Liked Songs" subtitle={`Playlist • ${user?.name || "You"}`}>
+              <Heart size={20} fill="currentColor" className="text-[#f2f2f2]" />
+            </LibraryShortcut>
+          ) : null}
 
-          <Link to="/podcasts" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
-            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-b from-[#86198f] to-[#d946ef] text-white">
-              <Podcast size={24} />
-            </div>
-            <div>
-              <div className="text-[15px] leading-snug">Podcasts</div>
-              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Huberman Lab and Modern Wisdom</div>
-            </div>
-          </Link>
-
-          <Link to="/events" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
-            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-b from-[#7c3aed] to-[#4c1d95] text-white">
-              <Ticket size={24} />
-            </div>
-            <div>
-              <div className="text-[15px] leading-snug">Live Events</div>
-              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Concerts &amp; venues near you</div>
-            </div>
-          </Link>
-
-          {showSkeleton ? (
-            <PlaylistSkeletonRows />
-          ) : (
+          {filter === "all" ? (
             <>
-              {signedIn && data.playlists.length > 0 ? (
-                <div className="flex items-center justify-between px-3 pb-2 pt-4">
-                  <span className="text-xs uppercase tracking-wide opacity-60">Playlists</span>
-                  <label htmlFor="new-playlist-name" className="inline-flex items-center gap-1 text-xs text-emerald-400">
+              <LibraryShortcut to="/songs" title="All Songs" subtitle="Browse your full library">
+                <Music2 size={20} />
+              </LibraryShortcut>
+              <LibraryShortcut to="/radio" title="Radio Stations" subtitle="Live streams">
+                <RadioTower size={20} />
+              </LibraryShortcut>
+            </>
+          ) : null}
+
+          {filter === "all" ? (
+            <LibraryShortcut to="/podcasts" title="Podcasts" subtitle="Shows & episodes">
+              <Podcast size={20} />
+            </LibraryShortcut>
+          ) : null}
+
+          {filter === "podcasts"
+            ? PODCAST_SHOWS.map((podcastShow) => (
+                <LibraryShortcut
+                  key={podcastShow.id}
+                  to={`/podcasts?show=${encodeURIComponent(podcastShow.id)}`}
+                  title={podcastShow.title}
+                  subtitle={`Podcast • ${podcastShow.author}`}
+                  artwork={{
+                    src: podcastMediaProxyUrl(podcastShow.id, podcastShow.imageUrl),
+                  }}
+                >
+                  <Podcast size={22} />
+                </LibraryShortcut>
+              ))
+            : null}
+
+          {filter === "all" ? (
+            <LibraryShortcut to="/events" title="Live Events" subtitle="Concerts & venues near you">
+              <Ticket size={20} />
+            </LibraryShortcut>
+          ) : null}
+
+          {showPlaylists ? (
+            showSkeleton ? (
+              filter === "playlists" ? <PlaylistGridSkeleton /> : <PlaylistSkeletonRows />
+            ) : (
+              <>
+                <div className="flex items-center justify-between pb-2 pt-5">
+                  <span className="text-[13px] font-medium text-white/60">
+                    {filter === "playlists"
+                      ? `${data.playlists.length} ${data.playlists.length === 1 ? "playlist" : "playlists"}`
+                      : "Playlists"}
+                  </span>
+                  <label htmlFor="new-playlist-name" className="inline-flex items-center gap-1 text-[13px] font-medium text-white/60">
                     <Plus size={14} /> New playlist
                   </label>
                 </div>
-              ) : null}
 
-              {signedIn ? (
-                <form onSubmit={handleCreate} className="mx-3 mb-3 flex gap-2">
-                  <input
-                    id="new-playlist-name"
-                    value={playlistName}
-                    onChange={(event) => setPlaylistName(event.target.value)}
-                    placeholder="Playlist name"
-                    maxLength={80}
-                    className="min-w-0 flex-1 rounded-lg border border-white/[0.14] bg-white/[0.06] px-3 py-2 text-sm outline-none focus:border-emerald-400"
-                  />
-                  <button
-                    type="submit"
-                    disabled={creating || !playlistName.trim()}
-                    className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-45"
-                  >
-                    {creating ? "Creating..." : "Create"}
-                  </button>
-                </form>
-              ) : null}
-
-              {actionError ? <div className="mx-3 mb-3 text-sm text-red-300">{actionError}</div> : null}
-
-              {signedIn
-                ? data.playlists.map((playlist) => (
-                    <Link
-                      key={playlist.id}
-                      to={`/playlist/${playlist.id}`}
-                      className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5"
+                {signedIn ? (
+                  <form onSubmit={handleCreate} className="mb-3 flex gap-2">
+                    <input
+                      id="new-playlist-name"
+                      value={playlistName}
+                      onChange={(event) => setPlaylistName(event.target.value)}
+                      placeholder="Playlist name"
+                      maxLength={80}
+                      className="h-11 min-w-0 flex-1 rounded-xl border border-white/[0.08] bg-[#0c0c0d] px-3 text-sm outline-none focus:border-white/20 focus:ring-2 focus:ring-white/10"
+                    />
+                    <button
+                      type="submit"
+                      disabled={creating || !playlistName.trim()}
+                      className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-45"
                     >
-                      <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-black/5 dark:bg-white/10">
-                        <ListMusic size={24} className="opacity-80" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate text-[15px] leading-snug">{playlist.name}</div>
-                        <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Playlist • {playlist.songsCount} tracks</div>
-                      </div>
-                    </Link>
-                  ))
-                : null}
+                      {creating ? "Creating..." : "Create"}
+                    </button>
+                  </form>
+                ) : null}
 
-              {signedIn && error ? (
-                <div className="px-3 pb-2 pt-4">
-                  <div className="text-sm text-red-300">{error}</div>
-                  <button type="button" onClick={retry} className="mt-3 rounded-full border border-white/[0.2] px-3 py-1.5 text-sm">Try again</button>
-                </div>
-              ) : null}
+                {actionError ? <div className="mb-3 text-sm text-red-300">{actionError}</div> : null}
 
-              {signedIn && !error && data.playlists.length === 0 ? (
-                <div className="px-3 pb-2 text-sm opacity-70">You don’t have any playlists yet.</div>
-              ) : null}
+                {signedIn ? (
+                  filter === "playlists" ? (
+                    <div className="grid gap-x-3 gap-y-6 [grid-template-columns:repeat(auto-fill,minmax(164px,1fr))]">
+                      {data.playlists.map((playlist, index) => (
+                        <Link
+                          key={playlist.id}
+                          to={`/playlist/${playlist.id}`}
+                          className="wf-song-card group min-w-0 touch-manipulation"
+                        >
+                          <PlaylistArtwork
+                            coverImageUrls={playlist.coverImageUrls}
+                            imageUrl={playlist.imageUrl}
+                            sizes="(max-width: 639px) 45vw, 190px"
+                            loading={index < 6 ? "eager" : "lazy"}
+                            className="w-full"
+                          />
+                          <div className="min-h-12 min-w-0 px-px pt-[9px]">
+                            <div className="truncate text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
+                              {playlist.name}
+                            </div>
+                            <div className="mt-px truncate text-[13.5px] leading-[19px] text-white/[0.58]">
+                              {playlist.songsCount} {playlist.songsCount === 1 ? "track" : "tracks"}
+                            </div>
+                          </div>
+                        </Link>
+                      ))}
+                    </div>
+                  ) : (
+                    data.playlists.map((playlist) => (
+                        <LibraryShortcut
+                          key={playlist.id}
+                          to={`/playlist/${playlist.id}`}
+                          title={playlist.name}
+                          subtitle={`Playlist • ${playlist.songsCount} tracks`}
+                          artwork={{
+                            src: playlist.imageUrl,
+                          }}
+                        >
+                          <ListMusic size={22} />
+                        </LibraryShortcut>
+                      ))
+                  )
+                ) : null}
 
-              {!signedIn ? (
-                <div className="px-3 py-6 text-sm opacity-70">
-                  <Link className="text-emerald-500 underline" to="/signin">Sign in</Link> to view your playlists.
-                </div>
-              ) : null}
-            </>
-          )}
+                {signedIn && error ? (
+                  <div className="pb-2 pt-4">
+                    <div className="text-sm text-red-300">{error}</div>
+                    <button type="button" onClick={retry} className="mt-3 rounded-lg border border-white/[0.16] px-3 py-1.5 text-sm">
+                      Try again
+                    </button>
+                  </div>
+                ) : null}
 
-          <Link to="/upload" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5 lg:hidden">
-            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-b from-[#374151] to-[#6b7280] text-white"><Upload size={24} /></div>
-            <div>
-              <div className="text-[15px] leading-snug">Upload</div>
-              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Add new music</div>
-            </div>
-          </Link>
+                {signedIn && !error && data.playlists.length === 0 ? (
+                  <div className="pb-2 text-sm text-white/60">You don’t have any playlists yet.</div>
+                ) : null}
+
+                {!signedIn ? (
+                  <div className="py-6 text-sm text-white/60">
+                    <Link className="text-white underline" to="/signin">Sign in</Link> to view your playlists.
+                  </div>
+                ) : null}
+              </>
+            )
+          ) : null}
+
+          {filter === "all" ? (
+            <LibraryShortcut to="/upload" title="Import your music" subtitle="Add new music">
+              <Upload size={20} />
+            </LibraryShortcut>
+          ) : null}
         </div>
       </div>
     </div>

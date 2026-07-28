@@ -67,7 +67,7 @@ export function TrackActionsButton({
         title="More"
         onClick={handleOpen}
         className={cn(
-          "wf-control-button grid shrink-0 place-items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+          "wf-control-button grid shrink-0 place-items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
           className,
         )}
       >
@@ -259,7 +259,7 @@ function TrackActionsSheet({
               icon={
                 <Heart
                   size={20}
-                  className={cn(liked ? "fill-emerald-500 text-emerald-500" : undefined)}
+                  className={cn(liked ? "fill-white text-white" : undefined)}
                 />
               }
               label={

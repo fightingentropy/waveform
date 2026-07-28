@@ -253,9 +253,8 @@ export default function NowPlayingSheet({
       <button
         type="button"
         className={cn(
-          "wf-sheet-backdrop absolute inset-0 bg-black/60 transition-opacity lg:block",
+          "wf-sheet-backdrop absolute inset-0 bg-black/[0.76] transition-opacity",
           open ? "opacity-100" : "opacity-0",
-          "hidden lg:block",
         )}
         onClick={onClose}
         aria-label="Close now playing view"
@@ -270,8 +269,8 @@ export default function NowPlayingSheet({
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
         className={cn(
-          "wf-now-playing-panel absolute overflow-hidden bg-background",
-          "inset-0 lg:inset-auto lg:left-0 lg:right-0 lg:top-14 lg:bottom-[84px] lg:mx-auto lg:max-w-3xl lg:border lg:border-black/10 lg:dark:border-white/10 lg:bg-background/95 lg:backdrop-blur-lg lg:rounded-t-2xl",
+          "wf-now-playing-panel absolute inset-x-0 bottom-0 top-[6dvh] overflow-hidden rounded-t-[28px] border-t border-white/[0.08] bg-[#0c0c0d]",
+          "lg:inset-auto lg:left-0 lg:right-0 lg:top-14 lg:bottom-[84px] lg:mx-auto lg:max-w-3xl lg:rounded-t-[28px] lg:border lg:border-white/[0.08]",
           open
             ? "translate-y-0 opacity-100"
             : "translate-y-full opacity-0 lg:translate-y-8 lg:opacity-0",
@@ -280,19 +279,25 @@ export default function NowPlayingSheet({
       >
         <div
           ref={scrollContainerRef}
-          className="h-full overflow-y-auto overscroll-contain pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] lg:pt-0 lg:pb-0"
+          className="h-full overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)] lg:pb-0"
         >
-          <div className="p-4 sm:p-6 min-h-full flex flex-col">
-            <div className="flex items-center justify-between mb-4 lg:mb-4">
+          <div className="flex min-h-full flex-col px-6 pb-5">
+            <div className="flex items-center justify-between py-2">
               <button
                 type="button"
                 onClick={onClose}
-                className="wf-control-button h-11 w-11 -ml-1 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
+                className="wf-control-button -ml-2 grid h-11 w-11 place-items-center rounded-full text-white/60 touch-manipulation active:bg-white/[0.06]"
                 aria-label="Collapse now playing"
               >
                 <ChevronDown size={24} />
               </button>
-              <div className="-mr-1 flex items-center gap-1">
+              <div className="text-xs font-semibold uppercase tracking-[1.2px] text-white/[0.58]">
+                {liveStream ? "Radio" : podcastEpisode ? "Podcast" : "Now Playing"}
+              </div>
+              <div className="h-11 w-11" />
+            </div>
+
+            <div className="mx-auto flex h-12 w-full max-w-[356px] items-center justify-around px-2.5">
                 {showLibraryActions ? (
                   <>
                     <button
@@ -303,11 +308,11 @@ export default function NowPlayingSheet({
                       className={cn(
                         "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
                         "wf-control-button",
-                        likePending ? "opacity-60" : "active:bg-black/10 dark:active:bg-white/10",
-                        songIsLiked ? "text-emerald-500" : "text-foreground/70",
+                        likePending ? "opacity-60" : "active:bg-white/[0.06]",
+                        songIsLiked ? "text-white/[0.94]" : "text-white/50",
                       )}
                     >
-                      <Heart size={22} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
+                      <Heart size={22} className={cn(songIsLiked && "fill-white text-white/[0.94]")} />
                     </button>
                   </>
                 ) : null}
@@ -319,8 +324,8 @@ export default function NowPlayingSheet({
                     aria-pressed={lyricsViewOpen}
                     onClick={() => setShowLyrics((value) => !value)}
                     className={cn(
-                      "wf-control-button h-11 w-11 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
-                      lyricsViewOpen ? "text-emerald-500" : "text-foreground/70",
+                      "wf-control-button h-11 w-11 rounded-full grid place-items-center active:bg-white/[0.06] touch-manipulation",
+                      lyricsViewOpen ? "text-white/[0.94]" : "text-white/50",
                     )}
                   >
                     <MicVocal size={22} />
@@ -333,14 +338,14 @@ export default function NowPlayingSheet({
                   title={sleepTimerTitle}
                   onClick={() => setSleepMenuOpen((value) => !value)}
                   className={cn(
-                    "wf-control-button relative h-11 w-11 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
-                    sleepTimerActive ? "text-[#1ed760]" : "text-foreground/70",
+                    "wf-control-button relative h-11 w-11 rounded-full grid place-items-center active:bg-white/[0.06] touch-manipulation",
+                    sleepTimerActive ? "text-white/[0.94]" : "text-white/50",
                   )}
                 >
                   <Moon size={20} />
                   <span
                     className={cn(
-                      "absolute bottom-1.5 h-1 w-1 rounded-full bg-[#1ed760] transition-opacity",
+                      "absolute bottom-1.5 h-1 w-1 rounded-full bg-white transition-opacity",
                       sleepTimerActive ? "opacity-100" : "opacity-0",
                     )}
                   />
@@ -350,15 +355,13 @@ export default function NowPlayingSheet({
                   aria-label="Open queue"
                   title="Open queue"
                   onClick={onOpenQueue}
-                  className="wf-control-button h-11 w-11 rounded-full grid place-items-center text-foreground/70 active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
+                  className="wf-control-button grid h-11 w-11 place-items-center rounded-full text-white/50 touch-manipulation active:bg-white/[0.06]"
                 >
                   <ListMusic size={22} />
                 </button>
-              </div>
             </div>
 
-            <div className="flex-1 flex flex-col justify-center gap-6 lg:gap-5 max-w-md mx-auto w-full">
-              <div className="-mb-2 text-center text-xs uppercase tracking-wide opacity-70">Now Playing</div>
+            <div className="mx-auto flex w-full max-w-[356px] flex-1 flex-col justify-center gap-5 lg:max-w-md">
               {lyricsViewOpen ? (
                 // Same square footprint as the art so toggling never reflows
                 // the title/progress/controls below.
@@ -366,11 +369,11 @@ export default function NowPlayingSheet({
                   lyricsState={lyricsState}
                   currentTime={currentTime}
                   onSeek={liveStream ? undefined : onSeek}
-                  className="mx-auto aspect-square w-full shadow-2xl shadow-black/30"
+                  className="mx-auto aspect-square w-[min(100%,39dvh)] shadow-2xl shadow-black/30 lg:w-full"
                 />
               ) : (
                 <div
-                  className="mx-auto w-full"
+                  className="mx-auto w-[min(100%,39dvh)] lg:w-full"
                   onTouchStart={handleCoverTouchStart}
                   onTouchMove={handleCoverTouchMove}
                   onTouchEnd={handleCoverTouchEnd}
@@ -381,7 +384,7 @@ export default function NowPlayingSheet({
                     touchAction: "pan-y",
                   }}
                 >
-                  <div className="wf-now-playing-art w-full shadow-2xl shadow-black/30 rounded-2xl overflow-hidden">
+                  <div className="wf-now-playing-art w-full overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0c0c0d] shadow-[0_10px_30px_rgba(0,0,0,0.34)]">
                     <CoverImage
                       src={song.imageUrl || "/apple-icon.png"}
                       networkSrc={song.networkImageUrl}
@@ -396,17 +399,17 @@ export default function NowPlayingSheet({
                 </div>
               )}
 
-              <div className="text-center lg:text-left">
-                <MarqueeText text={song.title} className="text-2xl sm:text-3xl font-bold leading-tight" />
-                <MarqueeText text={song.artist} className="text-lg opacity-80 mt-1" />
+              <div className="mt-[-1px] text-left">
+                <MarqueeText text={song.title} className="text-[23px] font-semibold leading-7 text-white/[0.94]" />
+                <MarqueeText text={song.artist} className="mt-0.5 text-[15px] text-white/[0.58]" />
               </div>
 
               {liveStream ? (
                 <div className="space-y-2">
                   <div className="h-1 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
-                    <div className={cn("h-full w-full bg-emerald-500", isPlaying && "animate-pulse")} />
+                    <div className={cn("h-full w-full bg-white/[0.82]", isPlaying && "animate-pulse")} />
                   </div>
-                  <div className="flex justify-between text-xs font-semibold text-emerald-400">
+                  <div className="flex justify-between text-xs font-semibold text-white/[0.72]">
                     <span>LIVE</span>
                     <span>Radio</span>
                   </div>
@@ -421,14 +424,14 @@ export default function NowPlayingSheet({
                     value={currentTime}
                     aria-label="Playback position"
                     onChange={(event) => onSeek(Number(event.target.value))}
-                    className="w-full h-1 appearance-none rounded-full bg-black/10 dark:bg-white/10 accent-emerald-500 touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                    className="h-0.5 w-full appearance-none rounded-full bg-white/[0.18] accent-white touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                     style={{
-                      background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
+                      background: `linear-gradient(to right, rgba(242,242,242,0.94) 0%, rgba(242,242,242,0.94) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
                     }}
                   />
                   <div className="flex justify-between text-xs tabular-nums opacity-70">
                     <span>{formatTime(currentTime)}</span>
-                    <span>{formatTime(duration)}</span>
+                    <span>-{formatTime(Math.max(0, duration - currentTime))}</span>
                   </div>
                 </div>
               )}
@@ -441,43 +444,47 @@ export default function NowPlayingSheet({
                   onClick={toggleShuffle}
                   className={cn(
                     "wf-control-button relative h-11 w-11 rounded-full grid place-items-center touch-manipulation",
-                    shuffle ? "text-emerald-500" : "text-foreground/70",
+                    shuffle ? "text-white/[0.94]" : "text-white/50",
                   )}
                 >
                   <Shuffle size={20} />
                   <span
                     className={cn(
-                      "absolute bottom-1.5 h-1 w-1 rounded-full bg-emerald-500 transition-opacity",
+                      "absolute bottom-1.5 h-1 w-1 rounded-full bg-white transition-opacity",
                       shuffle ? "opacity-100" : "opacity-0",
                     )}
                   />
                 </button>
                 {/* prev / play / next grouped with a real gap so a Next tap that
                     drifts left can't land on the big play/pause button. */}
-                <div className="flex items-center gap-7">
+                <div className="flex items-center gap-[18px]">
                   <button
                     type="button"
                     aria-label="Previous"
                     onClick={previous}
-                    className="wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation"
+                    className="wf-control-button grid h-12 w-12 place-items-center rounded-full touch-manipulation"
                   >
-                    <SkipBack size={24} />
+                    <SkipBack size={27} fill="currentColor" />
                   </button>
                   <button
                     type="button"
                     aria-label={isPlaying ? "Pause" : "Play"}
                     onClick={handleTogglePlayback}
-                    className="wf-control-button h-14 w-14 rounded-full grid place-items-center bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 touch-manipulation"
+                    className="wf-control-button grid h-16 w-16 place-items-center rounded-full bg-white text-black touch-manipulation"
                   >
-                    {isPlaying ? <Pause size={26} /> : <Play size={26} className="translate-x-[2px]" />}
+                    {isPlaying ? (
+                      <Pause size={26} fill="currentColor" />
+                    ) : (
+                      <Play size={27} fill="currentColor" className="translate-x-[2px]" />
+                    )}
                   </button>
                   <button
                     type="button"
                     aria-label="Next"
                     onClick={next}
-                    className="wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation"
+                    className="wf-control-button grid h-12 w-12 place-items-center rounded-full touch-manipulation"
                   >
-                    <SkipForward size={24} />
+                    <SkipForward size={27} fill="currentColor" />
                   </button>
                 </div>
                 <button
@@ -486,7 +493,7 @@ export default function NowPlayingSheet({
                   onClick={cycleRepeatMode}
                   className={cn(
                     "wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation",
-                    repeatMode !== "off" ? "text-emerald-500" : "text-foreground/70",
+                    repeatMode !== "off" ? "text-white/[0.94]" : "text-white/50",
                   )}
                 >
                   <Repeat size={20} />
@@ -515,9 +522,9 @@ export default function NowPlayingSheet({
                 </div>
               </div>
             ) : podcastEpisode ? (
-              <div className="mt-6 rounded-xl border border-black/10 p-4 dark:border-white/10 lg:mt-5">
+              <div className="mt-6 rounded-xl border border-white/[0.08] p-4 lg:mt-5">
                 <div className="flex items-center gap-3">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-fuchsia-500/15 text-fuchsia-200">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
                     <Podcast size={18} />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -529,7 +536,7 @@ export default function NowPlayingSheet({
                     aria-label={`Playback speed: ${formatPlaybackRate(playbackRate)}`}
                     title="Playback speed"
                     onClick={() => setPlaybackRate(nextPlaybackRate(playbackRate))}
-                    className="wf-control-button h-9 shrink-0 rounded-full border border-black/15 px-3 text-sm font-semibold tabular-nums active:bg-black/5 dark:border-white/20 dark:active:bg-white/5 touch-manipulation"
+                    className="wf-control-button h-9 shrink-0 rounded-full border border-white/[0.12] px-3 text-sm font-semibold tabular-nums touch-manipulation active:bg-white/[0.06]"
                   >
                     {formatPlaybackRate(playbackRate)}
                   </button>
@@ -559,14 +566,14 @@ export default function NowPlayingSheet({
           aria-label="Sleep timer"
           aria-hidden={!sleepMenuOpen}
           className={cn(
-            "absolute inset-x-0 bottom-0 z-40 rounded-t-2xl border-t border-black/10 bg-background pb-[max(env(safe-area-inset-bottom),0.75rem)] shadow-2xl transition-transform duration-300 dark:border-white/10",
+            "absolute inset-x-0 bottom-0 z-40 rounded-t-[28px] border-t border-white/[0.08] bg-[#0c0c0d] pb-[max(env(safe-area-inset-bottom),0.75rem)] shadow-2xl transition-transform duration-300",
             sleepMenuOpen ? "translate-y-0" : "pointer-events-none translate-y-full",
           )}
         >
           <div className="mx-auto mt-2 h-1 w-9 rounded-full bg-black/20 dark:bg-white/20" />
           <div className="px-6 pb-1 pt-3 text-center">
             <div className="text-sm font-semibold">Sleep timer</div>
-            <div className={cn("mt-0.5 text-xs", sleepTimerActive ? "text-[#1ed760]" : "opacity-60")}>
+            <div className={cn("mt-0.5 text-xs", sleepTimerActive ? "text-white" : "opacity-60")}>
               {sleepTimerRemaining != null
                 ? `Music stops in ${sleepTimerRemaining} min`
                 : sleepAtEndOfTrack
@@ -598,7 +605,7 @@ export default function NowPlayingSheet({
               tabIndex={sleepMenuOpen ? 0 : -1}
               className={cn(
                 "wf-control-button flex h-12 w-full items-center justify-between rounded-lg px-3 text-[15px] active:bg-black/5 dark:active:bg-white/5 touch-manipulation",
-                sleepAtEndOfTrack && "text-[#1ed760]",
+                sleepAtEndOfTrack && "text-white",
               )}
             >
               End of track
@@ -614,7 +621,7 @@ export default function NowPlayingSheet({
                   setSleepMenuOpen(false);
                 }}
                 tabIndex={sleepMenuOpen ? 0 : -1}
-                className="wf-control-button flex h-12 w-full items-center justify-center rounded-lg px-3 text-[15px] font-semibold text-[#1ed760] active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
+                className="wf-control-button flex h-12 w-full items-center justify-center rounded-lg px-3 text-[15px] font-semibold text-white touch-manipulation active:bg-white/[0.06]"
               >
                 Turn off timer
               </button>

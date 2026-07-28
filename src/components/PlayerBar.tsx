@@ -2195,20 +2195,20 @@ function PlayerBar(): React.ReactElement | null {
           <QueueSheet open={queueSheetOpen} onClose={closeQueueSheet} />
         </Suspense>
       ) : null}
-      <div className="fixed inset-x-0 z-40 border-t border-white/[0.12] bg-background text-white bottom-[var(--wf-mobile-nav-bottom-offset)] lg:bottom-0">
+      <div className="fixed inset-x-0 z-40 bottom-[calc(var(--wf-mobile-nav-bottom-offset)+var(--wf-floating-gap))] text-white lg:bottom-0 lg:border-t lg:border-white/[0.08] lg:bg-black">
       {/* Mobile mini player */}
-      <div className="lg:hidden relative">
+      <div className="relative mx-[var(--wf-floating-inset)] overflow-hidden rounded-[18px] border border-white/[0.13] bg-[rgba(10,12,16,0.84)] shadow-[0_8px_24px_rgba(0,0,0,0.34)] backdrop-blur-2xl lg:hidden">
         <div
-          className="absolute inset-x-0 top-0 h-0.5 bg-white/[0.12]"
+          className="absolute inset-x-0 bottom-0 z-10 h-0.5 bg-white/[0.12]"
           aria-hidden
         >
           <PlaybackProgressFill
             duration={duration}
             isRadio={currentSongIsRadio}
-            className="h-full bg-emerald-500 transition-[width] duration-150"
+            className="h-full bg-white/[0.82] transition-[width] duration-150"
           />
         </div>
-        <div className="h-[var(--wf-mobile-player-height)] px-3 flex items-center gap-3">
+        <div className="flex h-[var(--wf-mobile-player-height)] items-center gap-3 px-2.5">
           <button
             type="button"
             onClick={openNowPlaying}
@@ -2219,11 +2219,11 @@ function PlayerBar(): React.ReactElement | null {
               src={playbackSong.imageUrl || "/apple-icon.png"}
               networkSrc={playbackSong.networkImageUrl}
               alt=""
-              width={48}
-              height={48}
+              width={50}
+              height={50}
               loading="eager"
-              className="wf-song-cover w-12 h-12 rounded-md object-cover shrink-0"
-              sizes="48px"
+              className="wf-song-cover h-[50px] w-[50px] shrink-0 rounded-[9px] object-cover"
+              sizes="50px"
             />
             <div className="min-w-0">
               <MarqueeText text={playbackSong.title} className="text-[15px] font-medium leading-5 text-white" />
@@ -2239,19 +2239,23 @@ function PlayerBar(): React.ReactElement | null {
               className={cn(
                 "wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation shrink-0",
                 likePending ? "opacity-60" : "",
-                songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
+                songIsLiked ? "text-white" : "text-white/[0.68]",
               )}
             >
-              <Heart size={20} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
+              <Heart size={22} className={cn(songIsLiked && "fill-white text-white")} />
             </button>
           ) : null}
           <button
             type="button"
             aria-label={isPlaying ? "Pause" : "Play"}
             onClick={handleTogglePlayback}
-            className="wf-control-button h-11 w-11 rounded-full grid place-items-center bg-white text-black touch-manipulation shrink-0"
+            className="wf-control-button grid h-11 w-11 shrink-0 place-items-center rounded-full text-white touch-manipulation"
           >
-            {isPlaying ? <Pause size={20} /> : <Play size={20} className="translate-x-[1px]" />}
+            {isPlaying ? (
+              <Pause size={26} fill="currentColor" />
+            ) : (
+              <Play size={26} fill="currentColor" className="translate-x-[1px]" />
+            )}
           </button>
         </div>
       </div>
@@ -2281,12 +2285,12 @@ function PlayerBar(): React.ReactElement | null {
               onClick={handleToggleLike}
               disabled={!likesHydrated || likePending || !currentSongId}
               className={cn(
-                "wf-control-button flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+                "wf-control-button flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
                 likePending ? "cursor-wait opacity-60" : "hover:bg-white/[0.09] hover:text-white",
-                songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
+                songIsLiked ? "text-white" : "text-white/[0.68]",
               )}
             >
-              <Heart size={18} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
+              <Heart size={18} className={cn(songIsLiked && "fill-white text-white")} />
             </button>
           ) : null}
         </div>
@@ -2299,13 +2303,13 @@ function PlayerBar(): React.ReactElement | null {
               onClick={handleToggleShuffle}
               className={cn(
                 "wf-control-button relative p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white",
-                shuffle && "text-[#1ed760]",
+                shuffle && "text-white",
               )}
             >
               <Shuffle size={18} />
               <span
                 className={cn(
-                  "absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[#1ed760] transition-opacity",
+                  "absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-white transition-opacity",
                   shuffle ? "opacity-100" : "opacity-0",
                 )}
               />
@@ -2319,16 +2323,16 @@ function PlayerBar(): React.ReactElement | null {
             <button aria-label="Next" onClick={next} className="wf-control-button p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <SkipForward size={18} />
             </button>
-            <button aria-label="Repeat" onClick={handleCycleRepeatMode} className={cn("wf-control-button p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white", repeatMode !== "off" && "text-[#1ed760]")}>
+            <button aria-label="Repeat" onClick={handleCycleRepeatMode} className={cn("wf-control-button p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white", repeatMode !== "off" && "text-white")}>
               <Repeat size={18} />
             </button>
           </div>
 
           {currentSongIsRadio ? (
             <div className="flex w-full items-center gap-3">
-              <span className="w-10 text-right text-[12px] font-semibold text-emerald-300">LIVE</span>
+              <span className="w-10 text-right text-[12px] font-semibold text-white/[0.82]">LIVE</span>
               <div className="h-1.5 w-full overflow-hidden rounded bg-white/[0.12]">
-                <div className={cn("h-full w-full bg-emerald-500/75", isPlaying && "animate-pulse")} />
+                <div className={cn("h-full w-full bg-white/75", isPlaying && "animate-pulse")} />
               </div>
               <span className="w-10 text-[12px] text-white/[0.62]">Radio</span>
             </div>
@@ -2344,7 +2348,7 @@ function PlayerBar(): React.ReactElement | null {
               aria-label={`Playback speed: ${formatPlaybackRate(playbackRate)}`}
               title="Playback speed"
               onClick={() => setPlaybackRate(nextPlaybackRate(playbackRate))}
-              className="wf-control-button h-9 flex-shrink-0 rounded-full px-2.5 grid place-items-center text-[12px] font-semibold tabular-nums text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              className="wf-control-button h-9 flex-shrink-0 rounded-full px-2.5 grid place-items-center text-[12px] font-semibold tabular-nums text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
             >
               {formatPlaybackRate(playbackRate)}
             </button>
@@ -2357,9 +2361,9 @@ function PlayerBar(): React.ReactElement | null {
               title={sleepTimerTitle}
               onClick={() => setSleepMenuOpen((open) => !open)}
               className={cn(
-                "wf-control-button h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+                "wf-control-button h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
                 sleepMenuOpen && "bg-white/[0.08]",
-                sleepTimerActive ? "text-[#1ed760]" : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
+                sleepTimerActive ? "text-white" : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
               )}
             >
               <Moon size={18} />
@@ -2376,7 +2380,7 @@ function PlayerBar(): React.ReactElement | null {
                   <div className="flex items-center justify-between gap-2 px-3 py-2">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-white/[0.62]">Sleep timer</span>
                     {sleepTimerRemaining != null ? (
-                      <span className="text-[11px] font-semibold tabular-nums text-[#1ed760]">{sleepTimerRemaining} min left</span>
+                      <span className="text-[11px] font-semibold tabular-nums text-white">{sleepTimerRemaining} min left</span>
                     ) : null}
                   </div>
                   {SLEEP_TIMER_MINUTE_OPTIONS.map((minutes) => (
@@ -2400,7 +2404,7 @@ function PlayerBar(): React.ReactElement | null {
                     }}
                     className={cn(
                       "wf-control-button block w-full rounded-lg px-3 py-2 text-left text-[13px] transition hover:bg-white/[0.09]",
-                      sleepAtEndOfTrack ? "text-[#1ed760]" : "text-white/[0.85] hover:text-white",
+                      sleepAtEndOfTrack ? "text-white" : "text-white/[0.85] hover:text-white",
                     )}
                   >
                     End of track
@@ -2430,9 +2434,9 @@ function PlayerBar(): React.ReactElement | null {
             title={queueSheetOpen ? "Close queue" : "Open queue"}
             onClick={toggleQueueSheet}
             className={cn(
-              "wf-control-button flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+              "wf-control-button flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
               queueSheetOpen
-                ? "bg-white/[0.08] text-[#1ed760]"
+                ? "bg-white/[0.08] text-white"
                 : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
             )}
           >
@@ -2444,9 +2448,9 @@ function PlayerBar(): React.ReactElement | null {
             title={nowPlayingOpen ? "Collapse now playing" : "Open now playing"}
             onClick={toggleNowPlaying}
             className={cn(
-              "wf-control-button flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+              "wf-control-button flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
               nowPlayingOpen
-                ? "bg-white/[0.08] text-[#1ed760]"
+                ? "bg-white/[0.08] text-white"
                 : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
             )}
           >
@@ -2464,7 +2468,7 @@ function PlayerBar(): React.ReactElement | null {
               value={isMuted ? 0 : volume}
               aria-label="Volume"
               onChange={(e) => setVolume(Number(e.target.value))}
-              className="h-1.5 w-28 appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              className="h-1.5 w-28 appearance-none rounded bg-white/[0.12] accent-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
             />
           </div>
         </div>
@@ -2501,9 +2505,9 @@ function PlaybackScrubber({ duration, onSeek }: { duration: number; onSeek: (val
           setTime(value);
           onSeek(value);
         }}
-        className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+        className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
         style={{
-          background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
+          background: `linear-gradient(to right, rgba(242,242,242,0.94) 0%, rgba(242,242,242,0.94) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
         }}
       />
       <span className="w-10 text-[12px] tabular-nums text-white/[0.62]">{formatTime(duration)}</span>

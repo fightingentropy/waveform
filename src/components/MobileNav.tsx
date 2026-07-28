@@ -1,7 +1,10 @@
 "use client";
 
-import { Link, useLocation } from "react-router";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Link, useLocation, useNavigate } from "react-router";
+import { createPlaylist } from "@/client/playlist-actions";
 import { cn } from "@/lib/utils";
+import { useModalDialogFocus } from "@/lib/use-modal-dialog";
 
 type TabIconProps = { active: boolean };
 
@@ -39,12 +42,28 @@ function LibraryTabIcon({ active }: TabIconProps) {
   );
 }
 
+function CreateTabIcon({ active }: TabIconProps) {
+  return (
+    <span
+      aria-hidden
+      className={[
+        "grid h-[22px] w-[22px] place-items-center rounded-md border transition-colors",
+        active ? "border-white bg-white text-black" : "border-current",
+      ].join(" ")}
+    >
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2.2}>
+        <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+      </svg>
+    </span>
+  );
+}
+
 const tabs = [
   {
     href: "/",
     label: "Home",
     Icon: HomeTabIcon,
-    match: (path: string) => path === "/",
+    match: (path: string) => path === "/" || path === "/settings" || path === "/profile",
   },
   {
     href: "/search",
@@ -54,7 +73,7 @@ const tabs = [
   },
   {
     href: "/library",
-    label: "Your Library",
+    label: "Library",
     Icon: LibraryTabIcon,
     match: (path: string) =>
       path.startsWith("/library") ||
@@ -62,36 +81,165 @@ const tabs = [
       path.startsWith("/radio") ||
       path.startsWith("/podcasts") ||
       path.startsWith("/events") ||
-      path.startsWith("/playlist"),
+      path.startsWith("/playlist") ||
+      path.startsWith("/songs") ||
+      path.startsWith("/upload"),
   },
 ] as const;
 
 export default function MobileNav() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [playlistName, setPlaylistName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const createPanelRef = useRef<HTMLElement | null>(null);
+  useModalDialogFocus(createOpen, createPanelRef);
+
+  const closeCreateSheet = () => {
+    if (creating) return;
+    setCreateOpen(false);
+    setPlaylistName("");
+    setCreateError(null);
+  };
+
+  useEffect(() => {
+    if (!createOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeCreateSheet();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [createOpen, creating]);
+
+  const handleCreatePlaylist = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = playlistName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const playlist = await createPlaylist(name);
+      setCreateOpen(false);
+      setPlaylistName("");
+      navigate(`/playlist/${playlist.id}`);
+    } catch (cause) {
+      setCreateError(cause instanceof Error ? cause.message : "Couldn't create the playlist.");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
-    <nav
-      aria-label="Main navigation"
-      className="lg:hidden fixed inset-x-0 bottom-0 z-40 text-white pb-[var(--wf-mobile-bottom-gutter)] bg-gradient-to-t from-black via-black/[0.85] to-black/[0.38] backdrop-blur-md"
-    >
-      <div className="h-[var(--wf-mobile-nav-height)] grid grid-cols-3">
-        {tabs.map((tab) => {
-          const active = tab.match(pathname);
-          return (
-            <Link
-              key={tab.href}
-              to={tab.href}
-              className={cn(
-                "wf-control-button flex flex-col items-center justify-center gap-1 min-h-[44px] touch-manipulation transition-colors",
-                active ? "text-white" : "text-[#b3b3b3]",
-              )}
-            >
-              <tab.Icon active={active} />
-              <span className="text-[10px] font-medium">{tab.label}</span>
-            </Link>
-          );
-        })}
-      </div>
-    </nav>
+    <>
+      {createOpen ? (
+        <div className="fixed inset-0 z-[70] lg:hidden">
+          <button
+            type="button"
+            aria-label="Close create menu"
+            onClick={closeCreateSheet}
+            className="absolute inset-0 h-full w-full bg-black/60"
+          />
+          <section
+            ref={createPanelRef}
+            id="mobile-create-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-create-title"
+            aria-describedby="mobile-create-description"
+            tabIndex={-1}
+            className="absolute inset-x-0 bottom-0 rounded-t-[28px] border-t border-white/[0.1] bg-[#0c0c0d] px-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-2 text-white shadow-2xl"
+          >
+          <div aria-hidden className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/[0.28]" />
+          <h2 id="mobile-create-title" className="text-xl font-semibold tracking-[-0.3px]">
+            Create
+          </h2>
+          <p id="mobile-create-description" className="mt-1 text-sm text-white/[0.6]">
+            Make a playlist for songs or episodes.
+          </p>
+
+          <form onSubmit={handleCreatePlaylist} className="mt-5">
+            <label htmlFor="mobile-playlist-name" className="text-sm font-semibold text-[#f2f2f2]">
+              Playlist name
+            </label>
+            <input
+              id="mobile-playlist-name"
+              value={playlistName}
+              onChange={(event) => setPlaylistName(event.target.value)}
+              placeholder="My playlist"
+              maxLength={120}
+              autoComplete="off"
+              disabled={creating}
+              className="mt-2 h-12 w-full rounded-xl border border-white/[0.1] bg-white/[0.08] px-4 text-base text-white outline-none placeholder:text-white/[0.42] focus:border-white/[0.32] focus:ring-2 focus:ring-white/[0.12] disabled:opacity-60"
+            />
+            {createError ? (
+              <p role="alert" className="mt-2 text-sm text-red-300">
+                {createError}
+              </p>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeCreateSheet}
+                disabled={creating}
+                className="wf-control-button min-h-11 rounded-full px-5 text-sm font-semibold text-white/[0.68] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={creating || !playlistName.trim()}
+                className="wf-control-button min-h-11 rounded-full bg-white px-6 text-sm font-bold text-black disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {creating ? "Creating..." : "Create playlist"}
+              </button>
+            </div>
+          </form>
+          </section>
+        </div>
+      ) : null}
+
+      <nav
+        aria-label="Main navigation"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.11] bg-[rgba(6,6,7,0.98)] pb-[var(--wf-mobile-bottom-gutter)] text-white lg:hidden"
+      >
+        <div className="grid h-[var(--wf-mobile-nav-height)] grid-cols-4 px-2.5 pb-1 pt-[5px]">
+          {tabs.map((tab) => {
+            const active = tab.match(pathname);
+            return (
+              <Link
+                key={tab.href}
+                to={tab.href}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "wf-control-button flex min-h-[44px] flex-col items-center justify-center gap-0.5 touch-manipulation transition-colors",
+                  active ? "text-white" : "text-white/[0.58]",
+                )}
+              >
+                <tab.Icon active={active} />
+                <span className={cn("text-[10px] tracking-[0.1px]", active ? "font-bold" : "font-semibold")}>
+                  {tab.label}
+                </span>
+              </Link>
+            );
+          })}
+          <button
+            type="button"
+            aria-label="Create"
+            aria-expanded={createOpen}
+            aria-controls="mobile-create-sheet"
+            onClick={() => {
+              setCreateError(null);
+              setCreateOpen(true);
+            }}
+            className="wf-control-button flex min-h-[44px] flex-col items-center justify-center gap-0.5 touch-manipulation text-white/[0.58] transition-colors"
+          >
+            <CreateTabIcon active={false} />
+            <span className="text-[10px] font-semibold tracking-[0.1px]">Create</span>
+          </button>
+        </div>
+      </nav>
+    </>
   );
 }

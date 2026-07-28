@@ -470,7 +470,7 @@ export function SongGrid({
             title={listIsPlaying ? "Pause songs" : "Play songs"}
             onClick={handlePlayVisibleSongs}
             disabled={visibleSongs.length === 0}
-            className="wf-control-button grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_8px_18px_rgba(0,0,0,0.22)] transition hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#1ed760]"
+            className="wf-control-button grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-black shadow-[0_8px_18px_rgba(0,0,0,0.22)] transition hover:bg-white/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-45"
           >
             {listIsPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="translate-x-0.5" />}
           </button>
@@ -480,15 +480,15 @@ export function SongGrid({
             title={shuffle ? "Disable shuffle" : "Enable shuffle"}
             onClick={toggleShuffle}
             className={cn(
-              "relative grid h-10 w-10 shrink-0 place-items-center rounded-full border border-black/10 bg-black/5 text-foreground/70 transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/70 dark:border-white/10 dark:bg-white/5 dark:text-white/70 dark:hover:text-white",
+              "relative grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/[0.10] bg-white/[0.045] text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
               "wf-control-button",
-              shuffle && "text-[#1ed760] dark:text-[#1ed760]",
+              shuffle && "text-white",
             )}
           >
             <Shuffle size={19} />
             <span
               className={cn(
-                "absolute bottom-1 h-1 w-1 rounded-full bg-[#1ed760] transition-opacity",
+                "absolute bottom-1 h-1 w-1 rounded-full bg-white transition-opacity",
                 shuffle ? "opacity-100" : "opacity-0",
               )}
             />
