@@ -371,23 +371,22 @@ export default function LibraryScreen() {
 
   const listHeader = (
     <View style={{ paddingTop: 18, paddingBottom: view === "grid" ? 10 : 0 }}>
-      {/* header: avatar + title + search + add */}
+      {/* header: title + search + add + avatar */}
       <View className="flex-row items-center px-4" style={{ marginBottom: 18 }}>
-        <View className="min-w-0 flex-1 flex-row items-center gap-3">
-          <ProfileButton size={38} />
-          <Text
-            numberOfLines={1}
-            style={{
-              color: colors.foreground,
-              fontSize: 34,
-              fontWeight: "700",
-              letterSpacing: -0.9,
-              lineHeight: 40,
-            }}
-          >
-            Library
-          </Text>
-        </View>
+        <Text
+          numberOfLines={1}
+          style={{
+            minWidth: 0,
+            flex: 1,
+            color: colors.foreground,
+            fontSize: 34,
+            fontWeight: "700",
+            letterSpacing: -0.9,
+            lineHeight: 40,
+          }}
+        >
+          Library
+        </Text>
         <View className="flex-row items-center">
           <PressableScale
             onPress={() => router.push("/search")}
@@ -405,6 +404,9 @@ export default function LibraryScreen() {
           >
             <Plus size={22} color={colors.foreground} strokeWidth={2.2} />
           </PressableScale>
+          <View style={{ marginLeft: 4 }}>
+            <ProfileButton size={38} />
+          </View>
         </View>
       </View>
 

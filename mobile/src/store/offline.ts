@@ -4,8 +4,17 @@ import * as FileSystem from "expo-file-system/legacy";
 import { create } from "zustand";
 import { toAbsoluteApiUrl } from "@/lib/config";
 import {
+  applyBackgroundDownloadTransportState,
+  createBackgroundDownloadTransportJob,
+  createDownloadTransferToken,
+  isTerminalBackgroundDownloadState,
+  restoreRecordFromBackgroundDownloadState,
+  type BackgroundDownloadTransportState,
+} from "@/lib/background-download-policy";
+import {
   dbAllRows,
   dbDeleteRow,
+  dbDeleteRows,
   dbUpsertRow,
   dbUpsertRows,
   readAllDownloadedRecords,
@@ -21,6 +30,7 @@ import {
   PLAYBACK_CACHE_SCOPE,
   offlineDownloadKey,
   planQueuedDownloads,
+  planUnpinScopeFromSongs,
 } from "@/lib/offline-download-queue";
 import {
   type LikeOutboxState,
@@ -54,6 +64,17 @@ import { portablePlaybackSong, preferDownloadedPlaybackSong } from "@/lib/offlin
 import { resetPlaybackEngaged } from "@/audio/publish-gate";
 import { storage } from "@/lib/storage";
 import type { PlayerSong } from "@/types/player";
+import {
+  acknowledgeNativeBackgroundDownloads,
+  addNativeBackgroundDownloadListener,
+  cancelNativeBackgroundDownloadAccount,
+  cancelNativeBackgroundDownloads,
+  enqueueNativeBackgroundDownloads,
+  getNativeBackgroundDownloadSnapshot,
+  setNativeBackgroundDownloadAccount,
+  supportsNativeBackgroundDownloads,
+  type NativeBackgroundDownloadState,
+} from "../../modules/background-downloads";
 
 // Offline downloads. Ports the model from src/client/offline.ts to RN: files →
 // expo-file-system (file:// in documentDirectory), records → expo-sqlite,
@@ -73,6 +94,22 @@ export type OfflineVerificationStatus = "idle" | "checking" | "ok" | "repair-nee
 const OFFLINE_DIR = `${FileSystem.documentDirectory ?? ""}offline-media/`;
 const DOWNLOAD_RECORD_DB_CHUNK_SIZE = 32;
 let hydrationPromise: Promise<void> | null = null;
+const nativeBackgroundDownloads = supportsNativeBackgroundDownloads();
+let nativeDownloadListenerInitialized = false;
+let nativeDownloadSubscription: ReturnType<
+  typeof addNativeBackgroundDownloadListener
+> = null;
+let bufferedNativeDownloadStates: NativeBackgroundDownloadState[] = [];
+let nativeStateApplyTail: Promise<void> = Promise.resolve();
+const nativeRevisionByTransfer = new Map<string, number>();
+const nativeCancellationTombstones = new Set<string>();
+
+function nativeTransferIdentity(
+  key: string,
+  transferToken: string,
+): string {
+  return `${key}\u0000${transferToken}`;
+}
 
 // --- Account scope -----------------------------------------------------------
 let accountScope = "anonymous";
@@ -112,6 +149,19 @@ export function setOfflineAccountScope(scope: string | null | undefined): void {
   // A different account is now active: drop the "user engaged" flag so a stale
   // restore for the new scope can't publish over the previous account's state.
   resetPlaybackEngaged();
+  if (nativeBackgroundDownloads) {
+    void setNativeBackgroundDownloadAccount(next)
+      .then(async () => {
+        if (next !== accountScope) {
+          // An older account switch resolved after a newer one. Restore the
+          // current account immediately instead of leaving its tasks suspended.
+          await setNativeBackgroundDownloadAccount(accountScope);
+          return;
+        }
+        await reconcileNativeBackgroundDownloads(next);
+      })
+      .catch(() => {});
+  }
 }
 
 export function keyFor(scope: string, songId: string): string {
@@ -291,6 +341,10 @@ type OfflineState = {
   // scope is replaced as playback advances and is not shown as "Downloaded".
   syncPlaybackCache: (songs: PlayerSong[]) => Promise<void>;
   unpinScope: (songId: string, scope: DownloadScope) => Promise<void>;
+  unpinScopeFromSongs: (
+    songIds: string[],
+    scope: DownloadScope,
+  ) => Promise<void>;
   isDownloaded: (songId: string) => boolean;
   hydrate: () => Promise<void>;
   verifyDownloads: () => Promise<void>;
@@ -299,7 +353,8 @@ type OfflineState = {
   retryFailedMutations: () => Promise<void>;
   clearDownloads: () => Promise<void>;
   refreshStorage: () => Promise<void>;
-  // Pause the in-flight download (banking its resume blob) — called on app-background.
+  // Pause the legacy Expo transfer. The native iOS queue deliberately ignores
+  // this because URLSession owns its background/suspension lifecycle.
   pauseActiveDownload: () => Promise<void>;
 };
 
@@ -314,6 +369,7 @@ function recordToRow(record: OfflineDownloadRecord): DownloadRow {
     audioPath: record.audioPath ?? null,
     coverPath: record.coverPath ?? null,
     lyricsPath: record.lyricsPath ?? null,
+    transferToken: record.transferToken ?? null,
     updatedAt: record.updatedAt,
   };
 }
@@ -328,8 +384,40 @@ function rowToRecord(row: DownloadRow): OfflineDownloadRecord {
     audioPath: row.audioPath ?? undefined,
     coverPath: row.coverPath ?? undefined,
     lyricsPath: row.lyricsPath ?? undefined,
+    transferToken: row.transferToken ?? undefined,
     updatedAt: row.updatedAt,
   };
+}
+
+function nativeDownloadReference(record: OfflineDownloadRecord): {
+  key: string;
+  transferToken: string;
+} | null {
+  if (!record.transferToken) return null;
+  return {
+    key: keyFor(record.accountScope, record.songId),
+    transferToken: record.transferToken,
+  };
+}
+
+async function enqueueRecordsWithNativeBackgroundDownloader(
+  records: readonly OfflineDownloadRecord[],
+): Promise<void> {
+  if (!nativeBackgroundDownloads) return;
+  const jobs = records
+    .filter(
+      (record) =>
+        record.status === "queued" || record.status === "downloading",
+    )
+    .map((record) =>
+      createBackgroundDownloadTransportJob(
+        record,
+        keyFor(record.accountScope, record.songId),
+        toAbsoluteApiUrl,
+      ),
+    )
+    .filter((job): job is NonNullable<typeof job> => job !== null);
+  await enqueueNativeBackgroundDownloads(jobs);
 }
 
 export const useOfflineStore = create<OfflineState>((set, get) => {
@@ -362,23 +450,62 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
 
   const removeRecord = async (record: OfflineDownloadRecord) => {
     const key = keyFor(record.accountScope, record.songId);
-    if (activeDownload?.key === key) {
+    const nativeReference = nativeDownloadReference(record);
+    const transferIdentity = nativeReference
+      ? nativeTransferIdentity(
+          nativeReference.key,
+          nativeReference.transferToken,
+        )
+      : null;
+    if (transferIdentity) nativeCancellationTombstones.add(transferIdentity);
+    // Remove the exact generation synchronously so a delayed batch-persistence
+    // pass cannot enqueue it after the native cancellation check.
+    let removed = false;
+    set((state) => {
+      if (state.records[key] !== record) return {};
+      const records = { ...state.records };
+      const progress = { ...state.progress };
+      delete records[key];
+      delete progress[key];
+      removed = true;
+      return { records, progress };
+    });
+    if (!removed) {
+      if (transferIdentity) nativeCancellationTombstones.delete(transferIdentity);
+      return;
+    }
+    delete lastEmit[key];
+
+    if (nativeBackgroundDownloads && nativeReference) {
+      // Native writes its cancellation tombstone before cancelling URLSession,
+      // so a late completion can never recreate this just-unpinned song.
+      try {
+        await cancelNativeBackgroundDownloads([nativeReference]);
+      } catch (error) {
+        nativeCancellationTombstones.delete(transferIdentity!);
+        set((state) =>
+          state.records[key]
+            ? {}
+            : { records: { ...state.records, [key]: record } },
+        );
+        throw error;
+      }
+    } else if (activeDownload?.key === key) {
       // Queue-ahead targets are unpinned as playback moves. Cancel that native
       // transfer before removing its directory so it cannot keep consuming data
       // or recreate an orphan after the deletion.
       await pauseActiveDownload();
     }
-    clearProgress(key);
-    set((s) => {
-      const next = { ...s.records };
-      delete next[key];
-      return { records: next };
-    });
-    await dbDeleteRow(key).catch(() => {});
+    await dbDeleteRow(key);
     // best-effort file cleanup
-    try {
-      await FileSystem.deleteAsync(`${OFFLINE_DIR}${safeName(record.songId)}/`, { idempotent: true });
-    } catch {}
+    const stillReferenced = Object.values(get().records).some(
+      (candidate) => candidate.songId === record.songId,
+    );
+    if (!stillReferenced) {
+      try {
+        await FileSystem.deleteAsync(`${OFFLINE_DIR}${safeName(record.songId)}/`, { idempotent: true });
+      } catch {}
+    }
   };
 
   // Serial download pump — one track at a time, mirroring the web pump.
@@ -395,6 +522,9 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
   // (and the Sync-now button) can't run two drains concurrently.
   let syncRunning = false;
   const runPump = async () => {
+    // iOS hands the entire durable batch to BackgroundDownloadCoordinator.
+    // Running this JS pump as well would create duplicate writers for each file.
+    if (nativeBackgroundDownloads) return;
     if (pumping) return;
     pumping = true;
     try {
@@ -590,8 +720,50 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
   };
 
   const persistQueuedRecordBatch = async (records: readonly OfflineDownloadRecord[]) => {
+    if (nativeBackgroundDownloads && records.length === 0) {
+      await enqueueRecordsWithNativeBackgroundDownloader(
+        Object.values(get().records).filter(
+          (record) => record.accountScope === accountScope,
+        ),
+      ).catch(() => {});
+      return;
+    }
+
     let pumpStarted = false;
     try {
+      if (nativeBackgroundDownloads && records.length > 0) {
+        // Submit the complete manifest immediately. The native ledger embeds the
+        // full record metadata, so it can safely be the first durable write and
+        // reconstruct SQLite if iOS suspends JavaScript after this await.
+        const liveRecords = records.filter(
+          (record) =>
+            get().records[keyFor(record.accountScope, record.songId)] ===
+            record,
+        );
+        await enqueueRecordsWithNativeBackgroundDownloader(liveRecords).catch(
+          (error) => {
+            for (const record of liveRecords) {
+              const latest =
+                get().records[keyFor(record.accountScope, record.songId)];
+              if (
+                latest?.transferToken === record.transferToken &&
+                latest.status !== "ready"
+              ) {
+                persist({
+                  ...latest,
+                  status: "error",
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : "Couldn't start background download",
+                  updatedAt: Date.now(),
+                });
+              }
+            }
+          },
+        );
+      }
+
       for (let offset = 0; offset < records.length; offset += DOWNLOAD_RECORD_DB_CHUNK_SIZE) {
         const chunk = records.slice(offset, offset + DOWNLOAD_RECORD_DB_CHUNK_SIZE);
         // A cancel, scope change, or pump transition replaces/removes the exact
@@ -603,7 +775,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         if (current.length > 0) {
           await dbUpsertRows(current.map(recordToRow)).catch(() => {});
         }
-        if (!pumpStarted) {
+        if (!nativeBackgroundDownloads && !pumpStarted) {
           pumpStarted = true;
           void runPump();
         }
@@ -614,7 +786,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     } finally {
       // Preserve queueDownloads' old guarantee that even an empty/no-op call
       // re-kicks a previously-paused in-memory queue.
-      if (!pumpStarted) void runPump();
+      if (!nativeBackgroundDownloads && !pumpStarted) void runPump();
     }
   };
 
@@ -623,6 +795,11 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
   // the two interruptions we can see coming — connectivity loss and app-background.
   // Best-effort: if pauseAsync can't produce a blob, the row just restarts fresh.
   const pauseActiveDownload = async () => {
+    if (nativeBackgroundDownloads) {
+      // The native URLSession waits for connectivity and owns suspension/relaunch.
+      // Pausing it from JS would defeat the background queue.
+      return;
+    }
     const active = activeDownload;
     if (!active) return;
     activeDownload = null;
@@ -677,16 +854,26 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     },
 
     queueDownloads: async (songs, scope) => {
-      const planned = planQueuedDownloads(get().records, songs, scope, accountScope);
+      const planned = planQueuedDownloads(
+        get().records,
+        songs,
+        scope,
+        accountScope,
+        Date.now,
+        nativeBackgroundDownloads
+          ? () => createDownloadTransferToken()
+          : undefined,
+      );
       if (planned.changedRecords.length > 0) {
         // One clone + one subscriber notification for the whole batch, rather
         // than N increasingly-large clones and N React render notifications.
         set({ records: planned.records });
       }
-      // Persist at most 32 records per native SQLite statement and yield between
-      // chunks. The first durable chunk starts the same serial download pump;
-      // later chunks are cancellation-aware through object-identity checks.
-      void persistQueuedRecordBatch(planned.changedRecords);
+      // The native manifest is durably handed to URLSession before this promise
+      // reaches its first suspension point. SQLite follows in bounded chunks;
+      // if the app is killed between them, hydration can rebuild a missing row
+      // from the native job's embedded metadata.
+      await persistQueuedRecordBatch(planned.changedRecords);
     },
 
     syncPlaybackCache: async (songs) => {
@@ -718,8 +905,146 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
       if (scopes.length === 0) {
         await removeRecord(record);
       } else {
-        persist({ ...record, scopes, updatedAt: Date.now() });
+        const updated = { ...record, scopes, updatedAt: Date.now() };
+        persist(updated);
+        if (
+          nativeBackgroundDownloads &&
+          (updated.status === "queued" || updated.status === "downloading")
+        ) {
+          await enqueueRecordsWithNativeBackgroundDownloader([updated]).catch(
+            () => {},
+          );
+        }
       }
+    },
+
+    unpinScopeFromSongs: async (songIds, scope) => {
+      const targetAccount = accountScope;
+      const sourceRecords = get().records;
+      const planned = planUnpinScopeFromSongs(
+        sourceRecords,
+        songIds,
+        scope,
+        targetAccount,
+      );
+      if (
+        planned.removedRecords.length === 0 &&
+        planned.updatedRecords.length === 0
+      ) {
+        return;
+      }
+
+      const references = planned.removedRecords.flatMap((record) => {
+        const reference = nativeDownloadReference(record);
+        return reference ? [reference] : [];
+      });
+      const transferIdentities = references.map((reference) =>
+        nativeTransferIdentity(reference.key, reference.transferToken),
+      );
+      for (const identity of transferIdentities) {
+        nativeCancellationTombstones.add(identity);
+      }
+
+      // Publish the targeted removals synchronously. A still-running
+      // persistQueuedRecordBatch compares object identity, so it now skips these
+      // generations instead of submitting them after cancellation.
+      set((state) => {
+        const records = { ...state.records };
+        const progress = { ...state.progress };
+        for (const record of planned.removedRecords) {
+          const key = keyFor(record.accountScope, record.songId);
+          delete records[key];
+          delete progress[key];
+          delete lastEmit[key];
+        }
+        for (const record of planned.updatedRecords) {
+          records[keyFor(record.accountScope, record.songId)] = record;
+        }
+        return { records, progress };
+      });
+
+      if (nativeBackgroundDownloads && references.length > 0) {
+        try {
+          // One native bridge call writes every cancellation tombstone before
+          // any SQLite row or song folder is removed.
+          await cancelNativeBackgroundDownloads(references);
+        } catch (error) {
+          // Restore only entries still carrying this action's result. Anything
+          // changed by a newer user action wins and is left untouched.
+          set((state) => {
+            const records = { ...state.records };
+            for (const record of planned.removedRecords) {
+              const key = keyFor(record.accountScope, record.songId);
+              if (!records[key]) records[key] = record;
+            }
+            for (const record of planned.updatedRecords) {
+              const key = keyFor(record.accountScope, record.songId);
+              if (records[key] === record) records[key] = sourceRecords[key];
+            }
+            return { records };
+          });
+          for (const identity of transferIdentities) {
+            nativeCancellationTombstones.delete(identity);
+          }
+          const restored = planned.removedRecords.filter((record) => {
+            const current =
+              get().records[keyFor(record.accountScope, record.songId)];
+            return (
+              current === record &&
+              (record.status === "queued" ||
+                record.status === "downloading")
+            );
+          });
+          await enqueueRecordsWithNativeBackgroundDownloader(restored).catch(
+            () => {},
+          );
+          throw error;
+        }
+      }
+
+      await dbDeleteRows(
+        planned.removedRecords.map((record) =>
+          keyFor(record.accountScope, record.songId),
+        ),
+      );
+      for (
+        let offset = 0;
+        offset < planned.updatedRecords.length;
+        offset += DOWNLOAD_RECORD_DB_CHUNK_SIZE
+      ) {
+        await dbUpsertRows(
+          planned.updatedRecords
+            .slice(offset, offset + DOWNLOAD_RECORD_DB_CHUNK_SIZE)
+            .map(recordToRow),
+        );
+      }
+
+      const stillActive = planned.updatedRecords.filter(
+        (record) =>
+          record.status === "queued" || record.status === "downloading",
+      );
+      if (nativeBackgroundDownloads && stillActive.length > 0) {
+        await enqueueRecordsWithNativeBackgroundDownloader(stillActive).catch(
+          () => {},
+        );
+      }
+
+      await Promise.all(
+        planned.removedRecords
+          .filter(
+            (record) =>
+              !Object.values(get().records).some(
+                (candidate) => candidate.songId === record.songId,
+              ),
+          )
+          .map((record) =>
+            FileSystem.deleteAsync(
+              `${OFFLINE_DIR}${safeName(record.songId)}/`,
+              { idempotent: true },
+            ).catch(() => {}),
+          ),
+      );
+      void refreshStorage();
     },
 
     isDownloaded: (songId) => get().records[keyFor(accountScope, songId)]?.status === "ready",
@@ -732,25 +1057,186 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         // snapshots, purge folders, and start competing pump decisions.
         hydrationPromise = (async () => {
           try {
+            const hydrationScope = accountScope;
             const rows = await dbAllRows();
+            let nativeStates: NativeBackgroundDownloadState[] = [];
+            let nativeSnapshotAvailable = false;
+            if (nativeBackgroundDownloads) {
+              initializeNativeBackgroundDownloadListener();
+              await setNativeBackgroundDownloadAccount(hydrationScope).catch(
+                () => {},
+              );
+              try {
+                nativeStates =
+                  await getNativeBackgroundDownloadSnapshot(hydrationScope);
+                nativeSnapshotAvailable = true;
+              } catch {
+                // A transient native bridge/session failure must never turn a
+                // populated SQLite library into an empty in-memory one. Keep
+                // its generations and submit them idempotently below.
+              }
+            }
+            const nativeByKey = new Map(
+              nativeStates.map((state) => [state.key, state]),
+            );
             const records: Record<string, OfflineDownloadRecord> = {};
             for (const row of rows) {
-              const record = rowToRecord(row);
-              // A row left "downloading" means the app died mid-download; its
-              // process-local resume blob is gone, so restart it from scratch.
-              if (record.status === "downloading") record.status = "queued";
+              let record = rowToRecord(row);
+              if (
+                nativeBackgroundDownloads &&
+                nativeSnapshotAvailable &&
+                record.accountScope === hydrationScope
+              ) {
+                const nativeState = nativeByKey.get(row.key);
+                const merged = nativeState
+                  ? applyBackgroundDownloadTransportState(
+                      record,
+                      nativeState as BackgroundDownloadTransportState,
+                    )
+                  : null;
+                if (merged) {
+                  record = merged;
+                } else if (record.status === "downloading") {
+                  // No matching native generation owns this row anymore (for
+                  // example after a force-quit). Requeue it under a fresh token.
+                  record = {
+                    ...record,
+                    status: "queued",
+                    transferToken: createDownloadTransferToken(),
+                    updatedAt: Date.now(),
+                  };
+                } else if (
+                  record.status === "queued" &&
+                  !record.transferToken
+                ) {
+                  record = {
+                    ...record,
+                    transferToken: createDownloadTransferToken(),
+                    updatedAt: Date.now(),
+                  };
+                }
+              } else if (
+                nativeBackgroundDownloads &&
+                record.accountScope === hydrationScope &&
+                (record.status === "queued" ||
+                  record.status === "downloading") &&
+                !record.transferToken
+              ) {
+                record = {
+                  ...record,
+                  transferToken: createDownloadTransferToken(),
+                  updatedAt: Date.now(),
+                };
+              } else if (!nativeBackgroundDownloads && record.status === "downloading") {
+                // The legacy Expo resumable keeps resume state in-process only.
+                record.status = "queued";
+              }
               records[row.key] = record;
             }
+
+            // The native ledger is a completion outbox as well as a transport
+            // queue. If the app was system-terminated before later SQLite chunks
+            // landed, rebuild those rows from the durable native job metadata.
+            if (nativeBackgroundDownloads) {
+              for (const nativeState of nativeStates) {
+                if (records[nativeState.key]) continue;
+                const restored = restoreRecordFromBackgroundDownloadState(
+                  nativeState as BackgroundDownloadTransportState,
+                );
+                if (restored) records[nativeState.key] = restored;
+              }
+            }
             set({ records });
+
+            if (nativeBackgroundDownloads) {
+              const allRecords = Object.values(records);
+              for (
+                let offset = 0;
+                offset < allRecords.length;
+                offset += DOWNLOAD_RECORD_DB_CHUNK_SIZE
+              ) {
+                await dbUpsertRows(
+                  allRecords
+                    .slice(offset, offset + DOWNLOAD_RECORD_DB_CHUNK_SIZE)
+                    .map(recordToRow),
+                );
+              }
+            }
+
             // Validate/re-root trusted completed records before publishing
             // `hydrated=true`, so source selection can never observe a stale
             // ready row. Queued/interrupted files are deliberately NOT promoted.
             await reconcileDownloadedFiles();
             await purgeOrphanedDownloadArtifacts();
+
+            if (nativeBackgroundDownloads) {
+              // A terminal native item is removed only after SQLite contains the
+              // same validated state. Until this ack, a completion cannot be lost.
+              const acknowledgements = nativeStates.flatMap((state) => {
+                const record = get().records[state.key];
+                if (
+                  !record ||
+                  record.transferToken !== state.transferToken ||
+                  record.status !== state.status ||
+                  !isTerminalBackgroundDownloadState(
+                    state as BackgroundDownloadTransportState,
+                  )
+                ) {
+                  return [];
+                }
+                return [
+                  {
+                    key: state.key,
+                    transferToken: state.transferToken,
+                    revision: state.revision,
+                  },
+                ];
+              });
+              await acknowledgeNativeBackgroundDownloads(
+                acknowledgements,
+              ).catch(() => {});
+            }
+
             set({ hydrated: true });
-            if (
+
+            if (nativeBackgroundDownloads) {
+              const queued = Object.values(get().records).filter(
+                (record) =>
+                  record.accountScope === accountScope &&
+                  (record.status === "queued" ||
+                    record.status === "downloading"),
+              );
+              const withTokens = queued.map((record) =>
+                record.transferToken
+                  ? record
+                  : {
+                      ...record,
+                      transferToken: createDownloadTransferToken(),
+                      updatedAt: Date.now(),
+                    },
+              );
+              if (withTokens.some((record, index) => record !== queued[index])) {
+                set((state) => ({
+                  records: {
+                    ...state.records,
+                    ...Object.fromEntries(
+                      withTokens.map((record) => [
+                        keyFor(record.accountScope, record.songId),
+                        record,
+                      ]),
+                    ),
+                  },
+                }));
+                await dbUpsertRows(withTokens.map(recordToRow));
+              }
+              await enqueueRecordsWithNativeBackgroundDownloader(withTokens);
+              flushBufferedNativeDownloadStates();
+              await reconcileNativeBackgroundDownloads(accountScope);
+            } else if (
               Object.values(get().records).some(
-                (r) => r.status === "queued" || r.status === "downloading",
+                (record) =>
+                  record.status === "queued" ||
+                  record.status === "downloading",
               )
             ) {
               void runPump();
@@ -787,7 +1273,15 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
             // mirror that into the in-memory record so the pump and UI agree.
             const current = get().records[row.key];
             if (current) {
-              persist({ ...current, status: "queued", audioPath: undefined, updatedAt: Date.now() });
+              persist({
+                ...current,
+                status: "queued",
+                audioPath: undefined,
+                transferToken: nativeBackgroundDownloads
+                  ? createDownloadTransferToken()
+                  : current.transferToken,
+                updatedAt: Date.now(),
+              });
             }
           }
         }
@@ -798,7 +1292,19 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           missingDownloads: missing,
           verificationError: null,
         });
-        if (missing > 0) void runPump();
+        if (missing > 0) {
+          if (nativeBackgroundDownloads) {
+            void enqueueRecordsWithNativeBackgroundDownloader(
+              Object.values(get().records).filter(
+                (record) =>
+                  record.accountScope === accountScope &&
+                  record.status === "queued",
+              ),
+            );
+          } else {
+            void runPump();
+          }
+        }
         void refreshStorage();
       } catch (e) {
         set({
@@ -813,10 +1319,29 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
       const failed = Object.values(get().records).filter(
         (r) => r.accountScope === accountScope && r.status === "error",
       );
+      const retried: OfflineDownloadRecord[] = [];
       for (const record of failed) {
-        persist({ ...record, status: "queued", error: undefined, updatedAt: Date.now() });
+        const updated = {
+          ...record,
+          status: "queued" as const,
+          error: undefined,
+          transferToken: nativeBackgroundDownloads
+            ? createDownloadTransferToken()
+            : record.transferToken,
+          updatedAt: Date.now(),
+        };
+        retried.push(updated);
+        persist(updated);
       }
-      if (failed.length > 0) void runPump();
+      if (failed.length > 0) {
+        if (nativeBackgroundDownloads) {
+          await enqueueRecordsWithNativeBackgroundDownloader(retried).catch(
+            () => {},
+          );
+        } else {
+          void runPump();
+        }
+      }
     },
 
     retryFailedMutations: async () => {
@@ -1063,26 +1588,57 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     },
 
     clearDownloads: async () => {
-      // Stop the native URLSession writer before deleting its row/directory.
-      // Otherwise a just-cleared in-flight download can finish after the purge
-      // and recreate an orphaned multi-MB file with no record pointing to it.
-      await pauseActiveDownload();
-      const records = Object.values(get().records).filter((r) => r.accountScope === accountScope);
-      // Drop everything from memory in ONE update first: the pump's next lookup
-      // then finds nothing queued and stops immediately (no race with a large
-      // in-flight queue). DB rows + files are torn down in the background so the
-      // UI resets instantly rather than awaiting hundreds of file deletes.
-      const keys = records.map((r) => keyFor(r.accountScope, r.songId));
-      set((s) => {
-        const nextRecords = { ...s.records };
-        const nextProgress = { ...s.progress };
+      const targetScope = accountScope;
+      const records = Object.values(get().records).filter(
+        (record) => record.accountScope === targetScope,
+      );
+      const keys = records.map((record) =>
+        keyFor(record.accountScope, record.songId),
+      );
+      const transferIdentities = records.flatMap((record) => {
+        const reference = nativeDownloadReference(record);
+        return reference
+          ? [nativeTransferIdentity(reference.key, reference.transferToken)]
+          : [];
+      });
+      for (const identity of transferIdentities) {
+        nativeCancellationTombstones.add(identity);
+      }
+      // Block delayed batch persistence before awaiting the native tombstones.
+      set((state) => {
+        const nextRecords = { ...state.records };
+        const nextProgress = { ...state.progress };
         for (const key of keys) {
           delete nextRecords[key];
           delete nextProgress[key];
+          delete lastEmit[key];
         }
         return { records: nextRecords, progress: nextProgress };
       });
-      for (const key of keys) delete lastEmit[key];
+
+      // Stop the native URLSession writer before deleting its row/directory.
+      // Otherwise a just-cleared in-flight download can finish after the purge
+      // and recreate an orphaned multi-MB file with no record pointing to it.
+      if (nativeBackgroundDownloads) {
+        try {
+          await cancelNativeBackgroundDownloadAccount(targetScope);
+        } catch (error) {
+          for (const identity of transferIdentities) {
+            nativeCancellationTombstones.delete(identity);
+          }
+          set((state) => {
+            const nextRecords = { ...state.records };
+            for (const record of records) {
+              const key = keyFor(record.accountScope, record.songId);
+              if (!nextRecords[key]) nextRecords[key] = record;
+            }
+            return { records: nextRecords };
+          });
+          throw error;
+        }
+      } else {
+        await pauseActiveDownload();
+      }
       set({
         verificationStatus: "idle",
         verificationCheckedAt: null,
@@ -1090,20 +1646,23 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         missingDownloads: 0,
         verificationError: null,
       });
-      void (async () => {
-        for (const record of records) {
-          await dbDeleteRow(keyFor(record.accountScope, record.songId)).catch(() => {});
+      await dbDeleteRows(keys);
+      await Promise.all(
+        records.map(async (record) => {
+          const retained = Object.values(get().records).some(
+            (candidate) => candidate.songId === record.songId,
+          );
+          if (retained) return;
           await FileSystem.deleteAsync(`${OFFLINE_DIR}${safeName(record.songId)}/`, { idempotent: true }).catch(
             () => {},
           );
-        }
-        // Orphaned NSURLSession partials live outside offline-media, so the loop
-        // above never touches them — sweep that OS scratch too so a manual clear
-        // reclaims it as well (see purgeOrphanedDownloadArtifacts).
-        await purgeOrphanedDownloadArtifacts();
-        void refreshStorage();
-      })();
-      void refreshStorage();
+        }),
+      );
+      // Orphaned NSURLSession partials live outside offline-media, so the loop
+      // above never touches them — sweep that OS scratch too so a manual clear
+      // reclaims it as well (see purgeOrphanedDownloadArtifacts).
+      await purgeOrphanedDownloadArtifacts();
+      await refreshStorage();
     },
 
     refreshStorage,
@@ -1120,7 +1679,11 @@ export async function clearOfflineAccountData(scope: string): Promise<void> {
 
   try {
     const store = useOfflineStore.getState();
-    if (normalized === accountScope) await store.pauseActiveDownload();
+    if (nativeBackgroundDownloads) {
+      await cancelNativeBackgroundDownloadAccount(normalized).catch(() => {});
+    } else if (normalized === accountScope) {
+      await store.pauseActiveDownload();
+    }
     await store.hydrate();
 
     const records = Object.values(useOfflineStore.getState().records);
@@ -1225,6 +1788,9 @@ async function reconcileDownloadedFiles(): Promise<void> {
         coverPath: undefined,
         lyricsPath: undefined,
         resumeData: undefined,
+        transferToken: nativeBackgroundDownloads
+          ? createDownloadTransferToken()
+          : rec.transferToken,
         error: undefined,
         updatedAt: Date.now(),
       };
@@ -1267,7 +1833,10 @@ async function reconcileDownloadedFiles(): Promise<void> {
 async function purgeOrphanedDownloadArtifacts(): Promise<void> {
   const doc = FileSystem.documentDirectory;
 
-  if (doc) {
+  // Never sweep nsurlsessiond while the native coordinator owns a persistent
+  // background session: those "temporary" files may be live tasks that iOS is
+  // continuing while React Native is not running.
+  if (doc && !nativeBackgroundDownloads) {
     const containerRoot = doc.replace(/Documents\/?$/, "");
     try {
       const downloadsRoot = `${containerRoot}Library/Caches/com.apple.nsurlsessiond/Downloads/`;
@@ -1316,6 +1885,190 @@ async function purgeOrphanedDownloadArtifacts(): Promise<void> {
   } catch {}
 }
 
+function initializeNativeBackgroundDownloadListener(): void {
+  if (!nativeBackgroundDownloads || nativeDownloadListenerInitialized) return;
+  nativeDownloadListenerInitialized = true;
+  nativeDownloadSubscription = addNativeBackgroundDownloadListener((state) => {
+    if (!useOfflineStore.getState().hydrated) {
+      bufferedNativeDownloadStates.push(state);
+      return;
+    }
+    queueNativeDownloadStateApplication(state);
+  });
+}
+
+function queueNativeDownloadStateApplication(
+  state: NativeBackgroundDownloadState,
+): void {
+  nativeStateApplyTail = nativeStateApplyTail
+    .then(() => applyNativeBackgroundDownloadState(state))
+    .catch(() => {});
+}
+
+function flushBufferedNativeDownloadStates(): void {
+  if (bufferedNativeDownloadStates.length === 0) return;
+  const buffered = bufferedNativeDownloadStates;
+  bufferedNativeDownloadStates = [];
+  for (const state of buffered) {
+    queueNativeDownloadStateApplication(state);
+  }
+}
+
+async function applyNativeBackgroundDownloadState(
+  nativeState: NativeBackgroundDownloadState,
+): Promise<void> {
+  const state = nativeState as BackgroundDownloadTransportState;
+  const revisionKey = nativeTransferIdentity(
+    state.key,
+    state.transferToken,
+  );
+  if (nativeCancellationTombstones.has(revisionKey)) return;
+  const knownRevision = nativeRevisionByTransfer.get(revisionKey) ?? -1;
+  if (state.revision < knownRevision) return;
+
+  const current = useOfflineStore.getState().records[state.key];
+  const next = current
+    ? applyBackgroundDownloadTransportState(current, state)
+    : restoreRecordFromBackgroundDownloadState(state);
+  if (!next) return;
+
+  const revisionAdvanced = state.revision > knownRevision;
+  const materialChange =
+    !current ||
+    current.status !== next.status ||
+    current.audioPath !== next.audioPath ||
+    current.coverPath !== next.coverPath ||
+    current.lyricsPath !== next.lyricsPath ||
+    current.error !== next.error ||
+    revisionAdvanced;
+
+  useOfflineStore.setState((store) => {
+    const live = store.records[state.key];
+    if (
+      live &&
+      (live.transferToken !== state.transferToken ||
+        live.accountScope !== state.accountScope)
+    ) {
+      return {};
+    }
+    const progress = { ...store.progress };
+    if (state.status === "downloading") {
+      progress[state.key] = Math.max(0, Math.min(state.progress, 1));
+    } else {
+      delete progress[state.key];
+    }
+    return {
+      records: { ...store.records, [state.key]: next },
+      progress,
+    };
+  });
+
+  const committedCandidate =
+    useOfflineStore.getState().records[state.key];
+  if (committedCandidate?.transferToken !== state.transferToken) return;
+
+  if (
+    materialChange ||
+    isTerminalBackgroundDownloadState(state)
+  ) {
+    await dbUpsertRow(recordToRow(committedCandidate));
+  }
+  // Advance only after the durable write succeeds. If SQLite rejects, the same
+  // native outbox revision remains eligible for replay and cannot be ACKed away.
+  nativeRevisionByTransfer.set(revisionKey, state.revision);
+
+  if (isTerminalBackgroundDownloadState(state)) {
+    // Commit first, then acknowledge the native completion outbox. If SQLite
+    // fails, the unacknowledged native row is replayed on the next launch.
+    await acknowledgeNativeBackgroundDownloads([
+      {
+        key: state.key,
+        transferToken: state.transferToken,
+        revision: state.revision,
+      },
+    ]);
+    if (state.status === "ready") {
+      void useOfflineStore.getState().refreshStorage();
+    }
+  }
+}
+
+async function reconcileNativeBackgroundDownloads(
+  scope = accountScope,
+): Promise<void> {
+  if (!nativeBackgroundDownloads) return;
+  initializeNativeBackgroundDownloadListener();
+  await setNativeBackgroundDownloadAccount(scope).catch(() => {});
+  if (!useOfflineStore.getState().hydrated) return;
+
+  let snapshot: NativeBackgroundDownloadState[];
+  try {
+    snapshot = await getNativeBackgroundDownloadSnapshot(scope);
+  } catch {
+    // Failure is not an authoritative empty snapshot. Rotating every token here
+    // would cancel/restart healthy nsurlsessiond work after a transient bridge
+    // error, so leave the durable generations untouched until the next resume.
+    return;
+  }
+  const snapshotTokens = new Set(
+    snapshot.map((state) => `${state.key}\u0000${state.transferToken}`),
+  );
+  for (const state of snapshot) {
+    await applyNativeBackgroundDownloadState(state);
+  }
+
+  const activeRecords = Object.values(
+    useOfflineStore.getState().records,
+  ).filter(
+    (record) =>
+      record.accountScope === scope &&
+      (record.status === "queued" || record.status === "downloading"),
+  );
+  const repaired = activeRecords.map((record) => {
+    const hasNativeJob =
+      !!record.transferToken &&
+      snapshotTokens.has(
+        `${keyFor(record.accountScope, record.songId)}\u0000${record.transferToken}`,
+      );
+    if (hasNativeJob && record.transferToken) return record;
+    return {
+      ...record,
+      status: "queued" as const,
+      transferToken: createDownloadTransferToken(),
+      updatedAt: Date.now(),
+    };
+  });
+
+  const changed = repaired.filter(
+    (record, index) => record !== activeRecords[index],
+  );
+  if (changed.length > 0) {
+    useOfflineStore.setState((store) => ({
+      records: {
+        ...store.records,
+        ...Object.fromEntries(
+          changed.map((record) => [
+            keyFor(record.accountScope, record.songId),
+            record,
+          ]),
+        ),
+      },
+    }));
+    for (
+      let offset = 0;
+      offset < changed.length;
+      offset += DOWNLOAD_RECORD_DB_CHUNK_SIZE
+    ) {
+      await dbUpsertRows(
+        changed
+          .slice(offset, offset + DOWNLOAD_RECORD_DB_CHUNK_SIZE)
+          .map(recordToRow),
+      );
+    }
+  }
+  await enqueueRecordsWithNativeBackgroundDownloader(repaired);
+}
+
 // Subscribe to RN AppState 'active' transitions and drain the mutation outbox on
 // each foreground. NO NetInfo / native deps — the web app keyed this off the
 // 'online' + 'visibilitychange' events; AppState 'active' is the RN analogue
@@ -1323,6 +2076,10 @@ async function purgeOrphanedDownloadArtifacts(): Promise<void> {
 // an unsubscribe fn. The root layout owns the single call site (see brief).
 export function initOfflineSync(): () => void {
   let previous: AppStateStatus = AppState.currentState;
+  if (nativeBackgroundDownloads) {
+    initializeNativeBackgroundDownloadListener();
+    void setNativeBackgroundDownloadAccount(accountScope).catch(() => {});
+  }
   // Cover the cold-launch case: AppState is usually already "active" on mount,
   // so fire one immediate drain in addition to subscribing for later resumes.
   void useOfflineStore.getState().syncOfflineMutations();
@@ -1331,9 +2088,14 @@ export function initOfflineSync(): () => void {
     previous = next;
     if (cameToForeground) {
       void useOfflineStore.getState().syncOfflineMutations();
-      // Resume any downloads iOS suspended while we were backgrounded. An empty
-      // batch is a no-op that still kicks the serial pump for queued rows.
-      void useOfflineStore.getState().queueDownloads([], "home");
+      if (nativeBackgroundDownloads) {
+        // Events are intentionally lossy while JS is suspended; the durable
+        // native snapshot is authoritative on every foreground.
+        void reconcileNativeBackgroundDownloads();
+      } else {
+        // Resume any legacy Expo downloads iOS suspended while backgrounded.
+        void useOfflineStore.getState().queueDownloads([], "home");
+      }
     }
   });
   // Connectivity edges, the case AppState can't see: toggling airplane mode while
@@ -1342,15 +2104,22 @@ export function initOfflineSync(): () => void {
   // resume blob), kick the pump on recovery to resume from where it left off.
   const unsubscribeOnline = subscribeOnline((isOnline) => {
     if (isOnline) {
-      void useOfflineStore.getState().queueDownloads([], "home");
+      if (nativeBackgroundDownloads) {
+        void reconcileNativeBackgroundDownloads();
+      } else {
+        void useOfflineStore.getState().queueDownloads([], "home");
+      }
       void useOfflineStore.getState().syncOfflineMutations();
-    } else {
+    } else if (!nativeBackgroundDownloads) {
       void useOfflineStore.getState().pauseActiveDownload();
     }
   });
   return () => {
     subscription.remove();
     unsubscribeOnline();
+    nativeDownloadSubscription?.remove();
+    nativeDownloadSubscription = null;
+    nativeDownloadListenerInitialized = false;
   };
 }
 

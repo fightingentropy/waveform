@@ -19,7 +19,10 @@ module.exports = function withSigning(config) {
       const settings = buildConfig && buildConfig.buildSettings;
       if (!settings) continue;
       // Only the app target carries the bundle id; skip Pods/project configs.
-      if (settings.PRODUCT_BUNDLE_IDENTIFIER !== BUNDLE_ID) continue;
+      const bundleIdentifier = String(
+        settings.PRODUCT_BUNDLE_IDENTIFIER ?? "",
+      ).replace(/^"|"$/g, "");
+      if (bundleIdentifier !== BUNDLE_ID) continue;
       settings.DEVELOPMENT_TEAM = DEVELOPMENT_TEAM;
       settings.CODE_SIGN_STYLE = "Automatic";
     }

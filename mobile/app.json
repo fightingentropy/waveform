@@ -48,6 +48,7 @@
       "./plugins/withSigning",
       "./plugins/withXcode27DeploymentTarget",
       "./plugins/withIOS27SceneLifecycle",
+      "./plugins/withBackgroundDownloads",
       "expo-router",
       [
         "expo-image-picker",

@@ -14,6 +14,7 @@ export type DownloadRow = {
   audioPath: string | null;
   coverPath: string | null;
   lyricsPath: string | null;
+  transferToken: string | null;
   updatedAt: number;
 };
 
@@ -55,11 +56,20 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
           audioPath TEXT,
           coverPath TEXT,
           lyricsPath TEXT,
+          transferToken TEXT,
           updatedAt INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_downloads_account ON downloads (accountScope);
         CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads (status);
       `);
+      const columns = await db.getAllAsync<{ name: string }>(
+        "PRAGMA table_info(downloads)",
+      );
+      if (!columns.some((column) => column.name === "transferToken")) {
+        await db.execAsync(
+          "ALTER TABLE downloads ADD COLUMN transferToken TEXT",
+        );
+      }
       return db;
     })();
   }
@@ -86,7 +96,9 @@ export async function dbAllRows(): Promise<DownloadRow[]> {
 async function runUpsertRows(rows: readonly DownloadRow[]): Promise<void> {
   if (rows.length === 0) return;
   const db = await getDb();
-  const placeholders = rows.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+  const placeholders = rows
+    .map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .join(", ");
   const values: Array<string | number | null> = [];
   for (const row of rows) {
     values.push(
@@ -99,12 +111,13 @@ async function runUpsertRows(rows: readonly DownloadRow[]): Promise<void> {
       row.audioPath,
       row.coverPath,
       row.lyricsPath,
+      row.transferToken,
       row.updatedAt,
     );
   }
   await db.runAsync(
     `INSERT OR REPLACE INTO downloads
-      (key, accountScope, songId, scopes, status, song, audioPath, coverPath, lyricsPath, updatedAt)
+      (key, accountScope, songId, scopes, status, song, audioPath, coverPath, lyricsPath, transferToken, updatedAt)
      VALUES ${placeholders}`,
     values,
   );
@@ -125,6 +138,25 @@ export async function dbDeleteRow(key: string): Promise<void> {
   return enqueueDbWrite(async () => {
     const db = await getDb();
     await db.runAsync("DELETE FROM downloads WHERE key = ?", [key]);
+  });
+}
+
+export function dbDeleteRows(keys: readonly string[]): Promise<void> {
+  const uniqueKeys = [...new Set(keys)];
+  if (uniqueKeys.length === 0) return Promise.resolve();
+  return enqueueDbWrite(async () => {
+    const db = await getDb();
+    await db.withTransactionAsync(async () => {
+      // Stay comfortably below SQLite's bound-parameter limit while keeping a
+      // large "Cancel Download All" atomic and bounded.
+      for (let offset = 0; offset < uniqueKeys.length; offset += 250) {
+        const chunk = uniqueKeys.slice(offset, offset + 250);
+        await db.runAsync(
+          `DELETE FROM downloads WHERE key IN (${chunk.map(() => "?").join(", ")})`,
+          chunk,
+        );
+      }
+    });
   });
 }
 

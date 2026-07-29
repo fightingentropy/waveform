@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   offlineDownloadKey,
   planQueuedDownloads,
+  planUnpinScopeFromSongs,
   type OfflineDownloadRecord,
 } from "../src/lib/offline-download-queue";
 import {
@@ -475,5 +476,64 @@ describe("offline download queue batch planning", () => {
     const planned = planQueuedDownloads(current, [queued], "liked", "user-1");
     expect(planned.records).toBe(current);
     expect(planned.changedRecords).toEqual([]);
+  });
+
+  test("bulk unpin removes final pins, preserves shared downloads, and deduplicates ids", () => {
+    const likedOnly = song("liked-only");
+    const shared = song("shared");
+    const otherAccount = song("other");
+    const current: Record<string, OfflineDownloadRecord> = {
+      [offlineDownloadKey("user-1", likedOnly.id)]: {
+        songId: likedOnly.id,
+        accountScope: "user-1",
+        scopes: ["liked"],
+        status: "downloading",
+        song: likedOnly,
+        transferToken: "liked-token",
+        updatedAt: 1,
+      },
+      [offlineDownloadKey("user-1", shared.id)]: {
+        songId: shared.id,
+        accountScope: "user-1",
+        scopes: ["liked", "playlist:mix"],
+        status: "queued",
+        song: shared,
+        transferToken: "shared-token",
+        updatedAt: 1,
+      },
+      [offlineDownloadKey("user-2", otherAccount.id)]: {
+        songId: otherAccount.id,
+        accountScope: "user-2",
+        scopes: ["liked"],
+        status: "ready",
+        song: otherAccount,
+        updatedAt: 1,
+      },
+    };
+
+    const planned = planUnpinScopeFromSongs(
+      current,
+      [likedOnly.id, shared.id, likedOnly.id, otherAccount.id],
+      "liked",
+      "user-1",
+      () => 10,
+    );
+
+    expect(planned.removedRecords.map((record) => record.songId)).toEqual([
+      likedOnly.id,
+    ]);
+    expect(planned.updatedRecords).toHaveLength(1);
+    expect(planned.updatedRecords[0]).toMatchObject({
+      songId: shared.id,
+      scopes: ["playlist:mix"],
+      transferToken: "shared-token",
+      updatedAt: 10,
+    });
+    expect(
+      planned.records[offlineDownloadKey("user-1", likedOnly.id)],
+    ).toBeUndefined();
+    expect(
+      planned.records[offlineDownloadKey("user-2", otherAccount.id)],
+    ).toBe(current[offlineDownloadKey("user-2", otherAccount.id)]);
   });
 });

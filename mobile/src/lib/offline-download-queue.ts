@@ -20,6 +20,9 @@ export type OfflineDownloadRecord = {
   lyricsPath?: string;
   updatedAt: number;
   error?: string;
+  // Stable generation for the native iOS transport. Late callbacks are ignored
+  // unless this token still matches the SQLite/Zustand record.
+  transferToken?: string;
   // Process-local NSURLSession resume data; deliberately omitted from SQLite.
   resumeData?: string;
 };
@@ -49,6 +52,7 @@ export function planQueuedDownloads(
   scope: DownloadScope,
   accountScope: string,
   now: () => number = Date.now,
+  createTransferToken?: () => string,
 ): {
   records: Record<string, OfflineDownloadRecord>;
   changedRecords: OfflineDownloadRecord[];
@@ -69,6 +73,12 @@ export function planQueuedDownloads(
         scopes: addScope ? [...existing.scopes, scope] : existing.scopes,
         status: requeue ? "queued" : existing.status,
         error: requeue ? undefined : existing.error,
+        transferToken:
+          existing.status === "ready"
+            ? existing.transferToken
+            : requeue || !existing.transferToken
+              ? createTransferToken?.() ?? existing.transferToken
+              : existing.transferToken,
         updatedAt: now(),
       };
       records[key] = updated;
@@ -82,6 +92,7 @@ export function planQueuedDownloads(
       scopes: [scope],
       status: "queued",
       song,
+      transferToken: createTransferToken?.(),
       updatedAt: now(),
     };
     records[key] = created;
@@ -91,5 +102,49 @@ export function planQueuedDownloads(
   return {
     records: changedRecords.length > 0 ? records : (currentRecords as Record<string, OfflineDownloadRecord>),
     changedRecords,
+  };
+}
+
+export function planUnpinScopeFromSongs(
+  currentRecords: Readonly<Record<string, OfflineDownloadRecord>>,
+  songIds: readonly string[],
+  scope: DownloadScope,
+  accountScope: string,
+  now: () => number = Date.now,
+): {
+  records: Record<string, OfflineDownloadRecord>;
+  removedRecords: OfflineDownloadRecord[];
+  updatedRecords: OfflineDownloadRecord[];
+} {
+  const records = { ...currentRecords };
+  const removedRecords: OfflineDownloadRecord[] = [];
+  const updatedRecords: OfflineDownloadRecord[] = [];
+
+  for (const songId of new Set(songIds)) {
+    const key = offlineDownloadKey(accountScope, songId);
+    const existing = records[key];
+    if (!existing?.scopes.includes(scope)) continue;
+    const scopes = existing.scopes.filter((candidate) => candidate !== scope);
+    if (scopes.length === 0) {
+      delete records[key];
+      removedRecords.push(existing);
+      continue;
+    }
+    const updated = {
+      ...existing,
+      scopes,
+      updatedAt: now(),
+    };
+    records[key] = updated;
+    updatedRecords.push(updated);
+  }
+
+  return {
+    records:
+      removedRecords.length > 0 || updatedRecords.length > 0
+        ? records
+        : (currentRecords as Record<string, OfflineDownloadRecord>),
+    removedRecords,
+    updatedRecords,
   };
 }

@@ -3,7 +3,7 @@ import { create } from "zustand";
 import type { PlayerSong } from "@/types/player";
 
 // UI state for the three global bottom sheets (Now Playing, Queue, Track Actions)
-// plus the sleep-timer sheet and the left profile drawer. Kept separate from the
+// plus the sleep-timer sheet and the right profile drawer. Kept separate from the
 // player store.
 export type TrackActionsTarget = {
   song: PlayerSong;

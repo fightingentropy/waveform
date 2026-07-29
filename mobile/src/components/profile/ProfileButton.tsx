@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
-// Top-left avatar. A quiet hairline keeps both photos and the neutral fallback
+// Header avatar. A quiet hairline keeps both photos and the neutral fallback
 // legible without adding a second floating material around the control.
 export function ProfileButton({ size = 40 }: { size?: number }) {
   const { user } = useAuth();

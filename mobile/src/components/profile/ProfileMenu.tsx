@@ -22,10 +22,10 @@ function MenuItem({ icon, label, onPress }: { icon: ReactNode; label: string; on
   );
 }
 
-// Left slide-in profile drawer (Spotify-style), opened by the top-left avatar
+// Right slide-in profile drawer (Spotify-style), opened by the header avatar
 // (ProfileButton). Mounted once at the root so it overlays every screen. Mirrors the
 // Sheet pattern (mounted-through-exit, progress sharedValue) but slides horizontally;
-// swipe left or tap the backdrop to close.
+// swipe right or tap the backdrop to close.
 export function ProfileMenu() {
   const open = useUiStore((s) => s.profileMenuOpen);
   const close = useUiStore((s) => s.closeProfileMenu);
@@ -53,20 +53,22 @@ export function ProfileMenu() {
     }
   }, [open, mounted, progress, dragX, unmount]);
 
-  const backdropStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity: Math.max(0, progress.value - dragX.value / panelW),
+  }));
   const panelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: -panelW * (1 - progress.value) + dragX.value }],
+    transform: [{ translateX: panelW * (1 - progress.value) + dragX.value }],
   }));
 
   const pan = Gesture.Pan()
     .activeOffsetX([-15, 15])
     .onUpdate((e) => {
       "worklet";
-      dragX.value = Math.min(0, e.translationX);
+      dragX.value = Math.max(0, e.translationX);
     })
     .onEnd((e) => {
       "worklet";
-      if (e.translationX < -80 || e.velocityX < -800) {
+      if (e.translationX > 80 || e.velocityX > 800) {
         runOnJS(close)();
       } else {
         dragX.value = withTiming(0, { duration: 180, easing: Easing.out(Easing.quad) });
@@ -93,7 +95,13 @@ export function ProfileMenu() {
   if (!mounted) return null;
 
   return (
-    <View style={[StyleSheet.absoluteFill, { zIndex: 120, elevation: 120 }]}>
+    <View
+      pointerEvents={open ? "auto" : "none"}
+      accessibilityViewIsModal={open}
+      importantForAccessibility={open ? "yes" : "no-hide-descendants"}
+      onAccessibilityEscape={close}
+      style={[StyleSheet.absoluteFill, { zIndex: 120, elevation: 120 }]}
+    >
       <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: colors.backdrop }, backdropStyle]}>
         <Pressable style={{ flex: 1 }} onPress={close} accessibilityRole="button" accessibilityLabel="Close menu" />
       </Animated.View>
@@ -103,7 +111,7 @@ export function ProfileMenu() {
           style={[
             {
               position: "absolute",
-              left: 0,
+              right: 0,
               top: 0,
               bottom: 0,
               width: panelW,

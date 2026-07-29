@@ -28,11 +28,14 @@ export function BatchDownloadButton({
   const downloadable = useMemo(() => songs.filter((song) => !isDiscoverTrack(song)), [songs]);
   const agg = useBatchDownload(downloadable, scope);
   const queueDownloads = useOfflineStore((s) => s.queueDownloads);
-  const unpinScope = useOfflineStore((s) => s.unpinScope);
+  const unpinScopeFromSongs = useOfflineStore((s) => s.unpinScopeFromSongs);
 
   const onPress = () => {
     if (agg.status === "downloading") {
-      for (const s of downloadable) void unpinScope(s.id, scope);
+      void unpinScopeFromSongs(
+        downloadable.map((song) => song.id),
+        scope,
+      );
     } else if (agg.status !== "ready") {
       void queueDownloads(downloadable, scope);
     }

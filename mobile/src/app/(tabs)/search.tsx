@@ -386,8 +386,7 @@ export default function SearchScreen() {
   return (
     <Screen>
       <View style={{ paddingHorizontal: 20, paddingBottom: 10, paddingTop: 18 }}>
-        <View className="flex-row items-center gap-3" style={{ marginBottom: 16 }}>
-          <ProfileButton size={38} />
+        <View className="flex-row items-center justify-between gap-3" style={{ marginBottom: 16 }}>
           <Text
             style={{
               color: colors.foreground,
@@ -399,6 +398,7 @@ export default function SearchScreen() {
           >
             Search
           </Text>
+          <ProfileButton size={38} />
         </View>
         <View
           style={{
