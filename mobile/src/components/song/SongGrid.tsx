@@ -7,6 +7,7 @@ import { SongListItem } from "@/components/song/SongListItem";
 import { CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { colors } from "@/theme";
 import { toggleSongInList } from "@/audio/actions";
+import type { DownloadScope } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
 
 type Mode = "grid" | "list";
@@ -25,6 +26,7 @@ export function SongGrid({
   contentBottomInset = CONTENT_BOTTOM_INSET,
   contextKey,
   playlistContext,
+  downloadScope,
 }: {
   songs: PlayerSong[];
   header?: ReactElement | null;
@@ -40,6 +42,10 @@ export function SongGrid({
   // The editable playlist these rows belong to — enables per-row "Remove from
   // this playlist". Pass a STABLE object (useMemo) so list rows stay memoized.
   playlistContext?: { id: string; name: string };
+  // Keep collection batch state visible on every row/card. This is deliberately
+  // separate from playback contextKey because artist/search contexts are not
+  // valid download pins.
+  downloadScope?: DownloadScope;
 }) {
   const [mode, setMode] = useState<Mode>(initialMode);
   const numColumns = mode === "grid" ? 2 : 1;
@@ -50,13 +56,20 @@ export function SongGrid({
       if (mode === "grid") {
         return (
           <View style={{ flex: 1 / numColumns, maxWidth: `${100 / numColumns}%` }}>
-            <SongCard song={item} onPress={onPress} />
+            <SongCard song={item} onPress={onPress} downloadScope={downloadScope} />
           </View>
         );
       }
-      return <SongListItem song={item} onPress={onPress} playlist={playlistContext} />;
+      return (
+        <SongListItem
+          song={item}
+          onPress={onPress}
+          playlist={playlistContext}
+          downloadScope={downloadScope}
+        />
+      );
     },
-    [mode, numColumns, songs, contextKey, playlistContext],
+    [mode, numColumns, songs, contextKey, playlistContext, downloadScope],
   );
 
   const toggleBar = showToggle ? (

@@ -4,6 +4,7 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { colors } from "@/theme";
 import { selectionAsync } from "@/lib/haptics";
+import { getScopedDownloadStatus } from "@/lib/offline-download-queue";
 import { isDiscoverTrack, isRadioSong } from "@/lib/player-song";
 import { type DownloadScope, getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
@@ -38,7 +39,7 @@ export function DownloadButton({
   const songScope: DownloadScope = scope ?? `song:${song.id}`;
   // Playback-ahead cache entries are intentionally invisible here. Tapping the
   // idle icon simply pins that already-cached file under the user's scope.
-  const status = record?.scopes.includes(songScope) ? record.status : undefined;
+  const status = getScopedDownloadStatus(record, songScope);
   const active = status === "downloading" || status === "queued";
 
   const onPress = () => {

@@ -7,6 +7,7 @@ import { Text } from "react-native";
 import { DownloadButton } from "@/components/song/DownloadButton";
 import { TrackActionsButton } from "@/components/song/TrackActionsButton";
 import { colors } from "@/theme";
+import type { DownloadScope } from "@/store/offline";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 
@@ -18,6 +19,7 @@ function SongListItemComponent({
   showDownload = true,
   showActions = true,
   playlist,
+  downloadScope,
 }: {
   song: PlayerSong;
   onPress: () => void;
@@ -25,6 +27,9 @@ function SongListItemComponent({
   showActions?: boolean;
   // The editable playlist this row belongs to (enables "Remove from this playlist").
   playlist?: { id: string; name: string };
+  // Collection pin used by Download all, so this row reflects/cancels the same
+  // queued record instead of creating an unrelated song:<id> pin.
+  downloadScope?: DownloadScope;
 }) {
   // One selector per visible row instead of two subscriptions evaluating the
   // same song-id comparison on every player-store update.
@@ -60,7 +65,7 @@ function SongListItemComponent({
         </View>
       </PressableScale>
 
-      {showDownload ? <DownloadButton song={song} size={20} /> : null}
+      {showDownload ? <DownloadButton song={song} scope={downloadScope} size={20} /> : null}
 
       {isActive ? (
         <View className="h-9 w-9 items-center justify-center">

@@ -447,6 +447,7 @@ export function PlaylistDetailScreen({
         initialMode="list"
         showToggle={false}
         contextKey={contextKey}
+        downloadScope={contextKey}
         playlistContext={playlistContext}
         onEndReached={spotifyCatalogPlaylist ? loadMore : undefined}
         footer={

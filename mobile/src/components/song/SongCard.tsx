@@ -7,6 +7,7 @@ import { MarqueeText } from "@/components/ui/MarqueeText";
 import { DownloadButton } from "@/components/song/DownloadButton";
 import { TrackActionsButton } from "@/components/song/TrackActionsButton";
 import { colors } from "@/theme";
+import type { DownloadScope } from "@/store/offline";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 
@@ -17,11 +18,13 @@ function SongCardComponent({
   onPress,
   showDownload = true,
   showActions = true,
+  downloadScope,
 }: {
   song: PlayerSong;
   onPress: () => void;
   showDownload?: boolean;
   showActions?: boolean;
+  downloadScope?: DownloadScope;
 }) {
   // Keep one narrow player subscription per visible tile. Only the old/new
   // active rows re-render when playback moves through a large collection.
@@ -77,7 +80,7 @@ function SongCardComponent({
       </PressableScale>
       {showDownload ? (
         <View className="absolute left-2 top-2 rounded-full bg-black/40 p-1.5">
-          <DownloadButton song={song} size={18} />
+          <DownloadButton song={song} scope={downloadScope} size={18} />
         </View>
       ) : null}
       {showActions ? (

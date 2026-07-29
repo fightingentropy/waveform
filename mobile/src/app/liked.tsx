@@ -155,6 +155,7 @@ export default function LikedScreen() {
         initialMode="list"
         showToggle={false}
         contextKey={LIKED_CONTEXT_KEY}
+        downloadScope="liked"
         emptyComponent={
           loading ? null : (
             <EmptyState title="No liked songs yet" subtitle="Tap the heart on any track to save it here." />

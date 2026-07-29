@@ -28,6 +28,17 @@ export function offlineDownloadKey(scope: string, songId: string): string {
   return `${scope}:${songId}`;
 }
 
+// A download record can be pinned by several independent surfaces (Liked Songs,
+// a playlist, or the one-song button). An indicator must only offer to cancel
+// the scope it represents, while still reflecting the shared record's current
+// queue state.
+export function getScopedDownloadStatus(
+  record: Pick<OfflineDownloadRecord, "scopes" | "status"> | null | undefined,
+  scope: DownloadScope,
+): DownloadStatus | undefined {
+  return record?.scopes.includes(scope) ? record.status : undefined;
+}
+
 // Plan a whole "Download all" insertion against one working map. The caller can
 // publish `records` in one Zustand update instead of cloning/notifying once per
 // song. Reading from the working copy also preserves the old duplicate-id
