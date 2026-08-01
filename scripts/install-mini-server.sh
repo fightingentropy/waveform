@@ -40,7 +40,9 @@ Environment:
   BUN_BIN                Default: /opt/homebrew/bin/bun
   PROXY_HOSTNAMES        Default: music.streamarena.xyz
   LIBRARY_OWNER_EMAILS   Comma-separated account emails allowed to use the Mac mini library.
+                         When omitted, preserves the existing private-host value.
   LIBRARY_OWNER_USER_IDS Comma-separated account IDs allowed to use the Mac mini library.
+                         When omitted, preserves the existing private-host value.
   SERVICE_LABEL          Default: xyz.streamarena.spotify-app
 USAGE
 }
@@ -143,8 +145,12 @@ set_env_var SPOTIFY_MUSIC_DIR "$REMOTE_MUSIC_DIR"
 set_env_var SPOTIFY_DIST_DIR "$REMOTE_APP/dist/client"
 set_env_var SPOTIFY_CACHE_DIR "$REMOTE_APP/cache"
 set_env_var SPOTIFY_PROXY_HOSTNAMES "$PROXY_HOSTNAMES"
-set_env_var SPOTIFY_LIBRARY_OWNER_EMAILS "$LIBRARY_OWNER_EMAILS"
-set_env_var SPOTIFY_LIBRARY_OWNER_USER_IDS "$LIBRARY_OWNER_USER_IDS"
+if [[ -n "$LIBRARY_OWNER_EMAILS" ]]; then
+  set_env_var SPOTIFY_LIBRARY_OWNER_EMAILS "$LIBRARY_OWNER_EMAILS"
+fi
+if [[ -n "$LIBRARY_OWNER_USER_IDS" ]]; then
+  set_env_var SPOTIFY_LIBRARY_OWNER_USER_IDS "$LIBRARY_OWNER_USER_IDS"
+fi
 
 read_env_var() {
   local key="$1"
