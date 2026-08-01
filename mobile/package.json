@@ -59,6 +59,8 @@
     "@types/react": "~19.2.2",
     "@typescript/native": "npm:typescript@^7.0.2",
     "bun-types": "^1.3.14",
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "~57.0.1",
     "typescript": "~6.0.3"
   },
   "overrides": {
