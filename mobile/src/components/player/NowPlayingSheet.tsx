@@ -31,7 +31,7 @@ import { useSongLike } from "@/components/song/useSongLike";
 import { colors } from "@/theme";
 import { selectionAsync } from "@/lib/haptics";
 import {
-  getNowPlayingDownloadAction,
+  getDownloadControlAction,
   getScopedDownloadStatus,
   getUserDownloadStatus,
 } from "@/lib/offline-download-queue";
@@ -152,7 +152,7 @@ function MonochromeDownloadButton({
   // A Liked Songs / playlist pin owns its cancellation. Now Playing still shows
   // the shared file state, but treats inherited state as status only instead of
   // silently changing another surface's pin.
-  const controlAction = getNowPlayingDownloadAction(displayStatus, scopedStatus);
+  const controlAction = getDownloadControlAction(displayStatus, scopedStatus);
   const statusOnly = controlAction === "status-only";
 
   const onPress = () => {

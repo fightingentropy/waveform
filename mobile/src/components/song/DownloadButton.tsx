@@ -4,7 +4,11 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { colors } from "@/theme";
 import { selectionAsync } from "@/lib/haptics";
-import { getScopedDownloadStatus } from "@/lib/offline-download-queue";
+import {
+  getDownloadControlAction,
+  getScopedDownloadStatus,
+  getUserDownloadStatus,
+} from "@/lib/offline-download-queue";
 import { isDiscoverTrack, isRadioSong } from "@/lib/player-song";
 import { type DownloadScope, getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
@@ -39,14 +43,20 @@ export function DownloadButton({
   const songScope: DownloadScope = scope ?? `song:${song.id}`;
   // Playback-ahead cache entries are intentionally invisible here. Tapping the
   // idle icon simply pins that already-cached file under the user's scope.
-  const status = getScopedDownloadStatus(record, songScope);
-  const active = status === "downloading" || status === "queued";
+  const scopedStatus = getScopedDownloadStatus(record, songScope);
+  // The file is shared regardless of whether it was downloaded from this row,
+  // Now Playing, Liked Songs, or another playlist. Reflect that shared state so
+  // a completed Now Playing download never appears missing in a song list.
+  const displayStatus = getUserDownloadStatus(record);
+  const active = displayStatus === "downloading" || displayStatus === "queued";
+  const scopedActive = scopedStatus === "downloading" || scopedStatus === "queued";
+  const controlAction = getDownloadControlAction(displayStatus, scopedStatus);
+  const statusOnly = controlAction === "status-only";
 
   const onPress = () => {
     void selectionAsync();
-    // ready / in-flight → unpin (remove or cancel); idle / error → (re)queue.
-    if (status === "ready" || active) void unpinScope(song.id, songScope);
-    else void queueDownloads([song], songScope);
+    if (controlAction === "unpin") void unpinScope(song.id, songScope);
+    else if (controlAction === "queue") void queueDownloads([song], songScope);
   };
 
   // Emerald stop square inside the ring → reads as "downloading, tap to cancel".
@@ -64,23 +74,38 @@ export function DownloadButton({
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityState={{ selected: status === "ready" }}
-      accessibilityLabel={active ? "Cancel download" : status === "ready" ? "Remove download" : "Download"}
+      accessibilityState={{ selected: displayStatus === "ready", disabled: statusOnly }}
+      accessibilityLabel={
+        statusOnly
+          ? active
+            ? "Downloading"
+            : displayStatus === "ready"
+              ? "Downloaded"
+              : "Download failed"
+          : scopedActive
+            ? "Cancel download"
+            : scopedStatus === "ready"
+              ? "Remove download"
+              : displayStatus === "error"
+                ? "Retry download"
+                : "Download"
+      }
+      disabled={statusOnly}
       hitSlop={hitSlop}
       onPress={onPress}
       style={style}
     >
       <View style={{ width: size + 4, height: size + 4, alignItems: "center", justifyContent: "center" }}>
-        {status === "downloading" ? (
+        {displayStatus === "downloading" ? (
           <DownloadProgressRing size={size} progress={progress ?? 0}>
-            {stopSquare}
+            {statusOnly ? null : stopSquare}
           </DownloadProgressRing>
-        ) : status === "queued" ? (
-          <DownloadProgressRing size={size}>{stopSquare}</DownloadProgressRing>
-        ) : status === "ready" ? (
+        ) : displayStatus === "queued" ? (
+          <DownloadProgressRing size={size}>{statusOnly ? null : stopSquare}</DownloadProgressRing>
+        ) : displayStatus === "ready" ? (
           // dark check inside the filled emerald badge (emeraldDarkCheck)
           <CheckCircle2 size={size} color={colors.emeraldDarkCheck} fill={colors.emerald} />
-        ) : status === "error" ? (
+        ) : displayStatus === "error" ? (
           <RefreshCw size={size} color={colors.muted} />
         ) : (
           <CircleArrowDown size={size} color={colors.iconIdle} />

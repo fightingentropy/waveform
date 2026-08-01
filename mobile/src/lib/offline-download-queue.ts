@@ -52,12 +52,14 @@ export function getUserDownloadStatus(
     : undefined;
 }
 
-export function getNowPlayingDownloadAction(
+export function getDownloadControlAction(
   displayStatus: DownloadStatus | undefined,
   scopedStatus: DownloadStatus | undefined,
 ): "queue" | "unpin" | "status-only" {
-  // Only a direct song pin can be retried or removed here. Collection-owned
-  // state is informative; its owning row/batch control manages that scope.
+  // A control can only retry or remove the pin it owns. Downloads inherited
+  // from another surface are informative; their owning control manages that
+  // scope. This lets every song surface show the shared file state without a
+  // row silently cancelling a playlist, Liked Songs, or direct-song pin.
   if (
     scopedStatus === "ready" ||
     scopedStatus === "queued" ||

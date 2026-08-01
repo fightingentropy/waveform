@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  getNowPlayingDownloadAction,
+  getDownloadControlAction,
   getScopedDownloadStatus,
   getUserDownloadStatus,
   offlineDownloadKey,
@@ -12,6 +12,9 @@ import type { PlayerSong } from "../src/types/player";
 
 const nowPlayingSource = await Bun.file(
   new URL("../src/components/player/NowPlayingSheet.tsx", import.meta.url),
+).text();
+const downloadButtonSource = await Bun.file(
+  new URL("../src/components/song/DownloadButton.tsx", import.meta.url),
 ).text();
 
 function song(index: number): PlayerSong {
@@ -83,19 +86,34 @@ describe("collection download indicators", () => {
     expect(nowPlayingSource).toContain("getUserDownloadStatus(record)");
     expect(nowPlayingSource).toContain("const scopedStatus = getScopedDownloadStatus(record, songScope)");
     expect(nowPlayingSource).toContain(
-      "getNowPlayingDownloadAction(displayStatus, scopedStatus)",
+      "getDownloadControlAction(displayStatus, scopedStatus)",
+    );
+  });
+
+  test("a direct Now Playing download is visibly downloaded in a collection row", () => {
+    const item = song(3);
+    const key = offlineDownloadKey("user-1", item.id);
+    const direct = planQueuedDownloads({}, [item], `song:${item.id}`, "user-1").records[key];
+    const ready = { ...direct, status: "ready" as const };
+
+    expect(getUserDownloadStatus(ready)).toBe("ready");
+    expect(getScopedDownloadStatus(ready, "liked")).toBeUndefined();
+    expect(getDownloadControlAction("ready", undefined)).toBe("status-only");
+    expect(downloadButtonSource).toContain("const displayStatus = getUserDownloadStatus(record)");
+    expect(downloadButtonSource).toContain(
+      "getDownloadControlAction(displayStatus, scopedStatus)",
     );
   });
 
   test("keeps inherited collection states status-only while direct pins stay actionable", () => {
     const inheritedStatuses: DownloadStatus[] = ["queued", "downloading", "ready", "error"];
     for (const status of inheritedStatuses) {
-      expect(getNowPlayingDownloadAction(status, undefined)).toBe("status-only");
+      expect(getDownloadControlAction(status, undefined)).toBe("status-only");
     }
 
-    expect(getNowPlayingDownloadAction("ready", "ready")).toBe("unpin");
-    expect(getNowPlayingDownloadAction("downloading", "downloading")).toBe("unpin");
-    expect(getNowPlayingDownloadAction("error", "error")).toBe("queue");
-    expect(getNowPlayingDownloadAction(undefined, undefined)).toBe("queue");
+    expect(getDownloadControlAction("ready", "ready")).toBe("unpin");
+    expect(getDownloadControlAction("downloading", "downloading")).toBe("unpin");
+    expect(getDownloadControlAction("error", "error")).toBe("queue");
+    expect(getDownloadControlAction(undefined, undefined)).toBe("queue");
   });
 });
