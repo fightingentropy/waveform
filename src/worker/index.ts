@@ -19,6 +19,8 @@ import {
 import { buildSql, statementReturnsRows, type SqlRow, type SqlTag, type TemplateValue } from "@/lib/sql-tag";
 import { songToPlayerSong } from "@/lib/song-utils";
 import { inferContentTypeFromKey, normalizeStorageKey } from "@/lib/storage-keys";
+import { parseByteRangeHeader } from "@/lib/http-range";
+import { sniffUploadMediaBytes } from "@/lib/upload-media-sniff";
 import {
   canonicalizeLocalMediaUrl,
   coarseLocalMediaExpiry,
@@ -69,6 +71,15 @@ import { normalizeSongPart } from "@/lib/song-dedupe";
 import { resolveTidalTrackIdByIsrc } from "@/lib/tidal-isrc";
 import { lookupSoundcharts, soundchartsTokenFromEnv } from "@/lib/soundcharts";
 import { createStreamingMultipartBody, peekAndReplayStream } from "./streaming-multipart";
+import {
+  canUseMacMiniProxy,
+  fetchMacMini,
+  getMacMiniMediaSigningSecret,
+  isLocalPreviewHost,
+  isMacMiniMusicConfigured,
+  shouldForwardMacMiniUserForPathname,
+  shouldProxyMusicPathnameToMacMini,
+} from "./mac-mini-proxy";
 
 type Variables = {
   user: AuthUser | null;
@@ -78,11 +89,6 @@ type Variables = {
 type AppEnv = {
   Bindings: CloudflareEnv;
   Variables: Variables;
-};
-
-type MusicProxyEnv = CloudflareEnv & {
-  MAC_MINI_ORIGIN?: string;
-  MAC_MINI_PROXY_TOKEN?: string;
 };
 
 type AuthUser = {
@@ -227,14 +233,6 @@ const SPOTIFY_REQUEST_TIMEOUT_MS = 20_000;
 const DOWNLOAD_REQUEST_TIMEOUT_MS = 120_000;
 const SERVER_IMPORT_OUTPUT_FORMAT: OutputFormat = "flac";
 const OUTPUT_FORMATS = new Set<OutputFormat>(["flac", "mp3", "aac", "ogg", "opus", "wav"]);
-
-const IMAGE_EXT_TYPES = new Map<string, string>([
-  [".jpg", "image/jpeg"],
-  [".jpeg", "image/jpeg"],
-  [".png", "image/png"],
-  [".gif", "image/gif"],
-  [".webp", "image/webp"],
-]);
 
 const AUDIO_EXT_TYPES = new Map<string, string>([
   [".flac", "audio/flac"],
@@ -1055,26 +1053,6 @@ function parseArtworkWidth(value: string | undefined): number {
   const width = Number(value || 0);
   if (!Number.isFinite(width) || width <= 0) return 256;
   return Math.max(32, Math.min(1024, Math.round(width)));
-}
-
-function extensionForStoredFile(kind: "image" | "audio", fileName: string, contentType: string): string {
-  const ext = extname(sanitizeFileName(fileName)).toLowerCase();
-  if (kind === "image") {
-    if (IMAGE_EXT_TYPES.has(ext)) return ext === ".jpeg" ? ".jpg" : ext;
-    const normalized = contentType.toLowerCase().split(";")[0]?.trim() || "";
-    if (!IMAGE_MIME_TYPES.has(normalized)) throw new ApiError("Unsupported image format", 415);
-    if (normalized === "image/png") return ".png";
-    if (normalized === "image/gif") return ".gif";
-    if (normalized === "image/webp") return ".webp";
-    return ".jpg";
-  }
-  if (AUDIO_EXT_TYPES.has(ext)) return ext;
-  const normalized = contentType.toLowerCase().split(";")[0]?.trim() || "";
-  if (!AUDIO_MIME_TYPES.has(normalized)) throw new ApiError("Unsupported audio format", 415);
-  if (normalized.includes("mpeg") || normalized.includes("mp3")) return ".mp3";
-  if (normalized.includes("wav")) return ".wav";
-  if (normalized.includes("mp4") || normalized.includes("m4a") || normalized.includes("aac")) return ".m4a";
-  return ".flac";
 }
 
 async function putBuffer(env: CloudflareEnv, key: string, buffer: ArrayBuffer | Uint8Array, contentType?: string) {
@@ -2942,74 +2920,6 @@ async function listSearchSongs(db: SqlTag, userId: string | null) {
   );
 }
 
-function parseRangeHeader(rangeHeader: string, size: number): { start: number; end: number } | null {
-  if (!rangeHeader.startsWith("bytes=") || size <= 0) return null;
-  const rangeValue = rangeHeader.slice("bytes=".length).trim();
-  if (!rangeValue || rangeValue.includes(",")) return null;
-  const dashIndex = rangeValue.indexOf("-");
-  if (dashIndex === -1) return null;
-  const startStr = rangeValue.slice(0, dashIndex);
-  const endStr = rangeValue.slice(dashIndex + 1);
-  if (!startStr) {
-    const suffixLength = Number(endStr);
-    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null;
-    return { start: Math.max(0, size - suffixLength), end: size - 1 };
-  }
-  const start = Number(startStr);
-  if (!Number.isFinite(start) || start < 0 || start >= size) return null;
-  let end = endStr ? Number(endStr) : size - 1;
-  if (!Number.isFinite(end) || end < 0) return null;
-  if (end >= size) end = size - 1;
-  if (end < start) return null;
-  return { start, end };
-}
-
-function getMacMiniOrigin(env: CloudflareEnv): string {
-  const origin = ((env as MusicProxyEnv).MAC_MINI_ORIGIN || "").trim();
-  return origin.replace(/\/+$/, "");
-}
-
-function getMacMiniProxyToken(env: CloudflareEnv): string {
-  return ((env as MusicProxyEnv).MAC_MINI_PROXY_TOKEN || "").trim();
-}
-
-function isMacMiniMusicConfigured(env: CloudflareEnv): boolean {
-  const origin = getMacMiniOrigin(env);
-  if (!origin) return false;
-  try {
-    const parsed = new URL(origin);
-    return parsed.protocol === "https:" || parsed.protocol === "http:";
-  } catch {
-    return false;
-  }
-}
-
-function isLocalMacMiniOrigin(env: CloudflareEnv): boolean {
-  const origin = getMacMiniOrigin(env);
-  if (!origin) return false;
-  try {
-    return isLocalPreviewHost(new URL(origin).hostname);
-  } catch {
-    return false;
-  }
-}
-
-function canUseMacMiniProxy(env: CloudflareEnv): boolean {
-  if (!isMacMiniMusicConfigured(env)) return false;
-  return Boolean(getMacMiniProxyToken(env)) || isLocalMacMiniOrigin(env);
-}
-
-function isLocalPreviewHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return (
-    normalized === "localhost" ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized === "[::1]" ||
-    normalized.endsWith(".local")
-  );
-}
-
 function getLocalMacMiniAuthUser(c: Context<AppEnv>): AuthUser | null {
   if (!canUseMacMiniProxy(c.env)) return null;
   try {
@@ -3023,49 +2933,9 @@ function macMiniProxyPathname(c: Context<AppEnv>): string {
   return new URL(c.req.url).pathname;
 }
 
-export function shouldProxyMusicPathnameToMacMini(pathname: string, method: string, contentType = ""): boolean {
-  const normalizedMethod = method.toUpperCase();
-
-  if (pathname.startsWith("/api/songs/spotify")) return false;
-  if (pathname.startsWith("/api/files/local/")) return true;
-  if (pathname.startsWith("/api/artwork/local/")) return true;
-  if (pathname.startsWith("/api/songs/")) return true;
-  // Folder-as-playlist reads live on the Mac mini (its library is the filesystem
-  // scan). Curated + D1-backed playlist ids don't carry this prefix, so they
-  // fall through to the Worker's own /api/playlist/:id handler.
-  if (normalizedMethod === "GET" && pathname.startsWith("/api/playlist/local-folder-")) return true;
-  if (["/api/music/source", "/api/home", "/api/search-index", "/api/library", "/api/liked", "/api/likes"].includes(pathname)) {
-    return true;
-  }
-  if (pathname === "/api/songs") {
-    if (normalizedMethod === "GET") return true;
-    if (normalizedMethod !== "POST") return false;
-    return !contentType.toLowerCase().startsWith("application/json");
-  }
-  return false;
-}
-
 function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
   if (!canUseMacMiniProxy(c.env)) return false;
   return shouldProxyMusicPathnameToMacMini(macMiniProxyPathname(c), c.req.method, c.req.header("content-type") || "");
-}
-
-const MAC_MINI_USER_CONTEXT_PATHS = new Set([
-  "/api/music/source",
-  "/api/home",
-  "/api/search-index",
-  "/api/library",
-  "/api/liked",
-  "/api/likes",
-  "/api/songs",
-]);
-
-export function shouldForwardMacMiniUserForPathname(pathname: string): boolean {
-  if (MAC_MINI_USER_CONTEXT_PATHS.has(pathname)) return true;
-  if (pathname.startsWith("/api/files/local/")) return true;
-  if (pathname.startsWith("/api/artwork/local/")) return true;
-  if (pathname.startsWith("/api/playlist/")) return true;
-  return pathname.startsWith("/api/songs/") && !pathname.startsWith("/api/songs/spotify");
 }
 
 function shouldForwardMacMiniUser(c: Context<AppEnv>): boolean {
@@ -3083,33 +2953,15 @@ async function getMacMiniProxyUser(c: Context<AppEnv>): Promise<AuthUser | null>
   return (await getCurrentUser(c.req.raw, db)) ?? getLocalMacMiniAuthUser(c);
 }
 
-function macMiniProxyHeaders(c: Context<AppEnv>, user: AuthUser | null): Headers {
-  const headers = new Headers(c.req.raw.headers);
-  headers.delete("host");
-  headers.delete("content-length");
-  headers.delete("cookie");
-  headers.delete("authorization");
-  headers.delete("x-spotify-proxy-token");
-  headers.delete("x-spotify-user-id");
-  headers.delete("x-spotify-user-email");
-  headers.delete("x-spotify-user-name");
-  const token = getMacMiniProxyToken(c.env);
-  if (token) headers.set("x-spotify-proxy-token", token);
-  if (user) {
-    headers.set("x-spotify-user-id", user.id);
-    headers.set("x-spotify-user-email", user.email);
-    if (user.name) headers.set("x-spotify-user-name", user.name);
-  }
-  return headers;
-}
-
 async function proxyToMacMini(c: Context<AppEnv>, user: AuthUser | null): Promise<Response> {
   const sourceUrl = new URL(c.req.url);
-  const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, getMacMiniOrigin(c.env));
   const method = c.req.method.toUpperCase();
-  return fetch(targetUrl.toString(), {
+  return fetchMacMini({
+    env: c.env,
+    target: `${sourceUrl.pathname}${sourceUrl.search}`,
     method,
-    headers: macMiniProxyHeaders(c, user),
+    user,
+    headers: c.req.raw.headers,
     body: method === "GET" || method === "HEAD" ? undefined : c.req.raw.body,
     redirect: "manual",
   });
@@ -3127,18 +2979,15 @@ async function postJsonToMacMini(
   payload: Record<string, unknown>,
   path = "/api/songs",
 ): Promise<Response> {
-  const targetUrl = new URL(path, getMacMiniOrigin(c.env));
   const headers = new Headers({
     accept: "application/json",
     "content-type": "application/json",
   });
-  const token = getMacMiniProxyToken(c.env);
-  if (token) headers.set("x-spotify-proxy-token", token);
-  headers.set("x-spotify-user-id", user.id);
-  headers.set("x-spotify-user-email", user.email);
-  if (user.name) headers.set("x-spotify-user-name", user.name);
-  return fetch(targetUrl.toString(), {
+  return fetchMacMini({
+    env: c.env,
+    target: path,
     method: "POST",
+    user,
     headers,
     body: JSON.stringify(payload),
   });
@@ -3185,7 +3034,6 @@ async function postAudioStreamToMacMini(
   response: Response,
 ): Promise<Response> {
   if (!response.body) throw new ApiError("Audio server returned an empty response", 502);
-  const targetUrl = new URL("/api/songs", getMacMiniOrigin(c.env));
   const responseType = response.headers.get("content-type") || resolved.contentType || "audio/flac";
   const ext = extensionFromResponse(response, resolved.streamUrl);
   const fileName = `${sanitizeFileName(`${values.artist} - ${values.title}`)}${ext}`;
@@ -3202,13 +3050,11 @@ async function postAudioStreamToMacMini(
     accept: "application/json",
     "content-type": multipart.contentType,
   });
-  const token = getMacMiniProxyToken(c.env);
-  if (token) headers.set("x-spotify-proxy-token", token);
-  headers.set("x-spotify-user-id", user.id);
-  headers.set("x-spotify-user-email", user.email);
-  if (user.name) headers.set("x-spotify-user-name", user.name);
-  return fetch(targetUrl.toString(), {
+  return fetchMacMini({
+    env: c.env,
+    target: "/api/songs",
     method: "POST",
+    user,
     headers,
     body: multipart.body,
   });
@@ -3220,18 +3066,15 @@ async function materializeLicensedStreamOnMacMini(
   resolved: ResolvedAudioDownloadCandidate,
 ): Promise<Response | null> {
   if (!resolved.licensedStream || !canUseMacMiniProxy(c.env)) return null;
-  const targetUrl = new URL("/api/licensed-source/materialize", getMacMiniOrigin(c.env));
   const headers = new Headers({
     accept: "audio/*,*/*",
     "content-type": "application/json",
   });
-  const token = getMacMiniProxyToken(c.env);
-  if (token) headers.set("x-spotify-proxy-token", token);
-  headers.set("x-spotify-user-id", user.id);
-  headers.set("x-spotify-user-email", user.email);
-  if (user.name) headers.set("x-spotify-user-name", user.name);
-  return fetch(targetUrl.toString(), {
+  return fetchMacMini({
+    env: c.env,
+    target: "/api/licensed-source/materialize",
     method: "POST",
+    user,
     headers,
     body: JSON.stringify({
       stream: resolved.licensedStream,
@@ -3725,8 +3568,6 @@ app.post("/api/auth/resend-verification", async (c) => {
 app.post("/api/profile/image", async (c) => {
   const user = requireUser(c.get("user"));
   let imageBytes: ArrayBuffer;
-  let imageName = "profile.jpg";
-  let imageType: string;
 
   if ((c.req.header("content-type") || "").toLowerCase().startsWith("application/json")) {
     // The native app's HTTP bridge can't send multipart bodies reliably, so it
@@ -3743,8 +3584,6 @@ app.post("/api/profile/image", async (c) => {
     if (bytes.byteLength <= 0) return jsonError("Image file is required", 400);
     if (bytes.byteLength > MAX_IMAGE_BYTES) return jsonError("Image file is too large", 413);
     imageBytes = bytes.buffer as ArrayBuffer;
-    imageName = toStringValue(body?.filename) || imageName;
-    imageType = toStringValue(body?.contentType);
   } else {
     const form = await c.req.formData();
     const image = form.get("image");
@@ -3753,17 +3592,17 @@ app.post("/api/profile/image", async (c) => {
     }
     if (image.size > MAX_IMAGE_BYTES) return jsonError("Image file is too large", 413);
     imageBytes = await image.arrayBuffer();
-    imageName = image.name || imageName;
-    imageType = image.type;
   }
 
-  const imageExt = extensionForStoredFile("image", imageName, imageType || "image/jpeg");
+  const sniffedImage = sniffUploadMediaBytes(new Uint8Array(imageBytes));
+  if (!sniffedImage || sniffedImage.kind !== "image") return jsonError("Unsupported image content", 415);
+  const imageExt = sniffedImage.extension;
   const key = `users/${sanitizePathSegment(user.id)}/profile/${crypto.randomUUID()}${imageExt}`;
   // Derive the stored content-type solely from the validated extension — never
   // trust the client-supplied contentType. Otherwise a caller could store an
   // avatar as text/html and have our origin serve executable HTML (stored XSS),
   // since /api/files serves profile images without auth.
-  const contentType = inferContentTypeFromKey(key);
+  const contentType = sniffedImage.contentType;
   await putBuffer(c.env, key, imageBytes, contentType);
   const imageUrl = toApiFileUrl(key);
   const rows = await c.get("db")<UserRow>`
@@ -3827,13 +3666,11 @@ async function macMiniDiscoverFetch(
 ): Promise<Response> {
   const headers = new Headers({ accept: "application/json" });
   if (body !== undefined) headers.set("content-type", "application/json");
-  const token = getMacMiniProxyToken(env);
-  if (token) headers.set("x-spotify-proxy-token", token);
-  headers.set("x-spotify-user-id", LOCAL_MAC_MINI_AUTH_USER.id);
-  headers.set("x-spotify-user-email", LOCAL_MAC_MINI_AUTH_USER.email);
-  if (LOCAL_MAC_MINI_AUTH_USER.name) headers.set("x-spotify-user-name", LOCAL_MAC_MINI_AUTH_USER.name);
-  return fetch(new URL(path, getMacMiniOrigin(env)).toString(), {
+  return fetchMacMini({
+    env,
+    target: path,
     method,
+    user: LOCAL_MAC_MINI_AUTH_USER,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
@@ -5610,13 +5447,19 @@ app.post("/api/songs", async (c) => {
     }
     if (image.size > MAX_IMAGE_BYTES) return jsonError("Image file is too large", 413);
     if (audio.size > MAX_AUDIO_BYTES) return jsonError("Audio file is too large", 413);
+    const imageBytes = await image.arrayBuffer();
+    const audioBytes = await audio.arrayBuffer();
+    const sniffedImage = sniffUploadMediaBytes(new Uint8Array(imageBytes));
+    const sniffedAudio = sniffUploadMediaBytes(new Uint8Array(audioBytes));
+    if (!sniffedImage || sniffedImage.kind !== "image") return jsonError("Unsupported image content", 415);
+    if (!sniffedAudio || sniffedAudio.kind !== "audio") return jsonError("Unsupported audio content", 415);
     const basePath = buildOrganizedMusicBasePath(title, artist);
-    const imageExt = extensionForStoredFile("image", image.name, image.type);
-    const audioExt = extensionForStoredFile("audio", audio.name, audio.type);
+    const imageExt = sniffedImage.extension;
+    const audioExt = sniffedAudio.extension;
     const imageKey = `${basePath}/cover/${crypto.randomUUID()}${imageExt}`;
     const audioKey = `${basePath}/audio/${crypto.randomUUID()}${audioExt}`;
-    await putBuffer(c.env, imageKey, await image.arrayBuffer(), image.type || inferContentTypeFromKey(imageKey));
-    await putBuffer(c.env, audioKey, await audio.arrayBuffer(), audio.type || inferContentTypeFromKey(audioKey));
+    await putBuffer(c.env, imageKey, imageBytes, sniffedImage.contentType);
+    await putBuffer(c.env, audioKey, audioBytes, sniffedAudio.contentType);
     imageUrl = toApiFileUrl(imageKey);
     audioUrl = toApiFileUrl(audioKey);
   }
@@ -5710,9 +5553,12 @@ app.post("/api/songs/:id/assets", async (c) => {
   const basePath = buildOrganizedMusicBasePath(song.title, song.artist);
   if (image instanceof File && image.size > 0) {
     if (image.size > MAX_IMAGE_BYTES) return jsonError("Image exceeds max upload size", 413);
-    const imageExt = extensionForStoredFile("image", image.name, image.type);
+    const imageBytes = await image.arrayBuffer();
+    const sniffedImage = sniffUploadMediaBytes(new Uint8Array(imageBytes));
+    if (!sniffedImage || sniffedImage.kind !== "image") return jsonError("Unsupported image content", 415);
+    const imageExt = sniffedImage.extension;
     const imageKey = `${basePath}/cover/${song.id}-${crypto.randomUUID()}${imageExt}`;
-    await putBuffer(c.env, imageKey, await image.arrayBuffer(), image.type || inferContentTypeFromKey(imageKey));
+    await putBuffer(c.env, imageKey, imageBytes, sniffedImage.contentType);
     imageUrl = toApiFileUrl(imageKey);
   }
   if (lyricsFile instanceof File && lyricsFile.size > 0) {
@@ -5773,20 +5619,20 @@ app.post("/api/songs/:id/refetch-youtube", async (c) => {
   // the mini, and make the contract explicit alongside the mini's ownership check).
   if (!id.startsWith("local-server:")) return jsonError("This song can't be refetched", 400);
   const payload = await readJson<{ title?: unknown; artist?: unknown }>(c.req.raw);
-  const headers = macMiniProxyHeaders(c, user);
+  const headers = new Headers();
   headers.set("content-type", "application/json");
   headers.set("accept", "application/json");
   let res: Response;
   try {
-    res = await fetch(
-      new URL(`/api/songs/${encodeURIComponent(id)}/refetch-youtube`, getMacMiniOrigin(c.env)).toString(),
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ title: toStringValue(payload?.title), artist: toStringValue(payload?.artist) }),
-        signal: AbortSignal.timeout(150_000),
-      },
-    );
+    res = await fetchMacMini({
+      env: c.env,
+      target: `/api/songs/${encodeURIComponent(id)}/refetch-youtube`,
+      method: "POST",
+      user,
+      headers,
+      body: JSON.stringify({ title: toStringValue(payload?.title), artist: toStringValue(payload?.artist) }),
+      signal: AbortSignal.timeout(150_000),
+    });
   } catch (err) {
     if (err instanceof Error && err.name === "TimeoutError") {
       return jsonError("The music server took too long to refetch this song", 504);
@@ -5926,13 +5772,14 @@ async function localMediaUrlSignerFor(
   c: Context<AppEnv>,
   user: AuthUser,
 ): Promise<LocalMediaUrlSigner> {
-  const secret = getMacMiniProxyToken(c.env);
+  const secret = getMacMiniMediaSigningSecret(c.env);
   // Local preview reaches the mini directly and authorizes the implicit local
   // owner. Canonicalize stale persisted query params there, but signatures are
   // only needed for production's direct public Caddy media path.
-  if (!secret || user.id === LOCAL_MAC_MINI_AUTH_USER.id) {
+  if (user.id === LOCAL_MAC_MINI_AUTH_USER.id) {
     return async (value) => canonicalizeLocalMediaUrl(value);
   }
+  if (!secret) throw new ApiError("Private media signing is not configured", 503);
   return createLocalMediaUrlSigner({
     secret,
     userId: user.id,
@@ -6017,8 +5864,10 @@ async function folderServesFromD1(env: CloudflareEnv, playlistId: string): Promi
 
 async function fetchMacMiniJson<T>(c: Context<AppEnv>, user: AuthUser, path: string): Promise<T | null> {
   try {
-    const res = await fetch(new URL(path, getMacMiniOrigin(c.env)).toString(), {
-      headers: macMiniProxyHeaders(c, user),
+    const res = await fetchMacMini({
+      env: c.env,
+      target: path,
+      user,
     });
     if (!res.ok) return null;
     return (await res.json()) as T;
@@ -6446,8 +6295,8 @@ app.get("/api/files/*", async (c) => {
   }
   const range = c.req.header("range");
   if (range) {
-    const parsed = parseRangeHeader(range, size);
-    if (!parsed) {
+    const parsed = parseByteRangeHeader(range, size);
+    if (parsed === "unsatisfiable") {
       const headers = new Headers({
         "Content-Range": `bytes */${size}`,
         "Accept-Ranges": "bytes",
@@ -6455,19 +6304,21 @@ app.get("/api/files/*", async (c) => {
       applySecurityHeaders(headers);
       return new Response(null, { status: 416, headers });
     }
-    const length = parsed.end - parsed.start + 1;
-    const partial = await c.env.MEDIA.get(key, { range: { offset: parsed.start, length } });
-    if (!partial?.body) return jsonError("Not found", 404);
-    const headers = new Headers({
-      "Content-Type": contentType,
-      "Content-Length": String(length),
-      "Content-Range": `bytes ${parsed.start}-${parsed.end}/${size}`,
-      "Accept-Ranges": "bytes",
-      "Cache-Control": "private, max-age=31536000, immutable",
-    });
-    if (contentDisposition) headers.set("Content-Disposition", contentDisposition);
-    applySecurityHeaders(headers);
-    return new Response(partial.body, { status: 206, headers });
+    if (parsed) {
+      const length = parsed.end - parsed.start + 1;
+      const partial = await c.env.MEDIA.get(key, { range: { offset: parsed.start, length } });
+      if (!partial?.body) return jsonError("Not found", 404);
+      const headers = new Headers({
+        "Content-Type": contentType,
+        "Content-Length": String(length),
+        "Content-Range": `bytes ${parsed.start}-${parsed.end}/${size}`,
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, max-age=31536000, immutable",
+      });
+      if (contentDisposition) headers.set("Content-Disposition", contentDisposition);
+      applySecurityHeaders(headers);
+      return new Response(partial.body, { status: 206, headers });
+    }
   }
   const full = await c.env.MEDIA.get(key);
   if (!full?.body) return jsonError("Not found", 404);

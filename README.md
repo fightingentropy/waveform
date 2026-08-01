@@ -1,301 +1,217 @@
 # Music
 
-Private personal music app served from the Mac mini through Caddy. Cloudflare
-Workers handle auth/import APIs; the app UI and FLAC media stream through the
-home Caddy path. Access requires a signed-in account.
+Self-hosted personal music app with a React client, Cloudflare Worker APIs, an
+optional private media server, and an Expo mobile client. Accounts must sign in
+before accessing a library.
 
-## Current Production Setup
+This is an independent, unofficial project. It is not affiliated with or
+endorsed by Spotify AB. Use import and download features only for media you are
+permitted to access and copy.
 
-- Public app: `https://music.streamarena.xyz` (login required)
-- Mac mini Tailscale app/server: `http://100.121.144.60:5174`
-- Mac mini LAN app/server: `http://192.168.1.240:5174`
-- Worker backend for auth/import APIs: `https://spotify.erlinhoxha.workers.dev`
-- Mac mini music folder: `/Users/hermes/Music`
-- Remote app folder on Mac mini: `/Users/hermes/Developer/spotify`
-- Music server launchd service: `xyz.streamarena.spotify-app`
-- Shared Caddy launchd service: `xyz.streamarena.caddy`
-- DNS drift watcher launchd service: `xyz.streamarena.spotify-dns-watch`
+## Features
 
-`music.streamarena.xyz` should be a DNS-only record pointing at the home
-public IP. Caddy terminates TLS, routes static assets and media directly to the
-Mac mini server, and forwards auth/import API calls to the Worker backend.
+- Browse, search, like, queue, and organize a personal music library.
+- Stream local media with byte-range support, artwork, lyrics, and sidecars.
+- Import licensed or user-authorized media through authenticated APIs.
+- Download tracks for offline playback in the native client.
+- Run the UI and media service together, or split account APIs onto Cloudflare.
+- Preserve legacy R2 media support while using a private host for large files.
+
+See [FEATURES.md](FEATURES.md) for the current product-level feature list.
 
 ## Architecture
 
 ```text
-Phone/browser
-  -> Caddy: music.streamarena.xyz
-       -> static app and media ranges: 127.0.0.1:5174
-       -> auth/import APIs: spotify.erlinhoxha.workers.dev
-            -> Worker calls MAC_MINI_ORIGIN=https://music.streamarena.xyz
-                 -> Caddy trusted proxy-token route
-                      -> Mac mini local server on 127.0.0.1:5174
-                           -> /Users/hermes/Music
+browser or native client
+  -> https://music.example.com
+       -> static UI and media ranges: private media server
+       -> authenticated account/import APIs: Cloudflare Worker
+            -> signed request to the private media server when required
+                 -> owner-controlled music directory
 ```
 
-Uploaded/imported music is stored on the Mac mini. R2 is still configured as a
-fallback/legacy storage mode in the Worker, but direct Caddy is the production
-media path.
+The Worker owns account, session, D1, import, and optional R2 behavior. The
+private Bun server indexes local media, serves range requests, accepts bounded
+uploads, and writes media sidecars. A reverse proxy is the only public entry
+point to the private host.
 
-## Data Flow
+Keep real addresses, usernames, filesystem paths, service labels, account IDs,
+and network topology in a private operational runbook. Public examples in this
+repository intentionally use placeholders.
 
-- Library load: app calls `/api/home`; Caddy forwards browser API requests to
-  the Worker, and the Worker calls back through direct Caddy with the shared
-  proxy token and user id.
-- Audio streaming: song `audioUrl` values point at `/api/files/local/*`; Caddy
-  routes those range requests directly to the Mac mini server so seeking stays
-  off the Worker/Tunnel path.
-- Artwork: local sidecar/embedded art is served first; missing art can be cached
-  from online artwork lookup by the Mac mini server.
-- Manual upload: browser posts to `/api/songs`; Worker requires auth, forwards
-  the upload to the Mac mini, and the Mac mini saves it into `/Users/hermes/Music`.
-- Spotify import: Worker resolves metadata/provider stream URLs, then calls the
-  direct Caddy origin; the Mac mini downloads and stores the audio, cover,
-  lyrics, and sidecar metadata.
+## Security boundary
 
-## Important Runtime Notes
+- Public-host API calls require an authenticated session. Worker-to-private-host
+  calls use a 30-second HMAC envelope bound to method, target, nonce, expiry,
+  and user context; captured envelopes cannot be replayed.
+- Direct media paths require a separate user/scoped media signature with a
+  one-hour validity window.
+- Implicit local access is limited to a real loopback socket peer; untrusted
+  forwarding and identity headers are removed.
+- Owner access is matched against immutable account IDs or verified email
+  addresses and fails closed when ownership is not configured.
+- Canonical paths keep media operations inside configured roots and reject
+  symlink escapes.
+- Uploads and upstream responses have byte limits; media range parsing is
+  validated and covered by tests.
+- Request-signing and media-signing secrets are separate and must never be
+  committed. The request secret is never forwarded as a bearer token.
+- Set `SPOTIFY_TRUST_LOCAL_NETWORK=1` only if every device on that network is
+  trusted as the library owner. Loopback health checks do not require it.
 
-- Keep the Mac mini music server launchd service running:
-  - `xyz.streamarena.spotify-app`
-- Keep the shared Caddy launchd service running:
-  - `xyz.streamarena.caddy` (the installer also detects the legacy
-    `com.fightingentropy.streamarena-caddy` label on existing machines)
-- Keep the DNS drift watcher launchd service running:
-  - `xyz.streamarena.spotify-dns-watch`
-- Operational scripts try the Mac mini Tailscale SSH alias `m4mini-ts` first,
-  then the raw Tailscale target `hermes@100.121.144.60`, then the LAN alias
-  `m4mini.local`, then the raw Ethernet target `hermes@192.168.1.240`. Set
-  `MINI_HOST` to force a single host, or `MINI_HOSTS` to override the fallback
-  list.
-- Public traffic should reach the Mac mini through the router's 80/443 port
-  forwards and the direct DNS-only record for `music.streamarena.xyz`.
-- `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
-- `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
-- Direct LAN and Tailscale API requests require that token by default. Set
-  `SPOTIFY_TRUST_LOCAL_NETWORK=1` only when every device on the network should be
-  treated as the library owner; loopback health checks remain trusted.
-- `SPOTIFY_LIBRARY_OWNER_EMAILS` or `SPOTIFY_LIBRARY_OWNER_USER_IDS` controls
-  which app accounts can see and mutate the Mac mini music folder. Ownership
-  fails closed unless an immutable id or verified email matches.
-- The Mac mini DNS watcher compares public DNS against the current home IP and
-  logs drift. It does not store a Cloudflare API token or mutate DNS.
-- The Settings page intentionally only shows user-facing playback/download
-  settings now. Source status, edit-mode toggles, and Spotify cookie UI were
-  removed from normal app chrome.
-- The client caches API responses in memory for a short window and dedupes
-  in-flight fetches, so navigating between Home/Search/etc does not reload the
-  full song list every render. Uploads, imports, likes, sign-in, and sign-out
-  invalidate the cache.
+The operator is responsible for hardening the reverse proxy, private host,
+backups, DNS, TLS, and provider credentials. Third-party providers may impose
+terms, copyright, and rate-limit restrictions.
 
-## Repository Structure
+## Repository structure
 
-- `src/client/` - React app shell, routes, auth provider, shared API cache.
-- `src/components/` - reusable UI, player bar, song list/grid, upload controls.
-- `src/store/` - Zustand stores for player state, likes, and older browser-local
-  library helpers.
-- `src/worker/index.ts` - Cloudflare Worker API, auth, D1/R2 fallback paths,
-  Spotify import helpers, and Mac mini proxy mode.
-- `src/server/local-music-server.ts` - Bun server deployed to the Mac mini. It
-  scans the music folder, serves media with range support, accepts uploads, and
-  writes `.spotify.json` sidecars.
-- `scripts/deploy-mini.sh` - builds/syncs the app and local server to Mac mini.
-- `scripts/mini-host.sh` - shared Mac mini SSH host resolver with Tailscale then
-  LAN fallback.
-- `scripts/install-mini-server.sh` - installs/restarts the Mac mini launchd app
-  service.
-- `scripts/install-mini-caddy.sh` - installs/updates the direct Caddy route for
-  `music.streamarena.xyz`.
-- `scripts/install-mini-dns-watch.sh` - installs/updates the DNS drift watcher
-  for the direct home Caddy hostname.
-- `scripts/sync-mini-music.sh` - syncs audio/artwork/lyrics/sidecars to
-  `/Users/hermes/Music`.
-- `scripts/check-mini.sh` - health check for Mac mini server, launchd, library
-  scan count, and direct Mini reachability.
-- `wrangler.jsonc` - Cloudflare Worker bindings, `workers.dev` backend, and
-  `MAC_MINI_ORIGIN`.
-- `FEATURES.md` - current user-facing features and production capabilities.
+- `src/client/` — React shell, routes, auth provider, and API cache.
+- `src/components/` — player, lists, grids, and upload controls.
+- `src/store/` — player, queue, likes, and local state.
+- `src/worker/index.ts` — Cloudflare Worker API and provider integrations.
+- `src/worker/mac-mini-proxy.ts` — private-origin routing and request signer.
+- `src/server/local-music-server.ts` — private Bun media service.
+- `src/server/proxy-auth.ts` — expiry, HMAC, identity, and replay verification.
+- `src/lib/private-proxy-contract.ts` — shared signature/headers contract.
+- `src/lib/http-range.ts` — shared browser/Worker byte-range validation.
+- `tests/` — policy, range, upload, proxy, playback, and persistence tests.
+- `mobile/` — Expo native client with its own locked dependencies.
+- `db/d1-migrations/` — versioned D1 schema changes.
+- `scripts/` — local development and private-host deployment helpers.
+- `wrangler.jsonc` — Cloudflare bindings with placeholder-safe configuration.
 
-## Local Development
+## Local development
+
+Requirements: Bun 1.3.10, Node 22 for the mobile client, and Wrangler.
 
 ```bash
-bun install
+bun install --frozen-lockfile
 bun run dev
 ```
 
-Wrangler simulates the Worker bindings during local development. For the local
-Mac mini-style server on this machine:
+The development server listens on port 5174. To exercise the private media
+service separately:
 
 ```bash
 bun run build
 SPOTIFY_MUSIC_DIR="$HOME/Music" bun run local:music
 ```
 
-## Mac mini Operations
+The media service listens on port 5176 by default.
 
-Deploy app/server updates to the Mac mini:
+## Mandatory verification
+
+The required web/Worker gate is:
+
+```bash
+bun run check
+```
+
+It runs ESLint, strict type checking, the complete Bun test suite, and a
+production build. Pull requests run it after a frozen install. Mobile CI uses a
+frozen `npm ci` install and runs type checking, lint, and tests independently.
+
+Useful focused commands:
+
+```bash
+bun run lint
+bun run typecheck
+bun test
+bun run build
+cd mobile && npm ci && npm run typecheck && npm run lint && npm test
+```
+
+## Private media-host deployment
+
+Configure SSH aliases and host details outside the repository. The deployment
+scripts accept `MINI_HOST` for one private alias or `MINI_HOSTS` for an ordered
+list. Do not put raw usernames or network addresses in tracked files.
 
 ```bash
 bun run mini:deploy
-```
-
-Reuse the current local `dist/` build:
-
-```bash
-bash scripts/deploy-mini.sh --skip-build
-```
-
-Check the Mac mini server:
-
-```bash
 bun run mini:check
-```
-
-Install/update the direct Caddy route:
-
-```bash
+bun run mini:install-server
 bun run mini:install-caddy
-```
-
-Install/update the DNS drift watcher:
-
-```bash
 bun run mini:install-dns-watch
-```
-
-Sync music to the Mac mini:
-
-```bash
 bun run mini:sync-music
 ```
 
-Sync music from a specific local folder:
+A private host environment file should be owner-readable only and may contain:
 
 ```bash
-bash scripts/sync-mini-music.sh --source /Users/erlinhoxha/Movies
+HOST=127.0.0.1
+PORT=5174
+SPOTIFY_MUSIC_DIR=/srv/music
+SPOTIFY_DIST_DIR=/opt/music-app/dist/client
+SPOTIFY_CACHE_DIR=/var/lib/music-app/cache
+SPOTIFY_REQUEST_SIGNING_SECRET=<random-request-secret>
+SPOTIFY_MEDIA_SIGNING_SECRET=<different-random-media-secret>
+SPOTIFY_PROXY_HOSTNAMES=music.example.com
+SPOTIFY_TRUST_LOCAL_NETWORK=0
+SPOTIFY_LIBRARY_OWNER_EMAILS=
+SPOTIFY_LIBRARY_OWNER_USER_IDS=<immutable-account-id>
 ```
 
-The sync copies audio, cover, lyrics, and `.spotify.json` sidecar files. It does
-not delete remote files.
+The reverse proxy should terminate TLS, forward authenticated API routes, and
+serve the private media service without exposing its port directly. Deployment
+health checks, real service labels, DNS records, and host paths belong in the
+private runbook.
 
-The `mini:*` scripts try `m4mini-ts`, `hermes@100.121.144.60`,
-`m4mini.local`, then `hermes@192.168.1.240`. Override with `MINI_HOST=...` for
-one host or `MINI_HOSTS="host1 host2"` for a custom ordered list.
+## Cloudflare deployment
 
-## Cloudflare Worker Deployment
-
-Deploy the Worker backend:
+Apply versioned D1 migrations before deploying code; production requests never
+run schema DDL:
 
 ```bash
 bun run db:migrate:remote
 bun run deploy
 ```
 
-D1 changes live in `db/d1-migrations`. Apply them explicitly before deploying;
-the production request path never runs schema DDL. Use
-`bun run db:migrate:local` when initializing a local Wrangler database.
-
-The active `wrangler.jsonc` contains:
-
-```json
-"workers_dev": true,
-"MAC_MINI_ORIGIN": "https://music.streamarena.xyz"
-```
-
-Set or rotate the Worker secret:
+Set `MAC_MINI_ORIGIN` to the hardened public reverse-proxy origin. Provision two
+independent secrets without placing their values in configuration. Each Worker
+secret must match only its same-purpose private-host secret:
 
 ```bash
-wrangler secret put MAC_MINI_PROXY_TOKEN
+wrangler secret put MAC_MINI_REQUEST_SIGNING_SECRET
+wrangler secret put MAC_MINI_MEDIA_SIGNING_SECRET
+wrangler secret put SPOTIFY_LIBRARY_OWNER_USER_IDS
 ```
 
-Mac mini server env lives at `/Users/hermes/.config/spotify/env` and should
-include:
+The owner-id binding is secret-managed so a public configuration file does not
+publish an account identifier. Owner emails, when used, should be managed the
+same way.
 
-```bash
-HOST=0.0.0.0
-PORT=5174
-SPOTIFY_MUSIC_DIR=/Users/hermes/Music
-SPOTIFY_DIST_DIR=/Users/hermes/Developer/spotify/dist/client
-SPOTIFY_CACHE_DIR=/Users/hermes/Developer/spotify/cache
-SPOTIFY_ARTWORK_LOOKUP=1
-SPOTIFY_ARTWORK_COUNTRY=GB
-SPOTIFY_PROXY_TOKEN=...
-SPOTIFY_PROXY_HOSTNAMES=music.streamarena.xyz
-SPOTIFY_TRUST_LOCAL_NETWORK=0
-SPOTIFY_LIBRARY_OWNER_EMAILS=
-SPOTIFY_LIBRARY_OWNER_USER_IDS=422ecfe9-bda3-4ac5-9eef-bcaa1176ff42
-SPOTIFY_DNS_WATCH_NAME=music.streamarena.xyz
-```
+For an existing bearer-token deployment, roll over without a trust gap:
 
-## Verification
+1. Install the private-host build with both new secrets, the old
+   `SPOTIFY_PROXY_TOKEN`, and `SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN=1`.
+2. Install the updated Caddy route. It stops injecting the bearer, strips
+   caller-supplied proxy headers on direct media traffic, and temporarily routes
+   both signed envelopes and explicit legacy headers to the Bun verifier.
+3. Add both Worker secrets and deploy the signed-request Worker.
+4. Set `SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN=0`, remove the old token, and restart
+   the private service. Legacy mode is opt-in and exists only for this rollover.
 
-Useful checks after deploy:
+Use `bun run upload` for a Wrangler dry run. Use `bun run cf-typegen` whenever
+bindings change and review the generated type diff.
 
-```bash
-bun run typecheck
-bun run lint
-bun run build
-bun run mini:check
-bun run mini:install-caddy
-bun run mini:install-dns-watch
-curl -I https://music.streamarena.xyz
-curl -sS -o /dev/null -w "%{http_code}\n" https://spotify.erlinhoxha.workers.dev/api/auth/session
-```
+## API surface
 
-Expected behavior:
+Representative authenticated routes include:
 
-- Direct Caddy app returns `200`.
-- Worker backend is reachable on `workers.dev`.
-- `mini:check` also traverses public DNS, TLS, Caddy, and the Worker session
-  route so a missing public hostname cannot be hidden by healthy loopback checks.
-- Audio range requests through Caddy return `206`.
-- Direct Mac mini API requests without the proxy token return `401` on public
-  hostnames.
-- DNS watch logs show `dns_ok` in
-  `/Users/hermes/.local/state/spotify/dns-watch.log`.
-- Mac mini direct health check returns `200`.
+- `GET /api/home`, `/api/search-index`, `/api/library`, and `/api/liked`
+- `GET /api/playlist/:id` and `POST /api/playlist/:id/reorder`
+- `GET`, `POST`, and `PATCH /api/songs/*`
+- `POST /api/songs/spotify` and related bounded import routes
+- `GET /api/files/*` and `/api/artwork/*`
+- `GET`, `POST`, and `DELETE /api/likes`
+- `GET /api/auth/session`, `GET /api/auth/me`
+- `POST /api/auth/signin` and `POST /api/auth/signout`
 
-## API Surface
+Consult the route definitions and tests for the authoritative contract.
 
-- `GET /api/home`
-- `GET /api/search-index`
-- `GET /api/music/source`
-- `GET /api/library`
-- `GET /api/liked`
-- `GET /api/playlist/:id`
-- `POST /api/playlist/:id/reorder`
-- `GET /api/songs`
-- `POST /api/songs`
-- `GET /api/songs/:id`
-- `PATCH /api/songs/:id`
-- `POST /api/songs/:id/assets`
-- `POST /api/songs/spotify`
-- `POST /api/songs/spotify/file`
-- `POST /api/songs/spotify/batch`
-- `GET /api/songs/spotify/cover`
-- `GET /api/files/*`
-- `GET /api/files/local/*`
-- `GET /api/artwork/*`
-- `GET /api/artwork/local/*`
-- `GET /api/artwork/r2/*`
-- `GET/POST/DELETE /api/likes`
-- `POST /api/register`
-- `GET /api/auth/session`
-- `GET /api/auth/me`
-- `POST /api/auth/signin`
-- `POST /api/auth/signout`
+## Licensing and third parties
 
-## Scripts
-
-- `bun run dev` - local Vite/Worker dev server.
-- `bun run build` - production build for Worker and client assets.
-- `bun run deploy` - build and deploy to Cloudflare.
-- `bun run upload` - build and dry-run deploy.
-- `bun run lint` - ESLint.
-- `bun run local:music` - run the Bun local music server.
-- `bun run mini:deploy` - deploy build/server to Mac mini.
-- `bun run mini:install-server` - install Mac mini launchd app service.
-- `bun run mini:install-caddy` - install direct Caddy route.
-- `bun run mini:install-dns-watch` - install DNS drift watcher launchd service.
-- `bun run mini:sync-music` - sync music files to Mac mini.
-- `bun run mini:check` - verify Mac mini health.
-- `bun run cf-typegen` - regenerate Cloudflare binding types.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The presence of a provider
+adapter does not grant rights to download, redistribute, or retain provider
+media.

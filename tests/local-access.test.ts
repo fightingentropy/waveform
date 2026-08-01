@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   allowsImplicitLocalAccess,
-  requestRequiresProxyToken,
+  requestRequiresPrivateProxyAuth,
 } from "../src/server/local-access";
 
 const noProxyHostnames = new Set<string>();
 
 describe("local music server access policy", () => {
-  test("trusts loopback host and peer without a proxy token", () => {
-    expect(requestRequiresProxyToken({
+  test("trusts loopback host and peer without private-proxy auth", () => {
+    expect(requestRequiresPrivateProxyAuth({
       hostname: "127.0.0.1",
       proxyHostnames: noProxyHostnames,
       trustLocalNetwork: false,
@@ -20,9 +20,9 @@ describe("local music server access policy", () => {
     })).toBe(true);
   });
 
-  test("requires a proxy token for LAN and Tailscale requests by default", () => {
+  test("requires private-proxy auth for LAN and overlay-network requests by default", () => {
     for (const hostname of ["192.168.1.240", "100.121.144.60", "m4mini.local", "fd7a:115c:a1e0::1"]) {
-      expect(requestRequiresProxyToken({
+      expect(requestRequiresPrivateProxyAuth({
         hostname,
         proxyHostnames: noProxyHostnames,
         trustLocalNetwork: false,
@@ -49,7 +49,7 @@ describe("local music server access policy", () => {
   });
 
   test("always requires a token for configured proxy hostnames", () => {
-    expect(requestRequiresProxyToken({
+    expect(requestRequiresPrivateProxyAuth({
       hostname: "music.streamarena.xyz",
       proxyHostnames: new Set(["music.streamarena.xyz"]),
       trustLocalNetwork: true,

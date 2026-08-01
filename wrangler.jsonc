@@ -50,7 +50,6 @@
 	},
 	"vars": {
 		"PLAYLISTS_EDITABLE": "1",
-		"SPOTIFY_LIBRARY_OWNER_USER_IDS": "422ecfe9-bda3-4ac5-9eef-bcaa1176ff42",
 		"AUTH_TRUST_HOST": "true",
 		"EMAIL_FROM": "noreply@streamarena.xyz",
 		"APP_ORIGIN": "https://music.streamarena.xyz",

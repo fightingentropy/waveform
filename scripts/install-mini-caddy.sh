@@ -34,8 +34,9 @@ Environment:
   CADDY_SERVICE_LABEL    Optional explicit launchd label. Otherwise the script
                          detects the installed current or legacy shared service.
 
-The script reads SPOTIFY_PROXY_TOKEN from /Users/hermes/.config/spotify/env on
-the Mac mini and injects it only into the remote Caddyfile.
+Worker-to-private-host requests carry a short-lived HMAC signature. Caddy routes
+requests that present the signature envelope; the Bun service verifies the HMAC,
+expiry, nonce, method, target, and user context before authorizing them.
 USAGE
 }
 
@@ -75,26 +76,11 @@ ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$MINI_HOST" \
   "SPOTIFY_DOMAIN='$SPOTIFY_DOMAIN' SPOTIFY_WORKER_HOST='$SPOTIFY_WORKER_HOST' SPOTIFY_UPSTREAM='$SPOTIFY_UPSTREAM' CADDYFILE='$CADDYFILE' CADDY_BIN='$CADDY_BIN' CADDY_SERVICE_LABEL='$CADDY_SERVICE_LABEL' bash -s" <<'REMOTE'
 set -euo pipefail
 
-env_file="/Users/hermes/.config/spotify/env"
 state_dir="/Users/hermes/.local/state/spotify"
 mkdir -p "$state_dir" "$(dirname "$CADDYFILE")"
 
 if [[ ! -x "$CADDY_BIN" ]]; then
   echo "Missing Caddy binary at $CADDY_BIN" >&2
-  exit 1
-fi
-
-if [[ ! -f "$env_file" ]]; then
-  echo "Missing Spotify env file at $env_file" >&2
-  exit 1
-fi
-
-proxy_token="$(
-  awk -F= '$1 == "SPOTIFY_PROXY_TOKEN" {print substr($0, length($1) + 2); exit}' "$env_file"
-)"
-
-if [[ -z "$proxy_token" ]]; then
-  echo "SPOTIFY_PROXY_TOKEN is empty in $env_file" >&2
   exit 1
 fi
 
@@ -119,12 +105,12 @@ if [[ ! -f "$CADDYFILE" ]]; then
 fi
 
 tmp="$(mktemp)"
-sudo python3 - "$CADDYFILE" "$tmp" "$SPOTIFY_DOMAIN" "$SPOTIFY_WORKER_HOST" "$SPOTIFY_UPSTREAM" "$proxy_token" <<'PY'
+sudo python3 - "$CADDYFILE" "$tmp" "$SPOTIFY_DOMAIN" "$SPOTIFY_WORKER_HOST" "$SPOTIFY_UPSTREAM" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-caddyfile, tmp, domain, worker_host, upstream, token = sys.argv[1:]
+caddyfile, tmp, domain, worker_host, upstream = sys.argv[1:]
 path = Path(caddyfile)
 text = path.read_text() if path.exists() else "{\n\tadmin off\n\tauto_https disable_redirects\n}\n"
 
@@ -166,17 +152,20 @@ text = remove_named_site_blocks(text, {
     "https://spotify.streamarena.xyz",
 })
 
-quoted_token = caddy_quote(token)
 quoted_worker = caddy_quote(worker_host)
 
 block = f"""
 {begin}
 (spotify_local_public) {{
 \treverse_proxy {upstream} {{
+\t\theader_up -x-spotify-proxy-version
+\t\theader_up -x-spotify-proxy-expiry
+\t\theader_up -x-spotify-proxy-nonce
+\t\theader_up -x-spotify-proxy-signature
+\t\theader_up -x-spotify-proxy-token
 \t\theader_up -x-spotify-user-id
 \t\theader_up -x-spotify-user-email
 \t\theader_up -x-spotify-user-name
-\t\theader_up x-spotify-proxy-token {quoted_token}
 \t\tlb_try_duration 30s
 \t\tlb_try_interval 250ms
 \t\tflush_interval -1
@@ -221,11 +210,23 @@ https://{domain} {{
 \t\tX-Frame-Options "DENY"
 \t}}
 
-\t@trusted_spotify_proxy {{
+\t@private_worker_proxy {{
 \t\tpath /api/*
-\t\theader x-spotify-proxy-token {quoted_token}
+\t\theader x-spotify-proxy-version v1
+\t\theader x-spotify-proxy-signature *
 \t}}
-\thandle @trusted_spotify_proxy {{
+\thandle @private_worker_proxy {{
+\t\timport spotify_local_trusted
+\t}}
+
+\t# Migration-only routing: the Bun service still validates the legacy token
+\t# and rejects it unless SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN=1. Caddy never
+\t# injects the token, and this matcher can remain harmless after cutover.
+\t@legacy_worker_proxy {{
+\t\tpath /api/*
+\t\theader x-spotify-proxy-token *
+\t}}
+\thandle @legacy_worker_proxy {{
 \t\timport spotify_local_trusted
 \t}}
 

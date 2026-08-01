@@ -309,6 +309,7 @@ export function invalidateLibraryApiCache(accountScope?: string): void {
       path === "/api/liked" ||
       path === "/api/likes" ||
       path === "/api/stats/home" ||
+      path === "/api/stats/listening" ||
       path.startsWith("/api/music/source") ||
       path.startsWith("/api/library") ||
       path.startsWith("/api/playlist/")
@@ -431,6 +432,16 @@ export type StatsHomePayload = {
   recentlyPlayed: PlayerSong[];
   mostPlayed: { song: PlayerSong; playCount: number }[];
 };
+
+export type ListeningWeek = {
+  weekStart: string;
+  weekEnd: string;
+  minutesListened: number;
+  topSong: PlayerSong | null;
+  topArtist: { name: string; image: string | null } | null;
+};
+
+export type ListeningStatsPayload = { weeks: ListeningWeek[] };
 
 // A globally-trending track from the Discover row. Not in the library. When
 // `staged` is true it's already pre-downloaded into the Mac-mini's hidden

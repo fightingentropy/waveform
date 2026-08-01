@@ -34,15 +34,15 @@ describe("canonicalizeLocalMediaUrl", () => {
 });
 
 describe("coarseLocalMediaExpiry", () => {
-  test("is stable inside an hour bucket and remains within the 24-hour verifier window", () => {
+  test("is stable inside a five-minute bucket and remains within the one-hour verifier window", () => {
     const bucketStart = 1_800_000_000;
     const first = coarseLocalMediaExpiry(bucketStart + 1);
-    const last = coarseLocalMediaExpiry(bucketStart + 3_599);
+    const last = coarseLocalMediaExpiry(bucketStart + 299);
 
     expect(first).toBe(last);
     expect(first).toBe(bucketStart + LOCAL_MEDIA_SIGNATURE_TTL_SECONDS);
-    expect(first).toBeGreaterThan(bucketStart + 3_599);
-    expect(first).toBeLessThanOrEqual(bucketStart + 3_599 + LOCAL_MEDIA_SIGNATURE_TTL_SECONDS);
+    expect(first).toBeGreaterThan(bucketStart + 299);
+    expect(first).toBeLessThanOrEqual(bucketStart + 299 + LOCAL_MEDIA_SIGNATURE_TTL_SECONDS);
   });
 });
 

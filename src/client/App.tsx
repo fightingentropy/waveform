@@ -25,6 +25,7 @@ const loadEventsPage = () => import("@/client/pages/EventsPage");
 const loadPlaylistPage = () => import("@/client/pages/PlaylistPage");
 const loadUploadPage = () => import("@/client/pages/UploadPage");
 const loadSettingsPage = () => import("@/client/pages/SettingsPage");
+const loadListeningStatsPage = () => import("@/client/pages/ListeningStatsPage");
 const loadSignInPage = () => import("@/client/pages/SignInPage");
 type RoutePrefetcher = () => Promise<unknown>;
 const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
@@ -38,6 +39,7 @@ const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
   loadPlaylistPage,
   loadUploadPage,
   loadSettingsPage,
+  loadListeningStatsPage,
   loadSignInPage,
 ];
 const prefetchedRouteModules = new Set<RoutePrefetcher>();
@@ -54,6 +56,7 @@ const EventsPage = lazy(loadEventsPage);
 const PlaylistPage = lazy(loadPlaylistPage);
 const UploadPage = lazy(loadUploadPage);
 const SettingsPage = lazy(loadSettingsPage);
+const ListeningStatsPage = lazy(loadListeningStatsPage);
 const SignInPage = lazy(loadSignInPage);
 
 function RouteLoading({ label = "Loading..." }: { label?: string }) {
@@ -214,6 +217,7 @@ const MOBILE_STACK_ROUTES = [
   { match: (path: string) => path === "/events", label: "Events", fallback: "/library" },
   { match: (path: string) => path === "/upload", label: "Create", fallback: "/library" },
   { match: (path: string) => path === "/settings", label: "Settings", fallback: "/" },
+  { match: (path: string) => path === "/listening-stats", label: "Listening stats", fallback: "/profile" },
   { match: (path: string) => path === "/profile", label: "Profile", fallback: "/" },
 ] as const;
 
@@ -346,6 +350,10 @@ function Shell() {
           <Route path="/playlist/:id" element={lazyRoute(<PlaylistPage />, "Loading playlist...")} />
           <Route path="/upload" element={lazyRoute(<UploadPage />, "Loading upload...")} />
           <Route path="/settings" element={lazyRoute(<SettingsPage />, "Loading settings...")} />
+          <Route
+            path="/listening-stats"
+            element={lazyRoute(<ListeningStatsPage />, "Loading listening stats...")}
+          />
           <Route path="/profile" element={lazyRoute(<ProfilePage />, "Loading profile...")} />
           <Route path="/signin" element={lazyRoute(<SignInPage />, "Loading sign in...")} />
           <Route path="/register" element={<Navigate to="/signin" replace />} />

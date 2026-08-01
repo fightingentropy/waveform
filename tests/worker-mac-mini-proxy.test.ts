@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   shouldForwardMacMiniUserForPathname,
   shouldProxyMusicPathnameToMacMini,
+} from "../src/worker/mac-mini-proxy";
+import {
   spotiflacStatusKeyForEndpoint,
   withSecurityHeaders,
 } from "../src/worker/index";

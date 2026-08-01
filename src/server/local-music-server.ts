@@ -31,6 +31,8 @@ import {
   RemoteUrlError,
   fetchPublicHttpUrl,
 } from "../lib/safe-fetch";
+import { parseByteRangeHeader } from "../lib/http-range";
+import { sniffUploadFile } from "../lib/upload-media-sniff";
 import type { PlayerSong } from "../types/player";
 import {
   DEFAULT_YOUTUBE_PREVIEW_CONFIG,
@@ -44,8 +46,9 @@ import {
 } from "./youtube-preview";
 import {
   allowsImplicitLocalAccess,
-  requestRequiresProxyToken,
+  requestRequiresPrivateProxyAuth,
 } from "./local-access";
+import { createPrivateProxyAuthenticator } from "./proxy-auth";
 
 const execFileAsync = promisify(execFile);
 
@@ -168,14 +171,12 @@ const LOCAL_USER = {
   name: "Erlin",
   image: "/profile.jpg",
 };
-const PROXY_USER_ID_HEADER = "x-spotify-user-id";
-const PROXY_USER_EMAIL_HEADER = "x-spotify-user-email";
-const PROXY_USER_NAME_HEADER = "x-spotify-user-name";
 const MEDIA_USER_SEARCH_PARAM = "spotify_user";
 const MEDIA_SCOPE_SEARCH_PARAM = "spotify_scope";
 const MEDIA_EXPIRY_SEARCH_PARAM = "spotify_exp";
 const MEDIA_SIGNATURE_SEARCH_PARAM = "spotify_sig";
-const MEDIA_SIGNATURE_TTL_SECONDS = 24 * 60 * 60;
+const MEDIA_SIGNATURE_TTL_SECONDS = 60 * 60;
+const LEGACY_MEDIA_SIGNATURE_TTL_SECONDS = 24 * 60 * 60;
 
 const cwd = process.cwd();
 const defaultDistDir = existsSync(resolve(cwd, "dist/client"))
@@ -199,7 +200,16 @@ const idleTimeoutSeconds = Number.isFinite(configuredIdleTimeoutSeconds)
   : 120;
 const remoteArtworkLookupEnabled = process.env.SPOTIFY_ARTWORK_LOOKUP !== "0";
 const artworkLookupCountry = process.env.SPOTIFY_ARTWORK_COUNTRY || "GB";
-const proxyToken = process.env.SPOTIFY_PROXY_TOKEN || "";
+const requestSigningSecret = process.env.SPOTIFY_REQUEST_SIGNING_SECRET || "";
+const legacyProxyToken = process.env.SPOTIFY_PROXY_TOKEN || "";
+const allowLegacyProxyToken = process.env.SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN === "1";
+const mediaSigningSecret =
+  process.env.SPOTIFY_MEDIA_SIGNING_SECRET || (allowLegacyProxyToken ? legacyProxyToken : "");
+const privateProxyAuthenticator = createPrivateProxyAuthenticator({
+  requestSigningSecret,
+  legacyToken: legacyProxyToken,
+  allowLegacyToken: allowLegacyProxyToken,
+});
 const trustLocalNetwork = process.env.SPOTIFY_TRUST_LOCAL_NETWORK === "1";
 const proxyHostnames = new Set(
   (process.env.SPOTIFY_PROXY_HOSTNAMES || "")
@@ -359,13 +369,12 @@ function rememberRequestPeer(request: Request, address: string | null): void {
   requestPeerAddresses.set(request, address);
 }
 
-function hasValidProxyToken(request: Request): boolean {
-  const token = request.headers.get("x-spotify-proxy-token") || "";
-  return Boolean(proxyToken && timingSafeEqualStr(token, proxyToken));
+function hasValidPrivateProxyRequest(request: Request): boolean {
+  return privateProxyAuthenticator.authenticate(request).authenticated;
 }
 
-function requestNeedsProxyToken(request: Request): boolean {
-  return requestRequiresProxyToken({
+function requestNeedsPrivateProxyAuth(request: Request): boolean {
+  return requestRequiresPrivateProxyAuth({
     hostname: requestHostname(request),
     proxyHostnames,
     trustLocalNetwork,
@@ -387,7 +396,7 @@ function isMutationRequest(request: Request): boolean {
 
 function authorizeMutationRequest(request: Request): Response | null {
   if (!isMutationRequest(request)) return null;
-  if (hasValidProxyToken(request) || allowsImplicitLocalUser(request)) return null;
+  if (hasValidPrivateProxyRequest(request) || allowsImplicitLocalUser(request)) return null;
   return json({ error: "Unauthorized" }, { status: 401 });
 }
 
@@ -496,41 +505,6 @@ function contentTypeForPath(path: string): string {
   }
 }
 
-type ParsedRange = { start: number; end: number } | "unsatisfiable" | null;
-
-// Returns a satisfiable byte range, "unsatisfiable" when the Range header is
-// well-formed `bytes=` syntax that cannot be satisfied (so the caller should
-// answer 416), or null when there is no Range header / the header is malformed
-// and should simply be ignored (RFC 7233 §3.1).
-function parseRangeHeader(rangeHeader: string | null, size: number): ParsedRange {
-  if (!rangeHeader || !rangeHeader.startsWith("bytes=") || size <= 0) return null;
-  const value = rangeHeader.slice("bytes=".length).trim();
-  if (!value || value.includes(",")) return null;
-  const dash = value.indexOf("-");
-  if (dash < 0) return null;
-
-  const startRaw = value.slice(0, dash);
-  const endRaw = value.slice(dash + 1);
-  if (!startRaw) {
-    if (!/^\d+$/.test(endRaw)) return null;
-    const suffixLength = Number(endRaw);
-    if (!Number.isFinite(suffixLength)) return null;
-    if (suffixLength <= 0) return "unsatisfiable";
-    return { start: Math.max(0, size - suffixLength), end: size - 1 };
-  }
-
-  if (!/^\d+$/.test(startRaw)) return null;
-  const start = Number(startRaw);
-  if (!Number.isFinite(start) || start < 0) return null;
-  if (start >= size) return "unsatisfiable";
-  if (endRaw && !/^\d+$/.test(endRaw)) return null;
-  let end = endRaw ? Number(endRaw) : size - 1;
-  if (!Number.isFinite(end)) return null;
-  if (end < start) return "unsatisfiable";
-  if (end >= size) end = size - 1;
-  return { start, end };
-}
-
 async function serveFile(
   path: string,
   request: Request,
@@ -563,7 +537,7 @@ async function serveFile(
   headers.set("last-modified", mtime.toUTCString());
   headers.set("etag", `W/"${size.toString(16)}-${Math.floor(mtimeMs).toString(16)}"`);
 
-  const range = parseRangeHeader(request.headers.get("range"), size);
+  const range = parseByteRangeHeader(request.headers.get("range"), size);
   if (range === "unsatisfiable") {
     headers.set("content-range", `bytes */${size}`);
     headers.set("content-length", "0");
@@ -1159,13 +1133,14 @@ async function getLibrary(source: LibrarySource, force = false): Promise<Library
 }
 
 function currentUserIdentityForRequest(request: Request): RequestUserIdentity | null {
-  if (hasValidProxyToken(request)) {
-    const id = request.headers.get(PROXY_USER_ID_HEADER)?.trim() || "";
-    if (!id) return null;
+  const proxyAuth = privateProxyAuthenticator.authenticate(request);
+  if (proxyAuth.authenticated) {
+    const identity = proxyAuth.identity;
+    if (!identity) return null;
     return {
-      id,
-      email: request.headers.get(PROXY_USER_EMAIL_HEADER)?.trim() || null,
-      name: request.headers.get(PROXY_USER_NAME_HEADER)?.trim() || null,
+      id: identity.id,
+      email: identity.email || null,
+      name: identity.name,
       local: false,
     };
   }
@@ -1213,8 +1188,14 @@ function mediaScopeForIdentity(identity: RequestUserIdentity): "shared" | "user"
   return isLocalLibraryOwner(identity) ? "shared" : "user";
 }
 
-function mediaSignature(userId: string, scope: string, pathname: string, expiresAt: string): string {
-  return createHmac("sha256", proxyToken)
+function mediaSignatureWithSecret(
+  secret: string,
+  userId: string,
+  scope: string,
+  pathname: string,
+  expiresAt: string,
+): string {
+  return createHmac("sha256", secret)
     .update(userId)
     .update("\0")
     .update(scope)
@@ -1226,8 +1207,12 @@ function mediaSignature(userId: string, scope: string, pathname: string, expires
     .slice(0, 40);
 }
 
+function mediaSignature(userId: string, scope: string, pathname: string, expiresAt: string): string {
+  return mediaSignatureWithSecret(mediaSigningSecret, userId, scope, pathname, expiresAt);
+}
+
 function appendMediaSignature(mediaUrl: string | undefined, identity: RequestUserIdentity | null): string | undefined {
-  if (!mediaUrl || !proxyToken || !identity || identity.local) return mediaUrl;
+  if (!mediaUrl || !mediaSigningSecret || !identity || identity.local) return mediaUrl;
   let parsed: URL;
   try {
     parsed = new URL(mediaUrl, "http://spotify.local");
@@ -1334,22 +1319,50 @@ async function handleMediaRefresh(request: Request): Promise<Response> {
 }
 
 function hasValidMediaSignature(url: URL): boolean {
-  if (!proxyToken) return false;
   const userId = url.searchParams.get(MEDIA_USER_SEARCH_PARAM)?.trim() || "";
   const scope = url.searchParams.get(MEDIA_SCOPE_SEARCH_PARAM)?.trim() || "";
   const expiresAt = url.searchParams.get(MEDIA_EXPIRY_SEARCH_PARAM)?.trim() || "";
   const signature = url.searchParams.get(MEDIA_SIGNATURE_SEARCH_PARAM)?.trim() || "";
   const expirySeconds = Number(expiresAt);
   const nowSeconds = Math.floor(Date.now() / 1000);
-  return Boolean(
+  const structurallyValid = Boolean(
     userId &&
     (scope === "shared" || scope === "user") &&
     Number.isSafeInteger(expirySeconds) &&
     expirySeconds > nowSeconds &&
-    expirySeconds <= nowSeconds + MEDIA_SIGNATURE_TTL_SECONDS + 60 &&
-    signature &&
-    timingSafeEqualStr(signature, mediaSignature(userId, scope, url.pathname, expiresAt)),
+    signature
   );
+  if (!structurallyValid) return false;
+  if (
+    mediaSigningSecret &&
+    expirySeconds <= nowSeconds + MEDIA_SIGNATURE_TTL_SECONDS + 60 &&
+    timingSafeEqualStr(signature, mediaSignature(userId, scope, url.pathname, expiresAt))
+  ) {
+    return true;
+  }
+  // Rollover-only acceptance for URLs emitted by the former 24-hour bearer-key
+  // signer. It disappears as soon as legacy proxy mode is disabled.
+  return Boolean(
+    allowLegacyProxyToken &&
+    legacyProxyToken &&
+    expirySeconds <= nowSeconds + LEGACY_MEDIA_SIGNATURE_TTL_SECONDS + 60 &&
+    timingSafeEqualStr(
+      signature,
+      mediaSignatureWithSecret(legacyProxyToken, userId, scope, url.pathname, expiresAt),
+    )
+  );
+}
+
+function hasValidDirectMediaRequest(request: Request, url: URL): boolean {
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD") return false;
+  if (
+    !url.pathname.startsWith("/api/files/local/") &&
+    !url.pathname.startsWith("/api/artwork/local/")
+  ) {
+    return false;
+  }
+  return hasValidMediaSignature(url);
 }
 
 function librarySourceForMediaRequest(request: Request, url: URL): LibrarySource | null {
@@ -2550,7 +2563,7 @@ function discoverEntryToSong(entry: DiscoverStagingEntry): PlayerSong {
 }
 
 // Discover staging files live in the shared root but are streamed by clients
-// that can't present the proxy token or a session cookie — notably the native
+// that can't present private-proxy auth or a session cookie — notably the native
 // iOS AVPlayer, which fetches the URL directly (bypassing the Worker). Sign
 // their media URLs for the shared scope, exactly as songForRequest does for
 // normal library songs, so hasValidMediaSignature() authorizes them. Without
@@ -3093,9 +3106,15 @@ async function handleSongUpload(source: LibrarySource, request: Request): Promis
   }
   const invalidAudio = validateUploadFile(audio, "Audio file", MAX_AUDIO_BYTES, AUDIO_EXTENSIONS, "audio/");
   if (invalidAudio) return invalidAudio;
+  const sniffedAudio = await sniffUploadFile(audio, "audio");
+  if (!sniffedAudio) return json({ error: "Audio file content is not supported" }, { status: 415 });
+  const sniffedImage = image instanceof File && image.size > 0
+    ? await sniffUploadFile(image, "image")
+    : null;
   if (image instanceof File && image.size > 0) {
     const invalidImage = validateUploadFile(image, "Image file", MAX_IMAGE_BYTES, IMAGE_EXTENSIONS, "image/");
     if (invalidImage) return invalidImage;
+    if (!sniffedImage) return json({ error: "Image file content is not supported" }, { status: 415 });
   }
   const lyricsText = typeof form.get("lyricsText") === "string" ? String(form.get("lyricsText")).trim() : "";
   if (byteLength(lyricsText) > MAX_LYRICS_BYTES) {
@@ -3128,9 +3147,7 @@ async function handleSongUpload(source: LibrarySource, request: Request): Promis
     );
   }
 
-  const audioExt = AUDIO_EXTENSIONS.has(extname(audio.name).toLowerCase())
-    ? extname(audio.name).toLowerCase()
-    : ".mp3";
+  const audioExt = sniffedAudio.extension;
   const stem = sanitizeFileName(`${artist} - ${title}`);
   const preferredAudioPath = existingEntry && replaceExisting
     ? resolve(dirname(existingEntry.absolutePath), `${stem}${audioExt}`)
@@ -3166,9 +3183,7 @@ async function handleSongUpload(source: LibrarySource, request: Request): Promis
     };
 
     if (image instanceof File && image.size > 0) {
-      const imageExt = IMAGE_EXTENSIONS.has(extname(image.name).toLowerCase())
-        ? extname(image.name).toLowerCase()
-        : ".jpg";
+      const imageExt = sniffedImage?.extension || ".jpg";
       const coverName = `${basename(audioPath, extname(audioPath))}.cover${imageExt}`;
       await saveFile(image, resolve(dirname(audioPath), coverName));
       sidecar.coverFile = coverName;
@@ -3360,9 +3375,13 @@ async function handleSongAssets(source: LibrarySource, id: string, request: Requ
   const image = form.get("image");
   const lyricsFile = form.get("lyricsFile");
   const lyricsText = typeof form.get("lyricsText") === "string" ? String(form.get("lyricsText")).trim() : "";
+  const sniffedImage = image instanceof File && image.size > 0
+    ? await sniffUploadFile(image, "image")
+    : null;
   if (image instanceof File && image.size > 0) {
     const invalidImage = validateUploadFile(image, "Image file", MAX_IMAGE_BYTES, IMAGE_EXTENSIONS, "image/");
     if (invalidImage) return invalidImage;
+    if (!sniffedImage) return json({ error: "Image file content is not supported" }, { status: 415 });
   }
   if (lyricsFile instanceof File && lyricsFile.size > 0) {
     const invalidLyrics = validateUploadFile(lyricsFile, "Lyrics file", MAX_LYRICS_BYTES, LYRICS_EXTENSIONS, "text/");
@@ -3373,9 +3392,7 @@ async function handleSongAssets(source: LibrarySource, id: string, request: Requ
   }
 
   if (image instanceof File && image.size > 0) {
-    const imageExt = IMAGE_EXTENSIONS.has(extname(image.name).toLowerCase())
-      ? extname(image.name).toLowerCase()
-      : ".jpg";
+    const imageExt = sniffedImage?.extension || ".jpg";
     const coverName = `${stem}.cover${imageExt}`;
     await saveFile(image, resolve(dirname(entry.absolutePath), coverName));
     sidecar.coverFile = coverName;
@@ -3601,7 +3618,11 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
 async function handleApi(request: Request, url: URL): Promise<Response> {
   const pathname = url.pathname;
 
-  if (requestNeedsProxyToken(request) && !hasValidProxyToken(request)) {
+  if (
+    requestNeedsPrivateProxyAuth(request) &&
+    !hasValidPrivateProxyRequest(request) &&
+    !hasValidDirectMediaRequest(request, url)
+  ) {
     return json({ error: "Unauthorized" }, { status: 401 });
   }
   const unauthorizedMutation = authorizeMutationRequest(request);
@@ -3648,9 +3669,9 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     }
     const invalidImage = validateUploadFile(image, "Image file", MAX_IMAGE_BYTES, IMAGE_EXTENSIONS, "image/");
     if (invalidImage) return invalidImage;
-    const imageExt = IMAGE_EXTENSIONS.has(extname(image.name).toLowerCase())
-      ? extname(image.name).toLowerCase()
-      : ".jpg";
+    const sniffedImage = await sniffUploadFile(image, "image");
+    if (!sniffedImage) return json({ error: "Image file content is not supported" }, { status: 415 });
+    const imageExt = sniffedImage.extension;
     await mkdir(profileImageDir, { recursive: true });
     await Promise.all(
       [".jpg", ".jpeg", ".png", ".webp", ".gif"].map((ext) =>
