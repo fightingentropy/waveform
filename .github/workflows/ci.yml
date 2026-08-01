@@ -21,6 +21,8 @@ jobs:
         with:
           bun-version: 1.3.10
       - run: bun install --frozen-lockfile
+      - name: Install mobile plugin dependencies used by the root test suite
+        run: npm ci --prefix mobile --ignore-scripts
       - run: bun run check
 
   mobile:
