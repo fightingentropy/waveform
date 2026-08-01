@@ -1,11 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+  getNowPlayingDownloadAction,
   getScopedDownloadStatus,
+  getUserDownloadStatus,
   offlineDownloadKey,
   planQueuedDownloads,
+  PLAYBACK_CACHE_SCOPE,
   type DownloadStatus,
 } from "../src/lib/offline-download-queue";
 import type { PlayerSong } from "../src/types/player";
+
+const nowPlayingSource = await Bun.file(
+  new URL("../src/components/player/NowPlayingSheet.tsx", import.meta.url),
+).text();
 
 function song(index: number): PlayerSong {
   return {
@@ -43,5 +50,52 @@ describe("collection download indicators", () => {
       expect(getScopedDownloadStatus({ ...queued, status }, "playlist:mix")).toBe(status);
     }
     expect(getScopedDownloadStatus(queued, `song:${item.id}`)).toBeUndefined();
+  });
+
+  test("Now Playing reflects any user-owned download but not playback prefetches", () => {
+    const item = song(2);
+    const key = offlineDownloadKey("user-1", item.id);
+    const liked = planQueuedDownloads({}, [item], "liked", "user-1").records[key];
+    const playlist = planQueuedDownloads({}, [item], "playlist:mix", "user-1").records[key];
+    const direct = planQueuedDownloads({}, [item], `song:${item.id}`, "user-1").records[key];
+    const cache = planQueuedDownloads({}, [item], PLAYBACK_CACHE_SCOPE, "user-1").records[key];
+
+    expect(getUserDownloadStatus({ ...liked, status: "ready" })).toBe("ready");
+    expect(getUserDownloadStatus({ ...playlist, status: "ready" })).toBe("ready");
+    expect(getUserDownloadStatus({ ...direct, status: "ready" })).toBe("ready");
+    expect(getUserDownloadStatus({ ...cache, status: "ready" })).toBeUndefined();
+
+    const cachedAndLiked = planQueuedDownloads(
+      { [key]: { ...cache, status: "ready" } },
+      [item],
+      "liked",
+      "user-1",
+    ).records[key];
+    expect(getUserDownloadStatus(cachedAndLiked)).toBe("ready");
+
+    const statuses: DownloadStatus[] = ["queued", "downloading", "ready", "error"];
+    for (const status of statuses) {
+      expect(getUserDownloadStatus({ ...liked, status })).toBe(status);
+    }
+  });
+
+  test("wires the user-visible policy into Now Playing", () => {
+    expect(nowPlayingSource).toContain("getUserDownloadStatus(record)");
+    expect(nowPlayingSource).toContain("const scopedStatus = getScopedDownloadStatus(record, songScope)");
+    expect(nowPlayingSource).toContain(
+      "getNowPlayingDownloadAction(displayStatus, scopedStatus)",
+    );
+  });
+
+  test("keeps inherited collection states status-only while direct pins stay actionable", () => {
+    const inheritedStatuses: DownloadStatus[] = ["queued", "downloading", "ready", "error"];
+    for (const status of inheritedStatuses) {
+      expect(getNowPlayingDownloadAction(status, undefined)).toBe("status-only");
+    }
+
+    expect(getNowPlayingDownloadAction("ready", "ready")).toBe("unpin");
+    expect(getNowPlayingDownloadAction("downloading", "downloading")).toBe("unpin");
+    expect(getNowPlayingDownloadAction("error", "error")).toBe("queue");
+    expect(getNowPlayingDownloadAction(undefined, undefined)).toBe("queue");
   });
 });

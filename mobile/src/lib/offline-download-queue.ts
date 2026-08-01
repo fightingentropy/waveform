@@ -42,6 +42,33 @@ export function getScopedDownloadStatus(
   return record?.scopes.includes(scope) ? record.status : undefined;
 }
 
+// Now Playing has no collection context, so its indicator reflects any explicit
+// user download while keeping the hidden playback-ahead cache invisible.
+export function getUserDownloadStatus(
+  record: Pick<OfflineDownloadRecord, "scopes" | "status"> | null | undefined,
+): DownloadStatus | undefined {
+  return record?.scopes.some((scope) => scope !== PLAYBACK_CACHE_SCOPE)
+    ? record.status
+    : undefined;
+}
+
+export function getNowPlayingDownloadAction(
+  displayStatus: DownloadStatus | undefined,
+  scopedStatus: DownloadStatus | undefined,
+): "queue" | "unpin" | "status-only" {
+  // Only a direct song pin can be retried or removed here. Collection-owned
+  // state is informative; its owning row/batch control manages that scope.
+  if (
+    scopedStatus === "ready" ||
+    scopedStatus === "queued" ||
+    scopedStatus === "downloading"
+  ) {
+    return "unpin";
+  }
+  if (scopedStatus === "error" || displayStatus === undefined) return "queue";
+  return "status-only";
+}
+
 // Plan a whole "Download all" insertion against one working map. The caller can
 // publish `records` in one Zustand update instead of cloning/notifying once per
 // song. Reading from the working copy also preserves the old duplicate-id

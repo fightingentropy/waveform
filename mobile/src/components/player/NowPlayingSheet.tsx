@@ -30,6 +30,11 @@ import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { useSongLike } from "@/components/song/useSongLike";
 import { colors } from "@/theme";
 import { selectionAsync } from "@/lib/haptics";
+import {
+  getNowPlayingDownloadAction,
+  getScopedDownloadStatus,
+  getUserDownloadStatus,
+} from "@/lib/offline-download-queue";
 import { isDiscoverTrack, isRadioSong, isPodcastSong } from "@/lib/player-song";
 import {
   type DownloadScope,
@@ -54,6 +59,7 @@ function PlainIconButton({
   accessibilityHint,
   selected,
   disabled = false,
+  dimWhenDisabled = true,
   size = 44,
 }: {
   children: ReactNode;
@@ -63,6 +69,7 @@ function PlainIconButton({
   accessibilityHint?: string;
   selected?: boolean;
   disabled?: boolean;
+  dimWhenDisabled?: boolean;
   size?: number;
 }) {
   return (
@@ -90,7 +97,7 @@ function PlainIconButton({
         height: size,
         alignItems: "center",
         justifyContent: "center",
-        opacity: disabled ? 0.28 : 1,
+        opacity: disabled && dimWhenDisabled ? 0.28 : 1,
       }}
     >
       {children}
@@ -138,13 +145,20 @@ function MonochromeDownloadButton({
   if (isRadioSong(song) || isDiscoverTrack(song)) return null;
 
   const songScope: DownloadScope = scope ?? `song:${song.id}`;
-  const status = record?.scopes.includes(songScope) ? record.status : undefined;
-  const active = status === "downloading" || status === "queued";
+  const scopedStatus = getScopedDownloadStatus(record, songScope);
+  const displayStatus = getUserDownloadStatus(record);
+  const active = displayStatus === "downloading" || displayStatus === "queued";
+  const scopedActive = scopedStatus === "downloading" || scopedStatus === "queued";
+  // A Liked Songs / playlist pin owns its cancellation. Now Playing still shows
+  // the shared file state, but treats inherited state as status only instead of
+  // silently changing another surface's pin.
+  const controlAction = getNowPlayingDownloadAction(displayStatus, scopedStatus);
+  const statusOnly = controlAction === "status-only";
 
   const onPress = () => {
     void selectionAsync();
-    if (status === "ready" || active) void unpinScope(song.id, songScope);
-    else void queueDownloads([song], songScope);
+    if (controlAction === "unpin") void unpinScope(song.id, songScope);
+    else if (controlAction === "queue") void queueDownloads([song], songScope);
   };
 
   const stopSquare = (
@@ -161,31 +175,45 @@ function MonochromeDownloadButton({
   return (
     <PlainIconButton
       onPress={onPress}
-      selected={status === "ready"}
+      selected={displayStatus === "ready"}
+      disabled={statusOnly}
+      dimWhenDisabled={false}
       accessibilityLabel={
-        active ? "Cancel download" : status === "ready" ? "Remove download" : "Download"
+        statusOnly
+          ? active
+            ? "Downloading"
+            : displayStatus === "ready"
+              ? "Downloaded"
+              : "Download failed"
+          : scopedActive
+            ? "Cancel download"
+            : scopedStatus === "ready"
+              ? "Remove download"
+              : displayStatus === "error"
+                ? "Retry download"
+                : "Download"
       }
     >
-      {status === "downloading" ? (
+      {displayStatus === "downloading" ? (
         <DownloadProgressRing
           size={21}
           progress={progress ?? 0}
           color={MONO_ACTIVE}
           trackColor="rgba(255,255,255,0.18)"
         >
-          {stopSquare}
+          {statusOnly ? null : stopSquare}
         </DownloadProgressRing>
-      ) : status === "queued" ? (
+      ) : displayStatus === "queued" ? (
         <DownloadProgressRing
           size={21}
           color={MONO_ACTIVE}
           trackColor="rgba(255,255,255,0.18)"
         >
-          {stopSquare}
+          {statusOnly ? null : stopSquare}
         </DownloadProgressRing>
-      ) : status === "ready" ? (
+      ) : displayStatus === "ready" ? (
         <CheckCircle2 size={21} color={MONO_ACTIVE} />
-      ) : status === "error" ? (
+      ) : displayStatus === "error" ? (
         <RefreshCw size={21} color={MONO_SECONDARY} />
       ) : (
         <CircleArrowDown size={21} color={MONO_IDLE} />
