@@ -48,7 +48,7 @@ export function isLocalNetworkHost(value: string): boolean {
   );
 }
 
-export function requestRequiresProxyToken(options: {
+export function requestRequiresPrivateProxyAuth(options: {
   hostname: string;
   proxyHostnames: ReadonlySet<string>;
   trustLocalNetwork: boolean;

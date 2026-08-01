@@ -10,8 +10,8 @@ const LOCAL_MEDIA_AUTH_PARAMS = new Set([
   "spotify_sig",
 ]);
 
-export const LOCAL_MEDIA_SIGNATURE_TTL_SECONDS = 24 * 60 * 60;
-export const LOCAL_MEDIA_SIGNATURE_BUCKET_SECONDS = 60 * 60;
+export const LOCAL_MEDIA_SIGNATURE_TTL_SECONDS = 60 * 60;
+export const LOCAL_MEDIA_SIGNATURE_BUCKET_SECONDS = 5 * 60;
 
 export type LocalMediaScope = "shared" | "user";
 
@@ -72,7 +72,7 @@ export function canonicalizeLocalMediaUrl(value: string): string {
 
 /**
  * Returns an expiry shared by every signature generated within the same time
- * bucket. Flooring (rather than ceiling) keeps it within the mini's 24-hour
+ * bucket. Flooring (rather than ceiling) keeps it within the mini's one-hour
  * acceptance window while preventing response ETags from changing every second.
  */
 export function coarseLocalMediaExpiry(

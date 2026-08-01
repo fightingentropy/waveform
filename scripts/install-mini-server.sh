@@ -14,7 +14,7 @@ BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
 PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-music.streamarena.xyz}"
 SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-app}"
 LIBRARY_OWNER_EMAILS="${LIBRARY_OWNER_EMAILS:-${SPOTIFY_LIBRARY_OWNER_EMAILS:-}}"
-LIBRARY_OWNER_USER_IDS="${LIBRARY_OWNER_USER_IDS:-${SPOTIFY_LIBRARY_OWNER_USER_IDS:-422ecfe9-bda3-4ac5-9eef-bcaa1176ff42}}"
+LIBRARY_OWNER_USER_IDS="${LIBRARY_OWNER_USER_IDS:-${SPOTIFY_LIBRARY_OWNER_USER_IDS:-}}"
 
 usage() {
   cat <<'USAGE'
@@ -40,7 +40,9 @@ Environment:
   BUN_BIN                Default: /opt/homebrew/bin/bun
   PROXY_HOSTNAMES        Default: music.streamarena.xyz
   LIBRARY_OWNER_EMAILS   Comma-separated account emails allowed to use the Mac mini library.
+                         When omitted, preserves the existing private-host value.
   LIBRARY_OWNER_USER_IDS Comma-separated account IDs allowed to use the Mac mini library.
+                         When omitted, preserves the existing private-host value.
   SERVICE_LABEL          Default: xyz.streamarena.spotify-app
 USAGE
 }
@@ -143,9 +145,31 @@ set_env_var SPOTIFY_MUSIC_DIR "$REMOTE_MUSIC_DIR"
 set_env_var SPOTIFY_DIST_DIR "$REMOTE_APP/dist/client"
 set_env_var SPOTIFY_CACHE_DIR "$REMOTE_APP/cache"
 set_env_var SPOTIFY_PROXY_HOSTNAMES "$PROXY_HOSTNAMES"
-set_env_var SPOTIFY_LIBRARY_OWNER_EMAILS "$LIBRARY_OWNER_EMAILS"
-set_env_var SPOTIFY_LIBRARY_OWNER_USER_IDS "$LIBRARY_OWNER_USER_IDS"
-set_env_var SPOTIFY_LIBRARY_OWNER_NAMES ""
+if [[ -n "$LIBRARY_OWNER_EMAILS" ]]; then
+  set_env_var SPOTIFY_LIBRARY_OWNER_EMAILS "$LIBRARY_OWNER_EMAILS"
+fi
+if [[ -n "$LIBRARY_OWNER_USER_IDS" ]]; then
+  set_env_var SPOTIFY_LIBRARY_OWNER_USER_IDS "$LIBRARY_OWNER_USER_IDS"
+fi
+
+read_env_var() {
+  local key="$1"
+  awk -F= -v key="$key" '$1 == key { print substr($0, length($1) + 2); exit }' "$env_file"
+}
+
+request_secret="$(read_env_var SPOTIFY_REQUEST_SIGNING_SECRET)"
+media_secret="$(read_env_var SPOTIFY_MEDIA_SIGNING_SECRET)"
+legacy_token="$(read_env_var SPOTIFY_PROXY_TOKEN)"
+allow_legacy="$(read_env_var SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN)"
+
+if [[ -z "$request_secret" && ! ( "$allow_legacy" == "1" && -n "$legacy_token" ) ]]; then
+  echo "Set SPOTIFY_REQUEST_SIGNING_SECRET in $env_file before installing the server" >&2
+  exit 1
+fi
+if [[ -z "$media_secret" && ! ( "$allow_legacy" == "1" && -n "$legacy_token" ) ]]; then
+  echo "Set SPOTIFY_MEDIA_SIGNING_SECRET in $env_file before installing the server" >&2
+  exit 1
+fi
 
 cat > "$bin_dir/spotify-run-server" <<'SCRIPT'
 #!/bin/bash

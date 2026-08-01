@@ -1,6 +1,6 @@
 import { Link, Navigate, useNavigate } from "react-router";
 import { useRef, useState } from "react";
-import { Camera, Loader2, LogOut, Settings } from "lucide-react";
+import { BarChart3, Camera, Loader2, LogOut, Settings } from "lucide-react";
 import { useAuth } from "@/client/auth";
 import { AccountAvatar } from "@/components/AuthButtons";
 
@@ -78,6 +78,13 @@ export default function ProfilePage() {
         </div>
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <Link
+            to="/listening-stats"
+            className="flex min-h-14 items-center gap-3 rounded-md border border-white/[0.12] px-4 text-white/[0.78] transition hover:bg-white/[0.07] hover:text-white"
+          >
+            <BarChart3 size={19} />
+            <span>Listening stats</span>
+          </Link>
           <Link
             to="/settings"
             className="flex min-h-14 items-center gap-3 rounded-md border border-white/[0.12] px-4 text-white/[0.78] transition hover:bg-white/[0.07] hover:text-white"
