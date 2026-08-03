@@ -79,5 +79,9 @@ rsync -a -e "$RSYNC_SSH" package.json bun.lock tsconfig.json "$MINI_HOST:$REMOTE
 if [[ "$SKIP_INSTALL" -eq 0 ]]; then
   "${SSH_BASE[@]}" "$MINI_HOST" "cd '$REMOTE_APP' && '$BUN_BIN' install --production --frozen-lockfile"
   "$ROOT_DIR/scripts/install-mini-server.sh"
+  # The Mac mini shares one Caddy daemon with StreamArena. Re-merge Spotify's
+  # marked host block on every deploy so a rebuilt shared config cannot leave
+  # the native app with cached library data but no reachable streaming origin.
+  "$ROOT_DIR/scripts/install-mini-caddy.sh"
   "$ROOT_DIR/scripts/check-mini.sh"
 fi
