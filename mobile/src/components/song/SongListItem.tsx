@@ -49,7 +49,13 @@ function SongListItemComponent({
     >
       <PressableScale scaleTo={1} onPress={onPress} className="min-w-0 flex-1 flex-row items-center gap-3">
         <View style={{ width: 48, height: 48, overflow: "hidden", borderRadius: 8, borderCurve: "continuous" }}>
-          <CoverImage src={song.imageUrl} networkSrc={song.networkImageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={song.id} />
+          <CoverImage
+            src={song.imageUrl}
+            networkSrc={song.networkImageUrl}
+            offlineSongId={song.id}
+            style={{ width: "100%", height: "100%" }}
+            recyclingKey={song.id}
+          />
         </View>
         <View className="min-w-0 flex-1">
           <Text

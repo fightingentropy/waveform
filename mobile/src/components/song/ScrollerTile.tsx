@@ -10,6 +10,7 @@ import { colors } from "@/theme";
 export function ScrollerTile({
   title,
   artist,
+  songId,
   imageUrl,
   networkImageUrl,
   subtitle,
@@ -20,6 +21,7 @@ export function ScrollerTile({
 }: {
   title: string;
   artist: string;
+  songId: string;
   imageUrl?: string | null;
   networkImageUrl?: string | null;
   subtitle?: string;
@@ -51,8 +53,9 @@ export function ScrollerTile({
         <CoverImage
           src={imageUrl}
           networkSrc={networkImageUrl}
+          offlineSongId={songId}
           style={{ width: "100%", height: "100%" }}
-          recyclingKey={imageUrl ?? title}
+          recyclingKey={songId}
         />
         {loading ? (
           <View className="absolute inset-0 items-center justify-center" style={{ backgroundColor: "rgba(0,0,0,0.55)" }}>

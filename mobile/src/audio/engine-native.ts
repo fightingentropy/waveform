@@ -13,6 +13,7 @@ import { toAbsoluteApiUrl } from "@/lib/config";
 import { getIsOnline, markOffline, subscribeOnline } from "@/lib/connectivity";
 import { isUnstagedDiscoverSong } from "@/lib/discover-queue";
 import { isLikelyNetworkPlaybackError } from "@/lib/playback-continuity";
+import { isCurrentTrackEvent } from "@/lib/native-audio-event";
 import { shouldPublishQueueMutation } from "@/lib/queue-publish-policy";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { createPlayListen, flushPlayListen, type PlayListenEntry } from "@/lib/play-events";
@@ -138,10 +139,9 @@ function onStallTimeout(): void {
 }
 
 function onWaiting(e: WaitingEvent): void {
-  if (e.deck !== activeDeck) return; // only the deck driving playback matters
   const s = usePlayerStore.getState();
   const song = s.currentSong;
-  if (!song || deckSong[e.deck]?.id !== song.id || !s.isPlaying) return;
+  if (!song || !isCurrentTrackEvent(e, activeDeck, song.id, deckSong[e.deck]?.id) || !s.isPlaying) return;
   if (isOwnHandledSong(song) || isPodcastSong(song)) return;
   armStallWatchdog(song);
 }
@@ -365,13 +365,12 @@ async function applyRate(song: PlayerSong | null): Promise<void> {
 
 // --- native event handlers --------------------------------------------------
 function onTime(e: TimeEvent): void {
-  if (e.deck !== activeDeck) return; // only the active deck drives the clock
   const s = usePlayerStore.getState();
   const song = s.currentSong;
   // Store selection changes synchronously, while releasing/preparing the native
   // deck is async. Ignore a tail event from the outgoing deck during that gap so
   // its position/listen/end state cannot be attributed to the newly-selected song.
-  if (!song || deckSong[e.deck]?.id !== song.id) return;
+  if (!song || !isCurrentTrackEvent(e, activeDeck, song.id, deckSong[e.deck]?.id)) return;
   setLastPosition(e.currentTime, song.id);
   setAudioProgress(e.currentTime, e.duration);
 
@@ -488,6 +487,21 @@ function onCrossfadeComplete(e: CrossfadeCompleteEvent): void {
   const to = e.to;
   // Native already swapped its activeDeck to `to` and zeroed/paused `from`.
   activeDeck = to;
+  const live = usePlayerStore.getState();
+  const matchesPreparedTransition =
+    crossfading &&
+    live.currentSong?.id === e.fromSongId &&
+    deckSong[from]?.id === e.fromSongId &&
+    deckSong[to]?.id === e.toSongId;
+  if (!matchesPreparedTransition) {
+    // A manual selection won the race with the old ramp completing. Keep the
+    // newly selected store item authoritative and load it onto the deck native
+    // iOS actually made active; never commit the stale queue transition.
+    crossfading = false;
+    clearPrefetch();
+    void hardLoad(live.currentSong, live.isPlaying).catch(() => {});
+    return;
+  }
   flushPlayListen(currentListen);
   const newSong = deckSong[to];
   currentListen = newSong ? createPlayListen(newSong) : null;
@@ -524,11 +538,10 @@ function onCrossfadeComplete(e: CrossfadeCompleteEvent): void {
 }
 
 async function onEnded(e: EndedEvent): Promise<void> {
-  if (e.deck !== activeDeck) return; // outgoing deck after a fade — ignore
   if (crossfading) return; // crossfadeComplete drives this transition
   const s = usePlayerStore.getState();
   const song = s.currentSong;
-  if (!song || deckSong[e.deck]?.id !== song.id) return;
+  if (!song || !isCurrentTrackEvent(e, activeDeck, song.id, deckSong[e.deck]?.id)) return;
   if (song && isPodcastSong(song)) markEpisodeFinished(song.id);
 
   // "Sleep at end of track" is an explicit stop request and must win over repeat
@@ -573,7 +586,7 @@ async function onError(e: ErrorEvent): Promise<void> {
   // Prefetched (idle) deck failed: abandon the prefetch; the transition will
   // hard-cut on `ended` and retry/skip through the active-deck path.
   if (e.deck !== activeDeck) {
-    if (prefetchDeck === e.deck) {
+    if (prefetchDeck === e.deck && e.songId === deckSong[e.deck]?.id) {
       await AudioEngine.releaseDeck(e.deck);
       deckSong[e.deck] = null;
       deckKey[e.deck] = null;
@@ -585,7 +598,7 @@ async function onError(e: ErrorEvent): Promise<void> {
   clearStallWatchdog(); // a hard error supersedes the stall watchdog's own recovery
   const s = usePlayerStore.getState();
   const song = s.currentSong;
-  if (!song || deckSong[e.deck]?.id !== song.id) return;
+  if (!song || !isCurrentTrackEvent(e, activeDeck, song.id, deckSong[e.deck]?.id)) return;
   if (isOwnHandledSong(song)) return; // radio/offline/local manage their own URLs
 
   const baseUrl = toAbsoluteApiUrl(song.audioUrl);
@@ -641,7 +654,7 @@ async function onError(e: ErrorEvent): Promise<void> {
 function onPlaying(e: PlayingEvent): void {
   if (e.deck === activeDeck) {
     const song = usePlayerStore.getState().currentSong;
-    if (!song || deckSong[e.deck]?.id !== song.id) return;
+    if (!song || !isCurrentTrackEvent(e, activeDeck, song.id, deckSong[e.deck]?.id)) return;
     clearStallWatchdog(); // audio is flowing — this deck isn't stalled
     consecutiveErrors = 0;
     erroredKeyRetry = null;
@@ -654,7 +667,7 @@ function onPlaying(e: PlayingEvent): void {
 function onSeeked(e: SeekedEvent): void {
   if (e.deck === activeDeck) {
     const song = usePlayerStore.getState().currentSong;
-    if (!song || deckSong[e.deck]?.id !== song.id) return;
+    if (!song || !isCurrentTrackEvent(e, activeDeck, song.id, deckSong[e.deck]?.id)) return;
     setLastPosition(e.currentTime, song.id);
     setAudioProgress(e.currentTime, useAudioProgressStore.getState().duration);
   }

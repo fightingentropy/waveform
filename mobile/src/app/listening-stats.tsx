@@ -106,6 +106,7 @@ function WeekSection({ week }: { week: ListeningWeek }) {
                 <CoverImage
                   src={topSong.imageUrl}
                   networkSrc={topSong.networkImageUrl}
+                  offlineSongId={topSong.id}
                   style={{ width: "100%", height: "100%" }}
                   recyclingKey={topSong.id}
                 />

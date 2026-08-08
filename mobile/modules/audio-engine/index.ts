@@ -85,6 +85,7 @@ export interface UpdateNowPlayingArgs {
 /** `time` — periodic clock for the active (or actively-playing) deck, every 0.25s. */
 export interface TimeEvent {
   deck: DeckId;
+  songId: string;
   currentTime: number;
   duration: number;
 }
@@ -92,23 +93,27 @@ export interface TimeEvent {
 /** `loaded` — item status reached .readyToPlay. */
 export interface LoadedEvent {
   deck: DeckId;
+  songId: string;
   duration: number;
 }
 
 /** `ended` — AVPlayerItemDidPlayToEndTime (natural end of track). */
 export interface EndedEvent {
   deck: DeckId;
+  songId: string;
 }
 
 /** `seeked` — completion of a JS-requested seek; currentTime is the requested position. */
 export interface SeekedEvent {
   deck: DeckId;
+  songId: string;
   currentTime: number;
 }
 
 /** `error` — item status reached .failed; message is verbose (domain/code/underlying). */
 export interface ErrorEvent {
   deck: DeckId;
+  songId: string;
   message: string;
 }
 
@@ -116,16 +121,20 @@ export interface ErrorEvent {
 export interface CrossfadeCompleteEvent {
   from: DeckId;
   to: DeckId;
+  fromSongId: string;
+  toSongId: string;
 }
 
 /** `playing` — timeControlStatus became .playing (audio actually flowing). */
 export interface PlayingEvent {
   deck: DeckId;
+  songId: string;
 }
 
 /** `waiting` — timeControlStatus became .waitingToPlayAtSpecifiedRate (buffering/stall). */
 export interface WaitingEvent {
   deck: DeckId;
+  songId: string;
 }
 
 /**

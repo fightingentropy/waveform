@@ -91,7 +91,7 @@ public class AudioEngineModule: Module {
                 throw Exception(name: "AudioEngine", description: "deck not configured")
             }
             let urlString = url
-            let songId = id
+            let songId = id ?? ""
             let startAtValue = startAt ?? 0
             // URL handling (spec §7.3 hazard #4): accept a bare leading-"/" path
             // (local file), a "file://" URI (offline-cached local files), and
@@ -140,10 +140,11 @@ public class AudioEngineModule: Module {
 
                 deckObj.statusObs = item.observe(\.status, options: [.new]) { [weak self, weak deckObj] item, _ in
                     guard let self = self, let deckObj = deckObj else { return }
+                    guard deckObj.item === item else { return }
                     if item.status == .readyToPlay {
                         let dur = item.duration.isNumeric ? item.duration.seconds : 0
                         deckObj.lastDuration = dur.isFinite ? dur : 0
-                        self.sendEvent("loaded", ["deck": deckObj.id, "duration": deckObj.lastDuration])
+                        self.sendEvent("loaded", ["deck": deckObj.id, "songId": songId, "duration": deckObj.lastDuration])
                         if deckObj.startAt > 0.5 {
                             item.seek(to: CMTime(seconds: deckObj.startAt, preferredTimescale: 600)) { _ in }
                             deckObj.startAt = 0
@@ -160,7 +161,7 @@ public class AudioEngineModule: Module {
                                 message += " under(\(underlying.domain) \(underlying.code))"
                             }
                         }
-                        self.sendEvent("error", ["deck": deckObj.id, "message": message])
+                        self.sendEvent("error", ["deck": deckObj.id, "songId": songId, "message": message])
                     }
                 }
 
@@ -168,9 +169,10 @@ public class AudioEngineModule: Module {
                     forName: .AVPlayerItemDidPlayToEndTime,
                     object: item,
                     queue: .main
-                ) { [weak self, weak deckObj] _ in
-                    guard let self = self, let deckObj = deckObj else { return }
-                    self.sendEvent("ended", ["deck": deckObj.id])
+                ) { [weak self, weak deckObj, weak item] _ in
+                    guard let self = self, let deckObj = deckObj, let item = item else { return }
+                    guard deckObj.item === item else { return }
+                    self.sendEvent("ended", ["deck": deckObj.id, "songId": songId])
                 }
             }
         }
@@ -212,10 +214,11 @@ public class AudioEngineModule: Module {
             let pos = max(0, position ?? 0)
             DispatchQueue.main.async {
                 self.cancelRamp()
+                let songId = deckObj.songId ?? ""
                 let target = CMTime(seconds: pos, preferredTimescale: 600)
                 deckObj.player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak deckObj] _ in
                     guard let self = self, let deckObj = deckObj else { return }
-                    self.sendEvent("seeked", ["deck": deckObj.id, "currentTime": pos])
+                    self.sendEvent("seeked", ["deck": deckObj.id, "songId": songId, "currentTime": pos])
                 }
             }
         }
@@ -265,6 +268,8 @@ public class AudioEngineModule: Module {
             DispatchQueue.main.async {
                 self.cancelRamp()
                 let startFrom = fromDeck.volume
+                let fromSongId = fromDeck.songId ?? ""
+                let toSongId = toDeck.songId ?? ""
                 toDeck.volume = 0
                 toDeck.player.volume = 0
                 toDeck.wantsPlaying = true
@@ -292,7 +297,12 @@ public class AudioEngineModule: Module {
                         toDeck.volume = peakValue
                         toDeck.player.volume = peakValue
                         self.activeDeck = toDeck.id
-                        self.sendEvent("crossfadeComplete", ["from": fromDeck.id, "to": toDeck.id])
+                        self.sendEvent("crossfadeComplete", [
+                            "from": fromDeck.id,
+                            "to": toDeck.id,
+                            "fromSongId": fromSongId,
+                            "toSongId": toSongId,
+                        ])
                     }
                 }
                 self.rampTimer = timer
@@ -382,9 +392,9 @@ public class AudioEngineModule: Module {
             guard let self = self, let deck = deck else { return }
             switch player.timeControlStatus {
             case .playing:
-                self.sendEvent("playing", ["deck": deck.id])
+                self.sendEvent("playing", ["deck": deck.id, "songId": deck.songId ?? ""])
             case .waitingToPlayAtSpecifiedRate:
-                self.sendEvent("waiting", ["deck": deck.id])
+                self.sendEvent("waiting", ["deck": deck.id, "songId": deck.songId ?? ""])
             default:
                 break
             }
@@ -521,6 +531,11 @@ public class AudioEngineModule: Module {
             let seconds = itemDuration.seconds
             if seconds.isFinite { duration = seconds }
         }
-        sendEvent("time", ["deck": deck.id, "currentTime": current, "duration": duration])
+        sendEvent("time", [
+            "deck": deck.id,
+            "songId": deck.songId ?? "",
+            "currentTime": current,
+            "duration": duration,
+        ])
     }
 }

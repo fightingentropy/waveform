@@ -191,6 +191,7 @@ export default function HomeScreen() {
                   key={song.id}
                   title={song.title}
                   artist={song.artist}
+                  songId={song.id}
                   imageUrl={song.imageUrl}
                   networkImageUrl={song.networkImageUrl}
                   active={currentSongId === song.id}
@@ -213,6 +214,7 @@ export default function HomeScreen() {
                     key={song.id}
                     title={song.title}
                     artist={song.artist}
+                    songId={song.id}
                     imageUrl={song.imageUrl}
                     networkImageUrl={song.networkImageUrl}
                     subtitle={entry.playCount > 0 ? `${entry.playCount} ${entry.playCount === 1 ? "play" : "plays"}` : undefined}

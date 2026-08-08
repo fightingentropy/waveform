@@ -80,6 +80,7 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
             <CoverImage
               src={song.imageUrl}
               networkSrc={song.networkImageUrl}
+              offlineSongId={song.id}
               style={{ width: "100%", height: "100%" }}
               recyclingKey={song.id}
             />
