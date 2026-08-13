@@ -8,7 +8,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "prebuild": "expo prebuild",
-    "postinstall": "node scripts/patch-expo-modules-jsi-xcode27.mjs",
+    "postinstall": "node scripts/patch-expo-modules-jsi-xcode27.mjs && node scripts/patch-react-native-track-player-rn086.mjs",
     "typecheck": "node node_modules/@typescript/native/bin/tsc --noEmit",
     "lint": "expo lint",
     "test": "bun test"
