@@ -11,6 +11,7 @@ import { clearImportQueue } from "@/lib/import-queue";
 import { removeLocalPlaybackState } from "@/lib/playback-state";
 import { storage } from "@/lib/storage";
 import { clearOfflineAccountData, setOfflineAccountScope } from "@/store/offline";
+import { defaultLocalOwnerImage } from "@spotify/shared/local-owner";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
 
@@ -46,24 +47,13 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHED_AUTH_USER_KEY = "spotify_cached_auth_user";
 const CACHED_AUTH_SIGNED_OUT_KEY = "spotify_auth_signed_out";
-const ERLIN_PROFILE_IMAGE_URL = "/profile.jpg";
 const SESSION_REFRESH_TIMEOUT_MS = 2_500;
 const AUTH_ACTION_TIMEOUT_MS = 15_000;
 const SIGN_OUT_TIMEOUT_MS = 5_000;
 const PROFILE_UPLOAD_TIMEOUT_MS = 60_000;
 
-function defaultAuthUserImage(email: string, name: string | null): string | null {
-  const normalizedName = name?.trim().toLowerCase() || "";
-  const emailLocalPart = email.split("@")[0]?.trim().toLowerCase() || "";
-  if (
-    normalizedName === "erlin" ||
-    normalizedName === "erlin hoxha" ||
-    emailLocalPart === "erlin" ||
-    emailLocalPart === "erlinhoxha"
-  ) {
-    return ERLIN_PROFILE_IMAGE_URL;
-  }
-  return null;
+function defaultAuthUserImage(email: string, _name: string | null): string | null {
+  return defaultLocalOwnerImage(email);
 }
 
 function coerceAuthUser(value: unknown): AuthUser | null {

@@ -220,9 +220,12 @@ back normally.
 ### `GET /api/search-index`
 **Cache:** `private, max-age=300, swr=600` + ETag.
 Worker (D1): `{ "songs": PlayerSong[] }` (lighter projection: id/title/artist/
-imageUrl/audioUrl/createdAt, ordered by createdAt desc, limit 5000).
+imageUrl/audioUrl/createdAt, ordered by createdAt desc). Optional `q` filters
+title/artist. Without `limit`/`cursor` the Worker still returns a full `{ songs }`
+array (capped at 5,000) for catalog matching. With paging params the shape is
+`{ songs, nextCursor }` using a createdAt/id keyset.
 Mac-mini-proxied: `{ "songs": [{ "id","title","artist","imageUrl","audioUrl","createdAt","source","localPath" }] }`
-(media URLs signed).
+(media URLs signed). Mini paging uses offset cursors.
 
 ### `GET /api/library`
 **Cache:** `private, max-age=300, swr=600` + ETag.

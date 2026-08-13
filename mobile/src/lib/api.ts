@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  getApiAuthScope,
+  getApiPath,
+  withAccountScope,
+} from "@spotify/shared/account-scope";
+import { updateLikedIdsInPayload, updateLikedSongsInPayload } from "@spotify/shared/like-cache";
 import { apiReadTimeoutMs, isProviderReadThroughRequest } from "@/lib/api-timeout-policy";
 import { markOffline } from "@/lib/connectivity";
 import { API_AUTH_REQUIRED_EVENT, API_CACHE_CLEARED_EVENT, emit, on } from "@/lib/events";
@@ -47,36 +53,7 @@ type ApiCacheEntry<T = unknown> = {
 const API_SNAPSHOT_READ_TIMEOUT_MS = 1_000;
 const apiCache = new Map<string, ApiCacheEntry>();
 
-function getApiPath(url: string): string {
-  try {
-    return new URL(url, "http://spotify.local").pathname;
-  } catch {
-    return url.split("?")[0] || url;
-  }
-}
-
-function getApiAuthScope(url: string): string {
-  try {
-    return new URL(url, "http://spotify.local").searchParams.get("auth")?.trim() || "legacy";
-  } catch {
-    return "legacy";
-  }
-}
-
-export function withAccountScope(url: string, scope: string | null | undefined): string {
-  const value = scope?.trim() || "anonymous";
-  try {
-    const parsed = new URL(url, "http://spotify.local");
-    parsed.searchParams.set("auth", value);
-    return `${parsed.pathname}${parsed.search}`;
-  } catch {
-    const [path, query = ""] = url.split("?");
-    const params = new URLSearchParams(query);
-    params.set("auth", value);
-    const serialized = params.toString();
-    return serialized ? `${path}?${serialized}` : path;
-  }
-}
+export { withAccountScope };
 
 function isPersistableApiUrl(url: string): boolean {
   const path = getApiPath(url);
@@ -241,10 +218,6 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   }
 }
 
-function hasStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
 // A shallow copy is enough for the like-cache patch: updateLikedIdsInPayload /
 // updateLikedSongsInPayload only ever REASSIGN top-level arrays (likedSongIds /
 // likes / songs) to freshly-built ones — they never mutate existing array
@@ -252,54 +225,6 @@ function hasStringArray(value: unknown): value is string[] {
 // song list on every heart tap.
 function shallowCloneCacheData<T>(value: T): T {
   return (value && typeof value === "object" ? { ...value } : value) as T;
-}
-
-function updateLikedIdsInPayload(data: unknown, songId: string, nextLiked: boolean): boolean {
-  if (!data || typeof data !== "object") return false;
-  const target = data as { likedSongIds?: unknown; likes?: unknown };
-  let changed = false;
-  if (hasStringArray(target.likedSongIds)) {
-    const set = new Set(target.likedSongIds);
-    const had = set.has(songId);
-    if (nextLiked) set.add(songId);
-    else set.delete(songId);
-    target.likedSongIds = Array.from(set);
-    changed = had !== nextLiked;
-  }
-  if (hasStringArray(target.likes)) {
-    const set = new Set(target.likes);
-    const had = set.has(songId);
-    if (nextLiked) set.add(songId);
-    else set.delete(songId);
-    target.likes = Array.from(set);
-    changed = changed || had !== nextLiked;
-  }
-  return changed;
-}
-
-function updateLikedSongsInPayload(
-  data: unknown,
-  payload: { songId: string; nextLiked: boolean; song?: PlayerSong },
-): boolean {
-  if (!data || typeof data !== "object" || !("songs" in data)) return false;
-  const target = data as { songs?: unknown };
-  if (!Array.isArray(target.songs)) return false;
-  const songs = target.songs;
-  if (payload.nextLiked) {
-    if (!payload.song) return false;
-    const exists = songs.some((song) => {
-      return song && typeof song === "object" && (song as PlayerSong).id === payload.songId;
-    });
-    if (exists) return false;
-    target.songs = [payload.song, ...songs];
-    return true;
-  }
-  const before = songs.length;
-  const nextSongs = songs.filter((song) => {
-    return !(song && typeof song === "object" && (song as PlayerSong).id === payload.songId);
-  });
-  target.songs = nextSongs;
-  return before !== nextSongs.length;
 }
 
 export function patchLikeApiCache(
@@ -585,6 +510,7 @@ export type DiscoverPlaylistsPayload = {
 
 export type SearchIndexPayload = {
   songs: PlayerSong[];
+  nextCursor?: string | null;
 };
 
 export type CatalogProvider = "spotify" | "youtube";

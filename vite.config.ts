@@ -25,6 +25,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@spotify/shared": fileURLToPath(new URL("./packages/shared/src", import.meta.url)),
     },
   },
 });

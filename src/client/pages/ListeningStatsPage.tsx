@@ -7,6 +7,7 @@ import {
 } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { CoverImage } from "@/components/CoverImage";
+import { PageError } from "@/components/PageError";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { usePlayerStore } from "@/store/player";
 
@@ -132,12 +133,7 @@ export default function ListeningStatsPage() {
 
         {loading && data.weeks.length === 0 ? <p className="text-white/55">Loading listening stats…</p> : null}
         {error ? (
-          <div role="alert" className="rounded-xl border border-red-300/20 bg-red-400/[0.06] p-5">
-            <p className="text-sm text-red-100">{error}</p>
-            <button type="button" onClick={retry} className="mt-3 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black">
-              Retry
-            </button>
-          </div>
+          <PageError compact message={error} onRetry={retry} retryLabel="Retry" />
         ) : null}
         {!loading && !error && data.weeks.length === 0 ? (
           <div className="rounded-2xl border border-white/[0.1] bg-white/[0.035] p-8 text-center">

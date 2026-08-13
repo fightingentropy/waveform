@@ -22,6 +22,7 @@ import { useAuth } from "@/client/auth";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { usePlayerStore } from "@/store/player";
 import { CoverImage } from "@/components/CoverImage";
+import { PageError } from "@/components/PageError";
 import { PlaylistArtwork } from "@/components/PlaylistArtwork";
 import { SongGrid } from "@/components/SongGrid";
 import { cn } from "@/lib/utils";
@@ -454,8 +455,7 @@ export default function PlaylistPage() {
   if (loading || status === "loading") return <PlaylistLoadingSkeleton />;
   if (error) return (
     <div className="mx-auto max-w-7xl px-6 py-8">
-      <p className="text-red-300">{error}</p>
-      <button type="button" onClick={retry} className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black">Try again</button>
+      <PageError compact message={error} onRetry={retry} />
     </div>
   );
 

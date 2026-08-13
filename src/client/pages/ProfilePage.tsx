@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { BarChart3, Camera, Loader2, LogOut, Settings } from "lucide-react";
 import { useAuth } from "@/client/auth";
 import { AccountAvatar } from "@/components/AuthButtons";
+import { PageError } from "@/components/PageError";
 
 export default function ProfilePage() {
   const { user, status, signOut, updateProfileImage } = useAuth();
@@ -73,7 +74,7 @@ export default function ProfilePage() {
             <p className="text-sm font-medium uppercase tracking-[0.18em] text-white/[0.48]">Profile</p>
             <h1 className="mt-1 truncate text-3xl font-semibold sm:text-4xl">{displayName}</h1>
             <p className="mt-2 truncate text-[15px] text-white/[0.64]">{user.email}</p>
-            {imageError ? <p className="mt-2 text-sm text-red-300">{imageError}</p> : null}
+            {imageError ? <div className="mt-2"><PageError compact message={imageError} /></div> : null}
           </div>
         </div>
 

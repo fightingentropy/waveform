@@ -9,6 +9,9 @@
       ],
       "@/assets/*": [
         "./assets/*"
+      ],
+      "@spotify/shared/*": [
+        "../packages/shared/src/*"
       ]
     }
   },

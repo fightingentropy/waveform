@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { Heart, ListMusic, Music2, Plus, Podcast, RadioTower, Search, Ticket, Upload } from "lucide-react";
 import { AuthButtons } from "@/components/AuthButtons";
 import { CoverImage } from "@/components/CoverImage";
+import { PageError } from "@/components/PageError";
 import { PlaylistArtwork } from "@/components/PlaylistArtwork";
 import { useApiData, withAccountScope, type LibraryPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
@@ -356,10 +357,7 @@ export default function LibraryPage({ playlistOnly = false }: { playlistOnly?: b
 
                 {signedIn && error ? (
                   <div className="pb-2 pt-4">
-                    <div className="text-sm text-red-300">{error}</div>
-                    <button type="button" onClick={retry} className="mt-3 rounded-lg border border-white/[0.16] px-3 py-1.5 text-sm">
-                      Try again
-                    </button>
+                    <PageError compact message={error} onRetry={retry} />
                   </div>
                 ) : null}
 

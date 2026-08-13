@@ -17,6 +17,8 @@ Some capabilities are deliberately platform-specific rather than parity bugs:
 - Native offline downloads, durable background download/import queues, and
   device storage controls live only in Expo. The browser service worker and PWA
   download surface were intentionally removed.
+- Dual-deck AVPlayer crossfade is iOS-only. Android plays through Track Player.
+  Background downloads use URLSession on iOS and WorkManager on Android.
 - The browser keeps desktop multi-column chrome, keyboard navigation, and hover
   interactions that do not apply to native screens.
 - Native may add RSS feeds to its device-local podcast list. The browser uses

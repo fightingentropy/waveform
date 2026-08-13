@@ -233,6 +233,25 @@ describe("playNext", () => {
     expect(idsAt(state.shuffleRemaining)).toEqual(["a", "c", "d"]);
     expect(state.playHistory).toEqual([1]);
   });
+
+  test("shuffle next() consumes the pool head so up-next matches playback", () => {
+    const queue = songs("a", "b", "c", "d");
+    usePlayerStore.setState({
+      queue,
+      currentIndex: 0,
+      currentSong: queue[0],
+      shuffle: true,
+      shuffleRemaining: [3, 1, 2],
+      playFuture: [],
+    });
+
+    usePlayerStore.getState().next();
+
+    const state = usePlayerStore.getState();
+    expect(state.currentSong?.id).toBe("d");
+    expect(state.currentIndex).toBe(3);
+    expect(state.shuffleRemaining).toEqual([1, 2]);
+  });
 });
 
 describe("removeFromQueue", () => {
@@ -364,12 +383,12 @@ describe("getUpcomingPlaybackIndices", () => {
 
     // repeat "all" refills from the full queue minus the current index.
     expect(
-      getUpcomingPlaybackIndices(4, 2, 3, {
+      [...getUpcomingPlaybackIndices(4, 2, 3, {
         shuffle: true,
         repeatMode: "all",
         playFuture: [],
         shuffleRemaining: [],
-      }),
+      })].sort((left, right) => left - right),
     ).toEqual([0, 1, 3]);
   });
 

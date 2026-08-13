@@ -10,9 +10,16 @@ it.
 - Authenticated home, search, library, liked-song, playlist, radio, podcast,
   event, upload/import, settings, profile, and listening-statistics screens.
 - Queue, shuffle, repeat, previous/next, seeking, crossfade, media controls, and
-  resume position.
+  resume position. Web and Expo share pure helpers in `packages/shared`
+  (account scope, like-cache patches, playback rate, sleep timer, song kind,
+  cursors).
 - Local media streaming with validated HTTP byte ranges, artwork, sidecars,
   lyrics, and bounded metadata indexing.
+- `GET /api/songs` and library playlist detail still return a full array by
+  default. Pass `limit` and/or `cursor` for `{ songs, nextCursor }` pages.
+  Search-index accepts `q` and the same paging params. Without `limit`/`cursor`
+  it still returns a full `{ songs }` projection (Worker capped at 5,000) for
+  catalog matching.
 - Manual upload and account-authorized provider import with streamed size
   limits and upload magic-byte validation.
 - Playlist creation, editing, reordering, artwork, and folder conversion.
@@ -27,6 +34,9 @@ The route-level parity contract and intentional platform differences are in
 - Durable background download/import queues and offline mutation replay.
 - Device storage, cache, reachability, and background-download controls.
 - Device-local custom podcast subscriptions.
+
+Background URLSession downloads (iOS) and WorkManager downloads (Android).
+Dual-deck native crossfade is iOS-only. Android plays through Track Player.
 
 The browser's former service-worker/PWA download surface was deliberately
 removed; native offline functionality is not represented as web parity.

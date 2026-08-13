@@ -1,5 +1,6 @@
 import { useAuth } from "@/client/auth";
 import { type HomePayload, useApiData, withAccountScope } from "@/client/api";
+import { PageError } from "@/components/PageError";
 import { SongGrid } from "@/components/SongGrid";
 import type { PlayerSong } from "@/types/player";
 
@@ -24,10 +25,9 @@ export default function SongsPage() {
     return (
       <div className="mx-auto max-w-7xl px-6 py-8">
         <h1 className="text-2xl font-semibold">All Songs</h1>
-        <p className="mt-3 text-sm text-red-300">{songsState.error}</p>
-        <button type="button" onClick={songsState.retry} className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black">
-          Try again
-        </button>
+        <div className="mt-3">
+          <PageError compact message={songsState.error} onRetry={songsState.retry} />
+        </div>
       </div>
     );
   }
@@ -38,9 +38,18 @@ export default function SongsPage() {
         <h1 className="text-2xl font-semibold">All Songs</h1>
         <p className="mt-1 text-sm text-white/[0.62]">{songsState.data.length} tracks in your library</p>
       </div>
+      {likesState.error ? (
+        <div className="mb-4">
+          <PageError
+            compact
+            message={`Liked songs couldn’t load. ${likesState.error}`}
+            onRetry={likesState.retry}
+          />
+        </div>
+      ) : null}
       <SongGrid
         songs={songsState.data}
-        likedSongIds={likesState.error ? null : likesState.data.likedSongIds}
+        likedSongIds={likesState.data.likedSongIds}
         canLike={Boolean(user)}
         emptyLabel="Your library is empty. Upload music to get started."
       />

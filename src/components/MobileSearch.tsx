@@ -4,28 +4,37 @@ import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { AuthButtons } from "@/components/AuthButtons";
 import { useAuth } from "@/client/auth";
-import { type SearchCatalogPayload, useApiData, withAccountScope } from "@/client/api";
+import { useApiData, withAccountScope, type SearchCatalogPayload, type SearchIndexPayload } from "@/client/api";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { CoverImage } from "@/components/CoverImage";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { dedupeSongsByTitleArtist } from "@/lib/song-dedupe";
 
-type MobileSearchProps = {
-  songs: PlayerSong[];
-};
-
-export default function MobileSearch({ songs }: MobileSearchProps) {
+export default function MobileSearch() {
   const [query, setQuery] = useState("");
   const [catalogQuery, setCatalogQuery] = useState("");
+  const [libraryQuery, setLibraryQuery] = useState("");
   const { user, status } = useAuth();
   const setQueue = usePlayerStore((state) => state.setQueue);
 
   useEffect(() => {
     const trimmed = query.trim();
-    const timer = window.setTimeout(() => setCatalogQuery(trimmed.length >= 2 ? trimmed : ""), 300);
+    const timer = window.setTimeout(() => {
+      setLibraryQuery(trimmed);
+      setCatalogQuery(trimmed.length >= 2 ? trimmed : "");
+    }, 300);
     return () => window.clearTimeout(timer);
   }, [query]);
+
+  const libraryState = useApiData<SearchIndexPayload>(
+    withAccountScope(
+      `/api/search-index?q=${encodeURIComponent(libraryQuery)}&limit=50`,
+      user?.id ?? status,
+    ),
+    { songs: [] },
+    { enabled: status !== "loading" && libraryQuery.length > 0, keepPreviousData: true },
+  );
 
   const catalogState = useApiData<SearchCatalogPayload>(
     withAccountScope(`/api/search/catalog?q=${encodeURIComponent(catalogQuery)}`, user?.id ?? status),
@@ -33,19 +42,12 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
     { enabled: status === "authenticated" && catalogQuery.length >= 2, keepPreviousData: false },
   );
 
-  const dedupedSongs = useMemo(() => dedupeSongsByTitleArtist(songs), [songs]);
+  const dedupedSongs = useMemo(
+    () => dedupeSongsByTitleArtist(libraryState.data.songs),
+    [libraryState.data.songs],
+  );
 
-  const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    return dedupedSongs
-      .filter((song) => {
-        const title = song.title.toLowerCase();
-        const artist = song.artist.toLowerCase();
-        return title.includes(q) || artist.includes(q);
-      })
-      .slice(0, 50);
-  }, [dedupedSongs, query]);
+  const results = useMemo(() => dedupedSongs.slice(0, 50), [dedupedSongs]);
 
   const libraryKeys = useMemo(
     () => new Set(dedupedSongs.map((song) => `${song.title.trim().toLowerCase()}\u0000${song.artist.trim().toLowerCase()}`)),
@@ -115,6 +117,15 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
           <div className="py-12 text-center text-sm text-white/60">Start typing to search music</div>
         ) : (
           <>
+            {libraryState.loading && results.length === 0 ? (
+              <div className="py-5 text-sm opacity-70">Searching your library...</div>
+            ) : null}
+            {libraryState.error ? (
+              <div className="py-5 text-sm text-red-300">
+                <p>{libraryState.error}</p>
+                <button type="button" onClick={libraryState.retry} className="mt-3 rounded-lg border border-white/[0.16] px-3 py-1.5 text-white">Try again</button>
+              </div>
+            ) : null}
             {results.length > 0 ? (
               <section>
                 <h2 className="mb-1 pt-2 text-lg font-bold tracking-[-0.3px] text-[#f2f2f2]">
@@ -142,7 +153,7 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
               </section>
             ) : null}
 
-            {results.length === 0 && catalogQuery.length >= 2 && !catalogState.loading && !catalogState.error && catalogResults.length === 0 ? (
+            {results.length === 0 && !libraryState.loading && !libraryState.error && (catalogQuery.length < 2 || (!catalogState.loading && !catalogState.error && catalogResults.length === 0)) ? (
               <div className="py-12 text-center text-sm opacity-70">No songs found</div>
             ) : null}
           </>

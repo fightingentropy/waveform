@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, TextInput, View, Text } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { ListMusic, Search as SearchIcon, UserRound } from "lucide-react-native";
+import { songMatchesLibraryQuery } from "@spotify/shared/library-search";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { SongListItem } from "@/components/song/SongListItem";
 import { ProfileButton } from "@/components/profile/ProfileButton";
@@ -19,11 +20,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { toggleSongInList } from "@/audio/actions";
-import {
-  catalogRequestState,
-  catalogSongKey,
-  reconcileCatalogSongs,
-} from "@/lib/catalog-reconciliation";
+import { catalogRequestState, catalogSongKey, reconcileCatalogSongs } from "@/lib/catalog-reconciliation";
 import { useOnlineStatus } from "@/lib/use-connectivity";
 import { keyFor, useOfflineStore } from "@/store/offline";
 import { colors } from "@/theme";
@@ -232,37 +229,46 @@ export default function SearchScreen() {
   const isOnline = useOnlineStatus();
   const offlineRecords = useOfflineStore((state) => state.records);
   const accountScope = user?.id ?? "anonymous";
-  const { data, loading } = useApiData<SearchIndexPayload>(
-    withAccountScope("/api/search-index", user?.id ?? status),
-    { songs: [] },
-    { enabled: status !== "loading", keepPreviousData: true },
-  );
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<SearchFilter>("top");
-
-  // Lowercase the library once when its index changes, rather than doing two
-  // string allocations per song on every keystroke.
-  const searchableSongs = useMemo<SearchableSong[]>(
-    () =>
-      data.songs.map((song) => ({
-        song,
-        title: song.title.toLowerCase(),
-        artist: song.artist.toLowerCase(),
-      })),
-    [data.songs],
+  const debouncedQuery = useDebouncedValue(query.trim(), 350);
+  const { data, loading } = useApiData<SearchIndexPayload>(
+    withAccountScope(
+      `/api/search-index?q=${encodeURIComponent(debouncedQuery)}&limit=100`,
+      user?.id ?? status,
+    ),
+    { songs: [] },
+    { enabled: status !== "loading" && isOnline && debouncedQuery.length > 0, keepPreviousData: true },
   );
 
-  // Library matches remain instant and available offline.
+  const readyDownloadedSongs = useMemo(
+    () =>
+      Object.values(offlineRecords)
+        .filter((record) => record.accountScope === accountScope && record.status === "ready")
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((record) => record.song),
+    [accountScope, offlineRecords],
+  );
+
   const localResults = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    return searchableSongs
-      .map((entry) => ({ song: entry.song, s: score(entry, q) }))
+    const pool = isOnline
+      ? data.songs
+      : readyDownloadedSongs.filter((song) => songMatchesLibraryQuery(song, query));
+    return pool
+      .map((song) => ({
+        song,
+        s: score(
+          { song, title: song.title.toLowerCase(), artist: song.artist.toLowerCase() },
+          q,
+        ),
+      }))
       .filter((entry) => entry.s > 0)
       .sort((a, b) => b.s - a.s)
       .slice(0, 100)
       .map((entry) => entry.song);
-  }, [query, searchableSongs]);
+  }, [data.songs, isOnline, query, readyDownloadedSongs]);
   const visibleLocalResults = useMemo(
     () =>
       isOnline
@@ -276,7 +282,6 @@ export default function SearchScreen() {
   // Platform results are debounced and scoped to the signed-in account. A new
   // query clears the previous payload, preventing stale artists/playlists from
   // flashing under different text.
-  const debouncedQuery = useDebouncedValue(query.trim(), 350);
   const catalogEnabled = debouncedQuery.length >= 2;
   const catalog = useApiData<SearchCatalogPayload>(
     withAccountScope(
@@ -298,14 +303,6 @@ export default function SearchScreen() {
   const libraryKeys = useMemo(
     () => new Set(visibleLocalResults.map(catalogSongKey)),
     [visibleLocalResults],
-  );
-  const readyDownloadedSongs = useMemo(
-    () =>
-      Object.values(offlineRecords)
-        .filter((record) => record.accountScope === accountScope && record.status === "ready")
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .map((record) => record.song),
-    [accountScope, offlineRecords],
   );
   const catalogSongs = useMemo(() => {
     if (!catalogIsCurrent) return [];

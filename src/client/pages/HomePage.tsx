@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { Pause, Play } from "lucide-react";
 import { AuthButtons } from "@/components/AuthButtons";
 import { CoverImage } from "@/components/CoverImage";
+import { PageError } from "@/components/PageError";
 import {
   useApiData,
   withAccountScope,
@@ -115,18 +116,19 @@ export default function HomePage() {
     const displaySong = resolveHomeSong(song);
     const active = currentSongId === song.id;
 
+    const playing = active && isPlaying;
     return (
-      <div
+      <button
         key={song.id}
+        type="button"
+        aria-label={`${playing ? "Pause" : "Play"} ${displaySong.title}`}
+        aria-pressed={playing}
         onPointerEnter={() => warmSongSoon(displaySong)}
         onFocus={() => warmSongSoon(displaySong)}
-        // The whole card plays on tap: the floating play button only appears
-        // on hover, which touch devices never see. It stopPropagation()s, so
-        // pointer users don't double-toggle.
         onClick={() => handlePlayScrollerSong(songs, index)}
         className={cn(
-          "wf-song-card group w-[164px] shrink-0 cursor-pointer touch-manipulation",
-          "focus-within:outline-none",
+          "wf-song-card group w-[164px] shrink-0 cursor-pointer touch-manipulation text-left",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
         )}
       >
         <div
@@ -138,31 +140,26 @@ export default function HomePage() {
           <CoverImage
             src={displaySong.imageUrl}
             networkSrc={displaySong.networkImageUrl}
-            alt={displaySong.title}
+            alt=""
             fill
             sizes="160px"
             className="wf-song-cover object-cover"
             loading={index < 6 ? "eager" : "lazy"}
           />
-          <button
-            type="button"
-            aria-label={active && isPlaying ? `Pause ${displaySong.title}` : `Play ${displaySong.title}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              handlePlayScrollerSong(songs, index);
-            }}
+          <span
+            aria-hidden
             className={cn(
-              "absolute bottom-2.5 right-2.5 grid h-[42px] w-[42px] place-items-center rounded-full border border-white/25 bg-black/55 text-white shadow-lg backdrop-blur-xl transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+              "absolute bottom-2.5 right-2.5 grid h-[42px] w-[42px] place-items-center rounded-full border border-white/25 bg-black/55 text-white shadow-lg backdrop-blur-xl transition",
               "wf-control-button",
-              active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+              active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
             )}
           >
-            {active && isPlaying ? (
+            {playing ? (
               <Pause size={21} fill="currentColor" />
             ) : (
               <Play size={21} fill="currentColor" className="translate-x-0.5" />
             )}
-          </button>
+          </span>
         </div>
         <div className="min-h-12 min-w-0 px-px pt-[9px]">
           <div className="truncate text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
@@ -175,7 +172,7 @@ export default function HomePage() {
             <div className="mt-0.5 truncate text-[12.5px] leading-[17px] text-white/40">{subtitle}</div>
           ) : null}
         </div>
-      </div>
+      </button>
     );
   };
 
@@ -217,17 +214,7 @@ export default function HomePage() {
   if (error) {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] bg-background px-4 py-8 text-white sm:px-6 lg:px-12">
-        <div role="alert" className="max-w-md rounded-lg border border-white/10 bg-white/[0.04] p-6">
-          <h1 className="text-xl font-semibold">Your library couldn’t load</h1>
-          <p className="mt-2 text-sm leading-6 text-white/65">{error}</p>
-          <button
-            type="button"
-            onClick={retry}
-            className="mt-5 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:scale-[1.02] hover:bg-white/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-          >
-            Retry
-          </button>
-        </div>
+        <PageError title="Your library couldn’t load" message={error} onRetry={retry} retryLabel="Retry" />
       </div>
     );
   }

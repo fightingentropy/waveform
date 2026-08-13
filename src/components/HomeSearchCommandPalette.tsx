@@ -7,8 +7,10 @@ import { useApiData, withAccountScope, type SearchIndexPayload } from "@/client/
 import { useAuth } from "@/client/auth";
 import { usePlayerStore } from "@/store/player";
 import { CoverImage } from "@/components/CoverImage";
+import { PageError } from "@/components/PageError";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { dedupeSongsByTitleArtist } from "@/lib/song-dedupe";
+import { useModalDialogFocus } from "@/lib/use-modal-dialog";
 import { cn } from "@/lib/utils";
 
 type HomeSearchCommandPaletteProps = {
@@ -19,37 +21,37 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
   const { user, status } = useAuth();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [libraryQuery, setLibraryQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const setQueue = usePlayerStore((state) => state.setQueue);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    const timer = window.setTimeout(() => setLibraryQuery(trimmed), 200);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
   const { data, loading, error } = useApiData<SearchIndexPayload>(
-    withAccountScope("/api/search-index", user?.id ?? status),
+    withAccountScope(
+      `/api/search-index?q=${encodeURIComponent(libraryQuery)}&limit=20`,
+      user?.id ?? status,
+    ),
     { songs: [] },
-    { enabled: open },
+    { enabled: open && status !== "loading" && libraryQuery.length > 0, keepPreviousData: true },
   );
-  const songs = data.songs;
+  const songs = libraryQuery.length > 0 ? data.songs : [];
 
-  const dedupedSongs = useMemo(() => dedupeSongsByTitleArtist(songs), [songs]);
+  useModalDialogFocus(open, dialogRef);
 
-  const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    return dedupedSongs
-      .filter((song) => {
-        const title = song.title.toLowerCase();
-        const artist = song.artist.toLowerCase();
-        return title.includes(q) || artist.includes(q);
-      })
-      .slice(0, 20);
-  }, [dedupedSongs, query]);
+  const results = useMemo(() => dedupeSongsByTitleArtist(songs).slice(0, 20), [songs]);
 
   const resolvedResults = results;
 
   useEffect(() => {
     if (!open) return;
     setQuery("");
+    setLibraryQuery("");
     setActiveIndex(0);
   }, [open]);
 
@@ -102,58 +104,20 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
         event.preventDefault();
         const selected = resolvedResults[activeIndex];
         if (!selected) return;
-        const queueIndex = songs.findIndex((song) => song.id === selected.id);
-        if (queueIndex >= 0) {
-          requestImmediatePlayback(selected);
-          setQueue(songs, queueIndex);
-          setOpen(false);
-        }
+        requestImmediatePlayback(selected);
+        setQueue(resolvedResults, activeIndex);
+        setOpen(false);
         return;
-      }
-      if (event.key === "Tab") {
-        const dialog = dialogRef.current;
-        if (!dialog) return;
-        const focusable = dialog.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        );
-        if (focusable.length === 0) {
-          event.preventDefault();
-          return;
-        }
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        const active = document.activeElement;
-        if (event.shiftKey) {
-          if (active === first || !dialog.contains(active)) {
-            event.preventDefault();
-            last.focus();
-          }
-        } else if (active === last || !dialog.contains(active)) {
-          event.preventDefault();
-          first.focus();
-        }
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, open, resolvedResults, setQueue, songs]);
-
-  useEffect(() => {
-    if (!open) return;
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    const raf = requestAnimationFrame(() => inputRef.current?.focus());
-    return () => {
-      cancelAnimationFrame(raf);
-      const restoreTarget = triggerRef.current ?? previouslyFocused;
-      restoreTarget?.focus();
-    };
-  }, [open]);
+  }, [activeIndex, open, resolvedResults, setQueue]);
 
   return (
     <div className={className}>
       <button
-        ref={triggerRef}
         type="button"
         aria-label="Search songs, Command K"
         aria-keyshortcuts="Meta+K Control+K"
@@ -183,7 +147,6 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
             <div className="flex h-14 items-center gap-3 border-b border-white/10 px-4">
               <Search size={18} className="text-foreground/60" />
               <input
-                ref={inputRef}
                 type="search"
                 role="combobox"
                 aria-label="Search songs"
@@ -211,17 +174,17 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
               aria-label="Search results"
               className="max-h-[60vh] overflow-y-auto p-2"
             >
-              {loading ? (
+              {query.trim().length === 0 ? (
+                <div className="px-3 py-10 text-center text-sm text-foreground/65">
+                  Start typing to search songs
+                </div>
+              ) : loading ? (
                 <div className="px-3 py-10 text-center text-sm text-foreground/65">
                   Loading songs...
                 </div>
               ) : error ? (
-                <div className="px-3 py-10 text-center text-sm text-red-300">
-                  {error}
-                </div>
-              ) : query.trim().length === 0 ? (
-                <div className="px-3 py-10 text-center text-sm text-foreground/65">
-                  Start typing to search songs
+                <div className="px-3 py-10 text-center">
+                  <PageError compact message={error} />
                 </div>
               ) : results.length === 0 ? (
                 <div className="px-3 py-10 text-center text-sm text-foreground/65">
@@ -238,12 +201,9 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                     onPointerEnter={() => warmPlaybackSong(song, true)}
                     onFocus={() => warmPlaybackSong(song, true)}
                     onClick={() => {
-                      const queueIndex = songs.findIndex((item) => item.id === song.id);
-                      if (queueIndex >= 0) {
-                        requestImmediatePlayback(song);
-                        setQueue(songs, queueIndex);
-                        setOpen(false);
-                      }
+                      requestImmediatePlayback(song);
+                      setQueue(resolvedResults, index);
+                      setOpen(false);
                     }}
                     className={cn(
                       "flex h-14 w-full items-center gap-3 rounded-xl px-3 text-left transition",

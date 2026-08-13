@@ -25,6 +25,9 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@spotify/shared/*": [
+        "./packages/shared/src/*"
       ]
     }
   },

@@ -177,3 +177,15 @@ export function planUnpinScopeFromSongs(
     updatedRecords,
   };
 }
+
+export function nextQueuedDownload(
+  records: readonly OfflineDownloadRecord[],
+  accountScope: string,
+): OfflineDownloadRecord | undefined {
+  const queuedRecords = records.filter(
+    (record) => record.accountScope === accountScope && record.status === "queued",
+  );
+  // The two tracks protecting active playback get the next download slot;
+  // bulk playlist/liked downloads continue immediately behind them.
+  return queuedRecords.find((record) => record.scopes.includes(PLAYBACK_CACHE_SCOPE)) ?? queuedRecords[0];
+}

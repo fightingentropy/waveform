@@ -1,3 +1,5 @@
+// Keep in sync with db/d1-schema.sql and numbered files in db/d1-migrations/.
+// Local preview applies these statements via ensureSchema; production uses Wrangler migrations.
 export const D1_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS "User" (
   "id" TEXT NOT NULL PRIMARY KEY,

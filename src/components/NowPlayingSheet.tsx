@@ -19,7 +19,7 @@ import {
   SkipForward,
 } from "lucide-react";
 import { useNavigate } from "react-router";
-import { formatPlaybackRate, nextPlaybackRate, sleepTimerRemainingMinutes, usePlayerStore } from "@/store/player";
+import { formatPlaybackRate, nextPlaybackRate, SLEEP_TIMER_MINUTE_OPTIONS, sleepTimerRemainingMinutes, usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
@@ -30,7 +30,6 @@ import { LyricsPanel } from "@/components/LyricsPanel";
 import { MarqueeText } from "@/components/MarqueeText";
 import { useModalDialogFocus } from "@/lib/use-modal-dialog";
 
-const SLEEP_TIMER_MINUTE_OPTIONS = [5, 15, 30, 45, 60];
 // Horizontal artwork-swipe distance (px) that commits to a track change.
 const COVER_SWIPE_COMMIT_PX = 64;
 

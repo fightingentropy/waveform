@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  getApiAuthScope,
+  getApiPath,
+  normalizeAccountScope,
+  withAccountScope,
+} from "@spotify/shared/account-scope";
+import { updateLikedIdsInPayload, updateLikedSongsInPayload } from "@spotify/shared/like-cache";
 import type { PlayerSong } from "@/types/player";
+
+export { normalizeAccountScope, withAccountScope };
 
 // The signed-in account the API cache + optimistic patches are scoped to. Kept
 // here (rather than in a player/store module) because api.ts owns withAccountScope
 // and patchLikeApiCache, the two things that actually read it. auth.tsx sets it on
 // every auth transition; likes.ts reads it before patching cached payloads.
 let currentAccountScope = "anonymous";
-
-export function normalizeAccountScope(scope: string | null | undefined): string {
-  const value = scope?.trim();
-  return value && value !== "loading" ? value : "anonymous";
-}
 
 export function getAccountScope(): string {
   return currentAccountScope;
@@ -41,37 +45,6 @@ type ApiCacheEntry<T = unknown> = {
 export const API_AUTH_REQUIRED_EVENT = "spotify:api-auth-required";
 const API_FETCH_TIMEOUT_MS = 5_000;
 const apiCache = new Map<string, ApiCacheEntry>();
-
-function getApiPath(url: string): string {
-  try {
-    return new URL(url, "http://spotify.local").pathname;
-  } catch {
-    return url.split("?")[0] || url;
-  }
-}
-
-function getApiAuthScope(url: string): string {
-  try {
-    return new URL(url, "http://spotify.local").searchParams.get("auth")?.trim() || "legacy";
-  } catch {
-    return "legacy";
-  }
-}
-
-export function withAccountScope(url: string, scope: string | null | undefined): string {
-  const value = scope?.trim() || "anonymous";
-  try {
-    const parsed = new URL(url, "http://spotify.local");
-    parsed.searchParams.set("auth", value);
-    return `${parsed.pathname}${parsed.search}`;
-  } catch {
-    const [path, query = ""] = url.split("?");
-    const params = new URLSearchParams(query);
-    params.set("auth", value);
-    const serialized = params.toString();
-    return serialized ? `${path}?${serialized}` : path;
-  }
-}
 
 function getCacheEntry<T>(url: string): ApiCacheEntry<T> | undefined {
   const memory = apiCache.get(url) as ApiCacheEntry<T> | undefined;
@@ -141,64 +114,12 @@ async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): P
   }
 }
 
-function hasStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
 function cloneCacheData<T>(value: T): T {
   try {
     return structuredClone(value);
   } catch {
     return JSON.parse(JSON.stringify(value)) as T;
   }
-}
-
-function updateLikedIdsInPayload(data: unknown, songId: string, nextLiked: boolean): boolean {
-  if (!data || typeof data !== "object") return false;
-  const target = data as { likedSongIds?: unknown; likes?: unknown };
-  let changed = false;
-  if (hasStringArray(target.likedSongIds)) {
-    const set = new Set(target.likedSongIds);
-    const had = set.has(songId);
-    if (nextLiked) set.add(songId);
-    else set.delete(songId);
-    target.likedSongIds = Array.from(set);
-    changed = had !== nextLiked;
-  }
-  if (hasStringArray(target.likes)) {
-    const set = new Set(target.likes);
-    const had = set.has(songId);
-    if (nextLiked) set.add(songId);
-    else set.delete(songId);
-    target.likes = Array.from(set);
-    changed = changed || had !== nextLiked;
-  }
-  return changed;
-}
-
-function updateLikedSongsInPayload(
-  data: unknown,
-  payload: { songId: string; nextLiked: boolean; song?: PlayerSong },
-): boolean {
-  if (!data || typeof data !== "object" || !("songs" in data)) return false;
-  const target = data as { songs?: unknown };
-  if (!Array.isArray(target.songs)) return false;
-  const songs = target.songs;
-  if (payload.nextLiked) {
-    if (!payload.song) return false;
-    const exists = songs.some((song) => {
-      return song && typeof song === "object" && (song as PlayerSong).id === payload.songId;
-    });
-    if (exists) return false;
-    target.songs = [payload.song, ...songs];
-    return true;
-  }
-  const before = songs.length;
-  const nextSongs = songs.filter((song) => {
-    return !(song && typeof song === "object" && (song as PlayerSong).id === payload.songId);
-  });
-  target.songs = nextSongs;
-  return before !== nextSongs.length;
 }
 
 export function patchLikeApiCache(
@@ -456,6 +377,7 @@ export type DiscoverPlaylistsPayload = {
 
 export type SearchIndexPayload = {
   songs: PlayerSong[];
+  nextCursor?: string | null;
 };
 
 export type SearchCatalogPayload = {

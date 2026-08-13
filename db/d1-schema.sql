@@ -1,6 +1,7 @@
--- SQLite schema for Spotify.
--- Applied automatically at runtime by src/worker/index.ts.
-
+-- Readable snapshot of the current D1 schema (baseline + later numbered
+-- migrations). Production and `wrangler d1 migrations apply` use only
+-- `db/d1-migrations/`. Local preview bootstraps from `src/lib/db-schema.ts`.
+-- Do not apply this file at runtime.
 
 CREATE TABLE IF NOT EXISTS "User" (
   "id" TEXT NOT NULL PRIMARY KEY,
@@ -52,8 +53,23 @@ CREATE TABLE IF NOT EXISTS "Song" (
   "imageUrl" TEXT NOT NULL,
   "audioUrl" TEXT NOT NULL,
   "lyricsUrl" TEXT,
+  "duration" REAL,
   "audioBitDepth" INTEGER,
   "audioSampleRate" INTEGER,
+  "album" TEXT,
+  "albumArtist" TEXT,
+  "releaseDate" TEXT,
+  "trackNumber" INTEGER,
+  "totalTracks" INTEGER,
+  "discNumber" INTEGER,
+  "totalDiscs" INTEGER,
+  "genre" TEXT,
+  "isrc" TEXT,
+  "upc" TEXT,
+  "composer" TEXT,
+  "publisher" TEXT,
+  "copyright" TEXT,
+  "outputFormat" TEXT DEFAULT 'flac',
   "userId" TEXT NOT NULL,
   "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -65,6 +81,9 @@ CREATE TABLE IF NOT EXISTS "Playlist" (
   "imageUrl" TEXT,
   "userId" TEXT NOT NULL,
   "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "source" TEXT,
+  "convertedAt" TEXT,
+  "deletedAt" TEXT,
   FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -74,8 +93,7 @@ CREATE TABLE IF NOT EXISTS "PlaylistSong" (
   "songId" TEXT NOT NULL,
   "order" INTEGER NOT NULL DEFAULT 0,
   UNIQUE ("playlistId", "songId"),
-  FOREIGN KEY ("playlistId") REFERENCES "Playlist"("id") ON DELETE CASCADE ON UPDATE CASCADE,
-  FOREIGN KEY ("songId") REFERENCES "Song"("id") ON DELETE CASCADE ON UPDATE CASCADE
+  FOREIGN KEY ("playlistId") REFERENCES "Playlist"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "Like" (
@@ -94,11 +112,59 @@ CREATE TABLE IF NOT EXISTS "LikeBackfill" (
   FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS "PlaybackState" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "userId" TEXT NOT NULL UNIQUE,
+  "deviceId" TEXT,
+  "stateJson" TEXT NOT NULL,
+  "clientUpdatedAt" INTEGER NOT NULL DEFAULT 0,
+  "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS "RateLimit" (
+  "key" TEXT NOT NULL PRIMARY KEY,
+  "count" INTEGER NOT NULL DEFAULT 0,
+  "resetAt" INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS "PlayEvent" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "userId" TEXT NOT NULL,
+  "songId" TEXT NOT NULL,
+  "songJson" TEXT NOT NULL,
+  "durationMs" INTEGER,
+  "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "SongRef" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "title" TEXT NOT NULL,
+  "artist" TEXT NOT NULL,
+  "album" TEXT,
+  "imageUrl" TEXT NOT NULL DEFAULT '',
+  "audioUrl" TEXT NOT NULL DEFAULT '',
+  "lyricsUrl" TEXT,
+  "duration" REAL,
+  "audioBitDepth" INTEGER,
+  "audioSampleRate" INTEGER,
+  "localPath" TEXT,
+  "userId" TEXT NOT NULL,
+  "createdAt" TEXT,
+  "updatedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS "idx_song_title" ON "Song" ("title");
 CREATE INDEX IF NOT EXISTS "idx_song_createdAt" ON "Song" ("createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_song_userId_createdAt" ON "Song" ("userId", "createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_playlist_userId_createdAt" ON "Playlist" ("userId", "createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_playlistsong_playlist_order" ON "PlaylistSong" ("playlistId", "order");
 CREATE INDEX IF NOT EXISTS "idx_like_userId_createdAt" ON "Like" ("userId", "createdAt" DESC);
-CREATE INDEX IF NOT EXISTS "idx_account_userId" ON "Account" ("userId");
+CREATE INDEX IF NOT EXISTS "idx_playbackstate_userId_updatedAt" ON "PlaybackState" ("userId", "updatedAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_session_userId" ON "Session" ("userId");
+CREATE INDEX IF NOT EXISTS "idx_ratelimit_resetAt" ON "RateLimit" ("resetAt");
+CREATE INDEX IF NOT EXISTS "idx_playevent_userId_createdAt" ON "PlayEvent" ("userId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_playevent_userId_songId" ON "PlayEvent" ("userId", "songId");
+CREATE INDEX IF NOT EXISTS "idx_account_userId" ON "Account" ("userId");
+CREATE INDEX IF NOT EXISTS "idx_songref_userId" ON "SongRef" ("userId");

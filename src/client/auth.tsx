@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { API_AUTH_REQUIRED_EVENT, invalidateApiCache, setAccountScope } from "@/client/api";
+import { defaultLocalOwnerImage, LOCAL_OWNER_EMAIL, LOCAL_OWNER_IMAGE_URL, LOCAL_OWNER_NAME, LOCAL_OWNER_USER_ID } from "@spotify/shared/local-owner";
 import { useLikesStore } from "@/store/likes";
 
 export type AuthUser = {
@@ -23,28 +24,17 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHED_AUTH_USER_KEY = "spotify_cached_auth_user";
 const CACHED_AUTH_SIGNED_OUT_KEY = "spotify_auth_signed_out";
-const ERLIN_PROFILE_IMAGE_URL = "/profile.jpg";
 const SESSION_REFRESH_TIMEOUT_MS = 2_500;
 const LOCAL_OFFLINE_AUTH_USER: AuthUser = {
-  id: "local-mac-mini",
-  email: "erlin@spotify.local",
-  name: "Erlin",
-  image: ERLIN_PROFILE_IMAGE_URL,
+  id: LOCAL_OWNER_USER_ID,
+  email: LOCAL_OWNER_EMAIL,
+  name: LOCAL_OWNER_NAME,
+  image: LOCAL_OWNER_IMAGE_URL,
   emailVerified: true,
 };
 
-function defaultAuthUserImage(email: string, name: string | null): string | null {
-  const normalizedName = name?.trim().toLowerCase() || "";
-  const emailLocalPart = email.split("@")[0]?.trim().toLowerCase() || "";
-  if (
-    normalizedName === "erlin" ||
-    normalizedName === "erlin hoxha" ||
-    emailLocalPart === "erlin" ||
-    emailLocalPart === "erlinhoxha"
-  ) {
-    return ERLIN_PROFILE_IMAGE_URL;
-  }
-  return null;
+function defaultAuthUserImage(email: string, _name: string | null): string | null {
+  return defaultLocalOwnerImage(email);
 }
 
 function coerceAuthUser(value: unknown): AuthUser | null {

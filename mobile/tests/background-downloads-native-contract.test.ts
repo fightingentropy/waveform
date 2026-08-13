@@ -6,6 +6,21 @@ const coordinator = await Bun.file(
     import.meta.url,
   ),
 ).text();
+const androidCoordinator = await Bun.file(
+  new URL(
+    "../modules/background-downloads/android/src/main/java/expo/modules/backgrounddownloads/BackgroundDownloadCoordinator.kt",
+    import.meta.url,
+  ),
+).text();
+const androidManifest = await Bun.file(
+  new URL(
+    "../modules/background-downloads/android/src/main/AndroidManifest.xml",
+    import.meta.url,
+  ),
+).text();
+const bridge = await Bun.file(
+  new URL("../modules/background-downloads/index.ts", import.meta.url),
+).text();
 const database = await Bun.file(
   new URL("../src/lib/offline-db.ts", import.meta.url),
 ).text();
@@ -48,5 +63,30 @@ describe("native background download durability contract", () => {
     expect(database).toContain(
       "audioPath, coverPath, lyricsPath, transferToken, updatedAt",
     );
+  });
+});
+
+describe("android WorkManager background downloads", () => {
+  test("queues unique work per key and writes a durable JSON ledger", () => {
+    expect(androidCoordinator).toContain("enqueueUniqueWork");
+    expect(androidCoordinator).toContain('UNIQUE_WORK_PREFIX = "bgdl:"');
+    expect(androidCoordinator).toContain("ledger-v1.json");
+    expect(androidCoordinator).toContain('relativePath.startsWith("offline-media/")');
+  });
+
+  test("keeps transfer tokens and revisions on the JS snapshot contract", () => {
+    expect(androidCoordinator).toContain("job.transferToken != transferToken");
+    expect(androidCoordinator).toContain("job.revision += 1");
+    expect(androidCoordinator).toContain("FOREGROUND_SERVICE_TYPE_DATA_SYNC");
+    expect(androidManifest).toContain("FOREGROUND_SERVICE_DATA_SYNC");
+    expect(androidManifest).toContain('android:foregroundServiceType="dataSync"');
+  });
+
+  test("exposes the same native module on Android as on iOS", () => {
+    expect(bridge).toContain(
+      'if (Platform.OS !== "ios" && Platform.OS !== "android") return null;',
+    );
+    expect(bridge).toContain("requireOptionalNativeModule<NativeBackgroundDownloadsModule>");
+    expect(bridge).toContain('"BackgroundDownloads"');
   });
 });

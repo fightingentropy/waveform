@@ -21,4 +21,10 @@ describe("native audio track-event contract", () => {
       expect(declaration.slice(0, declaration.indexOf("}\n") + 2)).toContain("songId: string");
     }
   });
+
+  test("teardown removes the periodic time observer so stopped decks stop emitting", () => {
+    expect(swift).toContain("deck.player.removeTimeObserver(observer)");
+    expect(swift).toContain("clearDeckObservers(deck)");
+    expect(swift).toContain("self.setupDeckObservers(deckObj)");
+  });
 });

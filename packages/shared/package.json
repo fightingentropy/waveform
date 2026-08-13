@@ -1,0 +1,17 @@
+{
+  "name": "@spotify/shared",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./player-song": "./src/player-song.ts",
+    "./crossfade-curve": "./src/crossfade-curve.ts",
+    "./local-owner": "./src/local-owner.ts",
+    "./cursor-page": "./src/cursor-page.ts",
+    "./account-scope": "./src/account-scope.ts",
+    "./like-cache": "./src/like-cache.ts",
+    "./playback-rate": "./src/playback-rate.ts",
+    "./sleep-timer": "./src/sleep-timer.ts",
+    "./shuffle": "./src/shuffle.ts",
+    "./library-search": "./src/library-search.ts"
+  }
+}

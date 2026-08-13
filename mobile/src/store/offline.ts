@@ -19,10 +19,10 @@ import {
   dbUpsertRows,
   readAllDownloadedRecords,
   resolveMediaPath,
-  toMediaRelativePath,
   verifyOrRepairRecord,
   type DownloadRow,
 } from "@/lib/offline-db";
+import { createJsOfflineDownloadPump } from "@/lib/offline-download-pump";
 import {
   type DownloadScope,
   type DownloadStatus,
@@ -50,8 +50,8 @@ import {
   shouldPublishOfflineMutationCounts,
   settleAppliedOfflineMutation,
 } from "@/lib/offline-mutation-policy";
-import { apiFetch, apiFetchWithTimeout } from "@/lib/http";
-import { getIsOnline, markOffline, subscribeOnline } from "@/lib/connectivity";
+import { apiFetchWithTimeout } from "@/lib/http";
+import { getIsOnline, subscribeOnline } from "@/lib/connectivity";
 import { canonicalOf } from "@/lib/canonical-ids";
 import {
   OFFLINE_MUTATION_OUTBOX_CHANGED_EVENT,
@@ -60,6 +60,7 @@ import {
   emit,
 } from "@/lib/events";
 import { planOfflineAccountDeletion } from "@/lib/account-deletion-policy";
+import { NativeDownloadRevisionGate, nativeTransferIdentity } from "@/lib/offline-native-revision";
 import { portablePlaybackSong, preferDownloadedPlaybackSong } from "@/lib/offline-playback";
 import { resetPlaybackEngaged } from "@/audio/publish-gate";
 import { storage } from "@/lib/storage";
@@ -101,15 +102,7 @@ let nativeDownloadSubscription: ReturnType<
 > = null;
 let bufferedNativeDownloadStates: NativeBackgroundDownloadState[] = [];
 let nativeStateApplyTail: Promise<void> = Promise.resolve();
-const nativeRevisionByTransfer = new Map<string, number>();
-const nativeCancellationTombstones = new Set<string>();
-
-function nativeTransferIdentity(
-  key: string,
-  transferToken: string,
-): string {
-  return `${key}\u0000${transferToken}`;
-}
+const nativeRevisionGate = new NativeDownloadRevisionGate();
 
 // --- Account scope -----------------------------------------------------------
 let accountScope = "anonymous";
@@ -169,11 +162,6 @@ export function keyFor(scope: string, songId: string): string {
 }
 function safeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
-}
-function extFromUrl(url: string, fallback: string): string {
-  const path = url.split(/[?#]/)[0] ?? "";
-  const m = path.match(/\.([a-zA-Z0-9]{1,5})$/);
-  return m ? `.${m[1].toLowerCase()}` : fallback;
 }
 
 // --- Offline mutation outbox -------------------------------------------------
@@ -448,6 +436,17 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     });
   };
 
+  const { runPump, pauseActiveDownload, isActiveDownloadKey } = createJsOfflineDownloadPump({
+    getAccountScope: () => accountScope,
+    nativeBackgroundDownloads,
+    offlineDir: OFFLINE_DIR,
+    getRecords: () => get().records,
+    persist,
+    setProgress,
+    clearProgress,
+    keyFor,
+  });
+
   const removeRecord = async (record: OfflineDownloadRecord) => {
     const key = keyFor(record.accountScope, record.songId);
     const nativeReference = nativeDownloadReference(record);
@@ -457,7 +456,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           nativeReference.transferToken,
         )
       : null;
-    if (transferIdentity) nativeCancellationTombstones.add(transferIdentity);
+    if (transferIdentity) nativeRevisionGate.tombstone(transferIdentity);
     // Remove the exact generation synchronously so a delayed batch-persistence
     // pass cannot enqueue it after the native cancellation check.
     let removed = false;
@@ -471,7 +470,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
       return { records, progress };
     });
     if (!removed) {
-      if (transferIdentity) nativeCancellationTombstones.delete(transferIdentity);
+      if (transferIdentity) nativeRevisionGate.clearTombstone(transferIdentity);
       return;
     }
     delete lastEmit[key];
@@ -482,7 +481,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
       try {
         await cancelNativeBackgroundDownloads([nativeReference]);
       } catch (error) {
-        nativeCancellationTombstones.delete(transferIdentity!);
+        nativeRevisionGate.clearTombstone(transferIdentity!);
         set((state) =>
           state.records[key]
             ? {}
@@ -490,7 +489,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         );
         throw error;
       }
-    } else if (activeDownload?.key === key) {
+    } else if (isActiveDownloadKey(key)) {
       // Queue-ahead targets are unpinned as playback moves. Cancel that native
       // transfer before removing its directory so it cannot keep consuming data
       // or recreate an orphan after the deletion.
@@ -508,216 +507,9 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     }
   };
 
-  // Serial download pump — one track at a time, mirroring the web pump.
-  let pumping = false;
-  // The download in flight right now, exposed so a connectivity drop or an
-  // app-background can pauseAsync() it (banking an NSURLSession resume blob)
-  // before the socket dies — otherwise the partial is orphaned and we restart
-  // from zero. Null whenever nothing is downloading.
-  let activeDownload: { resumable: FileSystem.DownloadResumable; key: string } | null = null;
-  // Key that pauseActiveDownload just paused, so the pump can tell a deliberate
-  // pause (re-queue + keep the resume blob) from a genuine failure (mark error).
-  let pausedKey: string | null = null;
   // Guards the mutation-outbox drain so overlapping AppState/foreground events
   // (and the Sync-now button) can't run two drains concurrently.
   let syncRunning = false;
-  const runPump = async () => {
-    // iOS hands the entire durable batch to BackgroundDownloadCoordinator.
-    // Running this JS pump as well would create duplicate writers for each file.
-    if (nativeBackgroundDownloads) return;
-    if (pumping) return;
-    pumping = true;
-    try {
-      // ensure base dir
-      try {
-        await FileSystem.makeDirectoryAsync(OFFLINE_DIR, { intermediates: true });
-      } catch {}
-      while (true) {
-        // Run while online (foreground or background). Offline: stop so we don't
-        // flip every row to "error"; connectivity handler re-kicks the pump.
-        if (!getIsOnline()) break;
-        const queuedRecords = Object.values(get().records).filter(
-          (record) => record.accountScope === accountScope && record.status === "queued",
-        );
-        // The two tracks protecting active playback get the next download slot;
-        // bulk playlist/liked downloads continue immediately behind them.
-        const queued =
-          queuedRecords.find((record) => record.scopes.includes(PLAYBACK_CACHE_SCOPE)) ??
-          queuedRecords[0];
-        if (!queued) break;
-        const key = keyFor(accountScope, queued.songId);
-        const resumeData = queued.resumeData;
-        persist({ ...queued, status: "downloading", updatedAt: Date.now() });
-        setProgress(key, 0);
-        try {
-          const dir = `${OFFLINE_DIR}${safeName(queued.songId)}/`;
-          await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-          const audioExt = extFromUrl(queued.song.audioUrl, ".audio");
-          const audioPath = `${dir}audio${audioExt}`;
-          // Audio is ~all the bytes (cover/lyrics are tiny), so its byte stream
-          // drives the fill ring. createDownloadResumable gives us the progress
-          // callback that downloadAsync lacks — and, seeded with a resume blob,
-          // the ability to continue a partial instead of starting over.
-          const resumable = FileSystem.createDownloadResumable(
-            toAbsoluteApiUrl(queued.song.audioUrl),
-            audioPath,
-            {},
-            ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
-              if (totalBytesExpectedToWrite > 0) {
-                setProgress(key, totalBytesWritten / totalBytesExpectedToWrite);
-              }
-            },
-            resumeData,
-          );
-          activeDownload = { resumable, key };
-          // resumeAsync() continues from the saved partial (server replies 206);
-          // downloadAsync() starts fresh. Either resolves to undefined when a
-          // pauseAsync() cancels it — that's our deliberate-pause signal below.
-          let result: FileSystem.FileSystemDownloadResult | undefined;
-          try {
-            result = resumeData ? await resumable.resumeAsync() : await resumable.downloadAsync();
-          } catch (error) {
-            // A queue-ahead download is also our end-to-end reachability probe.
-            // When it cannot reach the media URL, prefer cached/downloaded tracks
-            // immediately instead of trusting iOS's still-present cellular route.
-            if (pausedKey !== key) markOffline();
-            throw error;
-          }
-          activeDownload = null;
-          if (!result) {
-            // Cancelled by pauseActiveDownload (offline/background). It has already
-            // re-queued the row with its resume blob — leave that record intact.
-            pausedKey = null;
-            clearProgress(key);
-            continue;
-          }
-          if (result.status >= 400) {
-            // expo resolves (doesn't throw) on a bad HTTP status and writes the
-            // response body to the file — e.g. an expired signed URL returning
-            // HTML. Signed media URLs can expire while a large playlist waits in
-            // this serial queue, so refresh the song once at the authoritative
-            // endpoint and retry with the new URL instead of leaving a permanently
-            // poisoned "Retry" row that keeps using the same stale signature.
-            if (result.status === 401 || result.status === 403 || result.status === 404) {
-              try {
-                const response = await apiFetch(`/api/songs/${encodeURIComponent(queued.songId)}`, {
-                  cache: "no-store",
-                });
-                if (response.ok) {
-                  const fresh = (await response.json()) as PlayerSong;
-                  const latest = get().records[key];
-                  if (
-                    latest &&
-                    fresh?.id === queued.songId &&
-                    fresh.audioUrl &&
-                    fresh.audioUrl !== queued.song.audioUrl
-                  ) {
-                    await FileSystem.deleteAsync(audioPath, { idempotent: true }).catch(() => {});
-                    clearProgress(key);
-                    persist({
-                      ...latest,
-                      song: fresh,
-                      status: "queued",
-                      resumeData: undefined,
-                      error: undefined,
-                      updatedAt: Date.now(),
-                    });
-                    continue;
-                  }
-                }
-              } catch {
-                // Fall through to the normal error/offline classification below.
-              }
-            }
-            // Guard every other error response so garbage is never marked ready.
-            throw new Error(`Download failed with HTTP ${result.status}`);
-          }
-          // Write-time integrity check — confirm the bytes actually landed before
-          // we trust this as a download. expo resolves on any *completed* HTTP
-          // response, so without this a 0-byte or truncated file could be marked
-          // "ready". Require a non-empty file; for a full (non-resumed, 200)
-          // response that advertised a Content-Length, also require the on-disk
-          // size to reach it, catching a short/truncated transfer. Resumed 206s
-          // report only the remaining length, so the length match is skipped there
-          // (the size>0 floor still applies). A failure throws into the catch below
-          // → re-queued while offline, "error" while online — never a bad "ready".
-          const info = await FileSystem.getInfoAsync(audioPath);
-          if (!info.exists || info.isDirectory || info.size <= 0) {
-            throw new Error("Downloaded audio file is missing or empty");
-          }
-          const expectedBytes = Number(
-            result.headers?.["Content-Length"] ?? result.headers?.["content-length"],
-          );
-          if (
-            !resumeData &&
-            result.status === 200 &&
-            Number.isFinite(expectedBytes) &&
-            expectedBytes > 0 &&
-            info.size < expectedBytes
-          ) {
-            throw new Error(`Downloaded audio is truncated (${info.size}/${expectedBytes} bytes)`);
-          }
-          setProgress(key, 1);
-
-          let coverPath: string | undefined;
-          if (queued.song.imageUrl) {
-            try {
-              const coverExt = extFromUrl(queued.song.imageUrl, ".jpg");
-              const p = `${dir}cover${coverExt}`;
-              await FileSystem.downloadAsync(toAbsoluteApiUrl(queued.song.imageUrl), p);
-              coverPath = p;
-            } catch {}
-          }
-          let lyricsPath: string | undefined;
-          if (queued.song.lyricsUrl) {
-            try {
-              const p = `${dir}lyrics.lrc`;
-              await FileSystem.downloadAsync(toAbsoluteApiUrl(queued.song.lyricsUrl), p);
-              lyricsPath = p;
-            } catch {}
-          }
-
-          // The record may have gained/lost scopes while downloading; re-read.
-          const latest = get().records[key];
-          clearProgress(key);
-          if (!latest) continue; // unpinned mid-download
-          // Persist paths RELATIVE to documentDirectory — never the absolute
-          // container path, which iOS can change across a reinstall and strand.
-          persist({
-            ...latest,
-            status: "ready",
-            audioPath: toMediaRelativePath(audioPath) ?? audioPath,
-            coverPath: toMediaRelativePath(coverPath) ?? undefined,
-            lyricsPath: toMediaRelativePath(lyricsPath) ?? undefined,
-            resumeData: undefined,
-            updatedAt: Date.now(),
-            error: undefined,
-          });
-        } catch (e) {
-          activeDownload = null;
-          clearProgress(key);
-          if (pausedKey === key) {
-            // A deliberate pause surfaced as a rejection rather than an undefined
-            // result — pauseActiveDownload already re-queued it with a resume blob.
-            pausedKey = null;
-            continue;
-          }
-          const latest = get().records[key];
-          if (!latest) continue;
-          if (!getIsOnline()) {
-            // Connectivity dropped mid-download and the socket error raced ahead of
-            // our pause (no resume blob captured). Keep it queued so it retries from
-            // scratch on reconnect, instead of stranding it as a manual-retry error.
-            persist({ ...latest, status: "queued", resumeData: undefined, updatedAt: Date.now() });
-          } else {
-            persist({ ...latest, status: "error", resumeData: undefined, updatedAt: Date.now(), error: e instanceof Error ? e.message : "Download failed" });
-          }
-        }
-      }
-    } finally {
-      pumping = false;
-    }
-  };
 
   const persistQueuedRecordBatch = async (records: readonly OfflineDownloadRecord[]) => {
     if (nativeBackgroundDownloads && records.length === 0) {
@@ -788,30 +580,6 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
       // re-kicks a previously-paused in-memory queue.
       if (!nativeBackgroundDownloads && !pumpStarted) void runPump();
     }
-  };
-
-  // Pause whatever is downloading right now and bank its NSURLSession resume blob
-  // on the record, so a later resumeAsync() continues from the partial. Invoked on
-  // the two interruptions we can see coming — connectivity loss and app-background.
-  // Best-effort: if pauseAsync can't produce a blob, the row just restarts fresh.
-  const pauseActiveDownload = async () => {
-    if (nativeBackgroundDownloads) {
-      // The native URLSession waits for connectivity and owns suspension/relaunch.
-      // Pausing it from JS would defeat the background queue.
-      return;
-    }
-    const active = activeDownload;
-    if (!active) return;
-    activeDownload = null;
-    pausedKey = active.key;
-    let resumeData: string | undefined;
-    try {
-      const state = await active.resumable.pauseAsync();
-      resumeData = state.resumeData;
-    } catch {}
-    clearProgress(active.key);
-    const latest = get().records[active.key];
-    if (latest) persist({ ...latest, status: "queued", resumeData, updatedAt: Date.now() });
   };
 
   // Recompute total downloaded bytes + pending-mutation count into store state.
@@ -942,7 +710,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         nativeTransferIdentity(reference.key, reference.transferToken),
       );
       for (const identity of transferIdentities) {
-        nativeCancellationTombstones.add(identity);
+        nativeRevisionGate.tombstone(identity);
       }
 
       // Publish the targeted removals synchronously. A still-running
@@ -984,7 +752,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
             return { records };
           });
           for (const identity of transferIdentities) {
-            nativeCancellationTombstones.delete(identity);
+            nativeRevisionGate.clearTombstone(identity);
           }
           const restored = planned.removedRecords.filter((record) => {
             const current =
@@ -1602,7 +1370,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           : [];
       });
       for (const identity of transferIdentities) {
-        nativeCancellationTombstones.add(identity);
+        nativeRevisionGate.tombstone(identity);
       }
       // Block delayed batch persistence before awaiting the native tombstones.
       set((state) => {
@@ -1624,7 +1392,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           await cancelNativeBackgroundDownloadAccount(targetScope);
         } catch (error) {
           for (const identity of transferIdentities) {
-            nativeCancellationTombstones.delete(identity);
+            nativeRevisionGate.clearTombstone(identity);
           }
           set((state) => {
             const nextRecords = { ...state.records };
@@ -1918,13 +1686,11 @@ async function applyNativeBackgroundDownloadState(
   nativeState: NativeBackgroundDownloadState,
 ): Promise<void> {
   const state = nativeState as BackgroundDownloadTransportState;
-  const revisionKey = nativeTransferIdentity(
+  if (!nativeRevisionGate.shouldApply(state.key, state.transferToken, state.revision)) return;
+  const knownRevision = nativeRevisionGate.knownRevision(
     state.key,
     state.transferToken,
   );
-  if (nativeCancellationTombstones.has(revisionKey)) return;
-  const knownRevision = nativeRevisionByTransfer.get(revisionKey) ?? -1;
-  if (state.revision < knownRevision) return;
 
   const current = useOfflineStore.getState().records[state.key];
   const next = current
@@ -1975,7 +1741,7 @@ async function applyNativeBackgroundDownloadState(
   }
   // Advance only after the durable write succeeds. If SQLite rejects, the same
   // native outbox revision remains eligible for replay and cannot be ACKed away.
-  nativeRevisionByTransfer.set(revisionKey, state.revision);
+  nativeRevisionGate.record(state.key, state.transferToken, state.revision);
 
   if (isTerminalBackgroundDownloadState(state)) {
     // Commit first, then acknowledge the native completion outbox. If SQLite

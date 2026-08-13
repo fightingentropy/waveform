@@ -1,5 +1,10 @@
 import { create } from "zustand";
 import { markPlaybackEngaged } from "@/audio/publish-gate";
+import {
+  createShuffleRemaining,
+  getNextShufflePool,
+  validShuffleRemaining,
+} from "@spotify/shared/shuffle";
 import { getIsOnline } from "@/lib/connectivity";
 import { songKind } from "@/lib/player-song";
 import {
@@ -17,6 +22,20 @@ import {
   rewindHistory,
 } from "@/store/player-nav";
 import type { PlayerSong } from "@/types/player";
+
+export {
+  PLAYBACK_RATE_CYCLE,
+  formatPlaybackRate,
+  nextPlaybackRate,
+} from "@spotify/shared/playback-rate";
+export {
+  SLEEP_TIMER_MINUTE_OPTIONS,
+  sleepTimerRemainingMinutes,
+} from "@spotify/shared/sleep-timer";
+export {
+  chooseNextShuffleIndex,
+  getNextShufflePool,
+} from "@spotify/shared/shuffle";
 
 export type { PlayerSong } from "@/types/player";
 
@@ -285,18 +304,6 @@ export const MIN_RECS_AHEAD = 2;
 export const RECS_FETCH_BATCH = 12;
 export const MIN_SEEDS = 2;
 
-// Tap-to-cycle order for the podcast speed chip.
-export const PLAYBACK_RATE_CYCLE = [1, 1.25, 1.5, 1.75, 2, 0.75];
-
-export function nextPlaybackRate(rate: number): number {
-  const index = PLAYBACK_RATE_CYCLE.indexOf(rate);
-  return PLAYBACK_RATE_CYCLE[(index + 1) % PLAYBACK_RATE_CYCLE.length];
-}
-
-export function formatPlaybackRate(rate: number): string {
-  return `${rate}×`;
-}
-
 function pushHistory(history: number[], index: number): number[] {
   if (!Number.isInteger(index) || index < 0) return history;
   return [...history, index].slice(-MAX_PLAY_HISTORY);
@@ -306,35 +313,6 @@ function clampQueueIndex(queueLength: number, index: number): number {
   if (queueLength <= 0) return -1;
   if (!Number.isInteger(index)) return 0;
   return Math.max(0, Math.min(queueLength - 1, index));
-}
-
-function createShuffleRemaining(queueLength: number, currentIndex: number): number[] {
-  if (queueLength <= 1) return [];
-  const current = clampQueueIndex(queueLength, currentIndex);
-  const remaining: number[] = [];
-  for (let index = 0; index < queueLength; index += 1) {
-    if (index !== current) remaining.push(index);
-  }
-  // Randomize the play order ONCE here (Fisher–Yates) rather than picking a random
-  // index at each next(). The queue sheet renders this exact order as "up next"
-  // (via getUpcomingPlaybackIndices) and next() consumes it head-first, so a fixed
-  // shuffled order is what keeps the displayed queue matching what actually plays.
-  for (let i = remaining.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
-  }
-  return remaining;
-}
-
-function validShuffleRemaining(queueLength: number, currentIndex: number, remaining: number[]): number[] {
-  if (queueLength <= 1) return [];
-  const seen = new Set<number>();
-  return remaining.filter((index) => {
-    if (!Number.isInteger(index) || index < 0 || index >= queueLength || index === currentIndex) return false;
-    if (seen.has(index)) return false;
-    seen.add(index);
-    return true;
-  });
 }
 
 function removeQueueIndex(indices: number[], indexToRemove: number): number[] {
@@ -358,17 +336,6 @@ function remapQueueIndices(indices: number[], pivot: number, delta: 1 | -1): num
   return remapped;
 }
 
-export function getNextShufflePool(queueLength: number, currentIndex: number, remaining: number[]): number[] {
-  const validRemaining = validShuffleRemaining(queueLength, currentIndex, remaining);
-  return validRemaining.length > 0 ? validRemaining : createShuffleRemaining(queueLength, currentIndex);
-}
-
-export function chooseNextShuffleIndex(queueLength: number, currentIndex: number, remaining: number[]): number {
-  const pool = getNextShufflePool(queueLength, currentIndex, remaining);
-  if (pool.length === 0) return clampQueueIndex(queueLength, currentIndex);
-  return pool[Math.floor(Math.random() * pool.length)];
-}
-
 export type UpcomingPlaybackState = {
   shuffle: boolean;
   repeatMode: PlayerState["repeatMode"];
@@ -380,8 +347,8 @@ export type UpcomingPlaybackState = {
 // actually visit them, not array order. Used to prefetch/warm upcoming tracks so
 // the warmer doesn't fetch the wrong songs under shuffle. Mirrors next() and the
 // QueueSheet "up next" list: in shuffle, the redo stack (playFuture, top first)
-// comes before the shuffle pool. Pool picks are random at play time, so warming
-// the pool's leading entries is a best-effort hedge for the next fresh draw.
+// comes before the shuffle pool. The pool is shuffled once (Fisher–Yates) and
+// consumed head-first, so warming the leading entries matches what next() plays.
 export function getUpcomingPlaybackIndices(
   queueLength: number,
   currentIndex: number,
@@ -433,10 +400,6 @@ export function getUpcomingPlaybackIndices(
     }
   }
   return result;
-}
-
-export function sleepTimerRemainingMinutes(endsAt: number, now = Date.now()): number {
-  return Math.max(1, Math.ceil((endsAt - now) / 60_000));
 }
 
 // Offline, a manual skip should hop to the nearest DOWNLOADED track in the given

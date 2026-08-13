@@ -73,7 +73,7 @@ let cachedModule: NativeBackgroundDownloadsModule | null | undefined;
 let cachedEmitter: any = null;
 
 function nativeModule(): NativeBackgroundDownloadsModule | null {
-  if (Platform.OS !== "ios") return null;
+  if (Platform.OS !== "ios" && Platform.OS !== "android") return null;
   if (cachedModule === undefined) {
     cachedModule =
       requireOptionalNativeModule<NativeBackgroundDownloadsModule>(

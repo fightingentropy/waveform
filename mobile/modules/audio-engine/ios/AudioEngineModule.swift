@@ -67,6 +67,13 @@ public class AudioEngineModule: Module {
             self.ensureConfigured()
         }
 
+        OnDestroy {
+            for deck in self.decks.values {
+                self.teardownDeck(deck)
+            }
+            NotificationCenter.default.removeObserver(self)
+        }
+
         // MARK: Lifecycle
 
         AsyncFunction("configure") {
@@ -137,6 +144,7 @@ public class AudioEngineModule: Module {
                 deckObj.lastDuration = 0
                 deckObj.player.replaceCurrentItem(with: item)
                 deckObj.player.volume = deckObj.volume
+                self.setupDeckObservers(deckObj)
 
                 deckObj.statusObs = item.observe(\.status, options: [.new]) { [weak self, weak deckObj] item, _ in
                     guard let self = self, let deckObj = deckObj else { return }
@@ -384,6 +392,7 @@ public class AudioEngineModule: Module {
     }
 
     private func setupDeckObservers(_ deck: Deck) {
+        clearDeckObservers(deck)
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         deck.timeObserver = deck.player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak deck] _ in
             self?.emitTime(deck)
@@ -399,6 +408,15 @@ public class AudioEngineModule: Module {
                 break
             }
         }
+    }
+
+    private func clearDeckObservers(_ deck: Deck) {
+        if let observer = deck.timeObserver {
+            deck.player.removeTimeObserver(observer)
+            deck.timeObserver = nil
+        }
+        deck.rateObs?.invalidate()
+        deck.rateObs = nil
     }
 
     // MARK: - Playback helpers
@@ -446,6 +464,7 @@ public class AudioEngineModule: Module {
             NotificationCenter.default.removeObserver(obs)
             deck.endObserver = nil
         }
+        clearDeckObservers(deck)
         deck.item = nil
         deck.songId = nil
     }
