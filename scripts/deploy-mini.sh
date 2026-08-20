@@ -68,12 +68,13 @@ fi
 
 [[ -f dist/client/index.html ]] || { echo "Missing dist/client/index.html. Run without --skip-build first." >&2; exit 1; }
 
-"${SSH_BASE[@]}" "$MINI_HOST" "mkdir -p '$REMOTE_APP/dist' '$REMOTE_APP/src/lib' '$REMOTE_APP/src/server' '$REMOTE_APP/src/types' '$REMOTE_APP/cache'"
+"${SSH_BASE[@]}" "$MINI_HOST" "mkdir -p '$REMOTE_APP/dist' '$REMOTE_APP/src/lib' '$REMOTE_APP/src/server' '$REMOTE_APP/src/types' '$REMOTE_APP/packages/shared' '$REMOTE_APP/cache'"
 
 rsync -a --delete -e "$RSYNC_SSH" dist/ "$MINI_HOST:$REMOTE_APP/dist/"
 rsync -a --delete -e "$RSYNC_SSH" src/lib/ "$MINI_HOST:$REMOTE_APP/src/lib/"
 rsync -a --delete -e "$RSYNC_SSH" src/server/ "$MINI_HOST:$REMOTE_APP/src/server/"
 rsync -a --delete -e "$RSYNC_SSH" src/types/ "$MINI_HOST:$REMOTE_APP/src/types/"
+rsync -a --delete -e "$RSYNC_SSH" packages/shared/ "$MINI_HOST:$REMOTE_APP/packages/shared/"
 rsync -a -e "$RSYNC_SSH" package.json bun.lock tsconfig.json "$MINI_HOST:$REMOTE_APP/"
 
 if [[ "$SKIP_INSTALL" -eq 0 ]]; then
