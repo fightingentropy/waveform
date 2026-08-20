@@ -9,6 +9,7 @@ import {
 import type { UserRow } from "@/lib/db-types";
 import { sniffUploadMediaBytes } from "@/lib/upload-media-sniff";
 import type { SqlTag } from "@/lib/sql-tag";
+import { safePrivatePageNext } from "@/lib/private-web-surface";
 import { LOCAL_MAC_MINI_AUTH_USER, type AppEnv, type AuthUser } from "./env";
 import { jsonError, requireUser } from "./http";
 import {
@@ -324,6 +325,25 @@ export function registerAuthRoutes(app: Hono<AppEnv>): void {
 app.get("/api/auth/session", async (c) => {
   const user = c.get("user");
   return c.json({ user: user ? await publicUserForResponse(c, user) : null });
+});
+
+app.get("/api/auth/page-gate", (c) => {
+  if (c.get("user")) {
+    return new Response(null, {
+      status: 204,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+  const next = safePrivatePageNext(c.req.header("x-forwarded-uri"));
+  const signIn = new URL("/signin", publicAppOrigin(c.env, c.req.url));
+  if (next !== "/") signIn.searchParams.set("next", next);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: signIn.toString(),
+      "cache-control": "no-store",
+    },
+  });
 });
 
 app.post("/api/auth/signin", async (c) => {

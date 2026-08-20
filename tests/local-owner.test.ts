@@ -8,11 +8,12 @@ import {
 } from "../packages/shared/src/local-owner";
 
 describe("local owner identity", () => {
-  test("keeps the sentinel user id and maps cached local emails to the profile image", () => {
+  test("keeps the sentinel user id and maps cached local emails to generic artwork", () => {
     expect(LOCAL_OWNER_USER_ID).toBe("local-mac-mini");
+    expect(LOCAL_OWNER_IMAGE_URL).toBe("/music-placeholder.svg");
     expect(isLocalOwnerUserId(LOCAL_OWNER_USER_ID)).toBe(true);
     expect(defaultLocalOwnerImage(LOCAL_OWNER_EMAIL)).toBe(LOCAL_OWNER_IMAGE_URL);
-    expect(defaultLocalOwnerImage("erlin@spotify.local")).toBe(LOCAL_OWNER_IMAGE_URL);
+    expect(defaultLocalOwnerImage("listener@spotify.local")).toBe(LOCAL_OWNER_IMAGE_URL);
     expect(defaultLocalOwnerImage("someone@example.com")).toBeNull();
   });
 });

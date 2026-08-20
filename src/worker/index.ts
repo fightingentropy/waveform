@@ -14,6 +14,10 @@ import { buildSql, statementReturnsRows, type SqlRow, type SqlTag, type Template
 import { songToPlayerSong } from "@/lib/song-utils";
 import { sniffUploadMediaBytes } from "@/lib/upload-media-sniff";
 import { canonicalizeLocalMediaUrl } from "@/lib/local-media-signing";
+import {
+  isLegacyPublicProfilePath,
+  isWorkersDevHost,
+} from "@/lib/private-web-surface";
 import type { PlayerSong } from "@/types/player";
 import { resolveQobuzAvailability } from "@/lib/qobuz-download";
 import {
@@ -916,6 +920,7 @@ function streamMacMiniSpotifyImport(
 
 const AUTH_OPEN_API_PATHS = new Set([
   "/api/auth/session",
+  "/api/auth/page-gate",
   "/api/auth/signin",
   "/api/auth/signout",
   "/api/auth/resend-verification",
@@ -2618,6 +2623,17 @@ registerR2MediaRoutes(app);
 
 app.get("/api/artwork/*", (c) => c.redirect("/apple-icon.png", 302));
 
+app.all("/api", () => jsonError("Not found", 404));
+app.all("/api/*", () => jsonError("Not found", 404));
+
+app.all("*", async (c) => {
+  const url = new URL(c.req.url);
+  if (isLegacyPublicProfilePath(url.pathname) || isWorkersDevHost(url.hostname)) {
+    return jsonError("Not found", 404);
+  }
+  return c.env.ASSETS.fetch(c.req.raw);
+});
+
 app.onError((error) => {
   if (error instanceof ApiError) {
     return jsonError(error.message, error.status);
@@ -2625,8 +2641,6 @@ app.onError((error) => {
   console.error("[worker] unhandled error", error);
   return jsonError("Internal server error", 500);
 });
-
-app.all("*", async (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default {
   fetch: app.fetch,

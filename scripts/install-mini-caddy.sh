@@ -208,6 +208,7 @@ https://{domain} {{
 \t\tStrict-Transport-Security "max-age=31536000; includeSubDomains"
 \t\tX-Content-Type-Options "nosniff"
 \t\tX-Frame-Options "DENY"
+\t\tX-Robots-Tag "noindex, nofollow, noarchive, nosnippet"
 \t}}
 
 \t@private_worker_proxy {{
@@ -237,12 +238,34 @@ https://{domain} {{
 \t\timport spotify_local_public
 \t}}
 
-\t@spotify_api path /api/*
+\t@spotify_api path /api /api/*
 \thandle @spotify_api {{
 \t\timport spotify_worker_backend
 \t}}
 
+\t@spotify_legacy_profile path /profile.jpg
+\thandle @spotify_legacy_profile {{
+\t\trespond 404
+\t}}
+
+\t@spotify_register path /register /register/
+\thandle @spotify_register {{
+\t\tredir /signin 302
+\t}}
+
+\t# The sign-in shell and only the static files needed to render it stay public.
+\t# Every application page below is authorized against the Worker's D1 session
+\t# before the local SPA can be served.
+\t@spotify_public_web path /signin /signin/ /assets/* /favicon.ico /icon.svg /icon-512.png /apple-icon.png /logo.png /music-placeholder.svg /manifest.webmanifest /sw.js /robots.txt
+\thandle @spotify_public_web {{
+\t\timport spotify_local_static
+\t}}
+
 \thandle {{
+\t\tforward_auth https://{worker_host} {{
+\t\t\turi /api/auth/page-gate
+\t\t\theader_up Host {quoted_worker}
+\t\t}}
 \t\timport spotify_local_static
 \t}}
 

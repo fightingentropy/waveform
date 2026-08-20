@@ -1,7 +1,7 @@
 export const LOCAL_OWNER_USER_ID = "local-mac-mini";
 export const LOCAL_OWNER_EMAIL = "owner@localhost";
 export const LOCAL_OWNER_NAME = "Library Owner";
-export const LOCAL_OWNER_IMAGE_URL = "/profile.jpg";
+export const LOCAL_OWNER_IMAGE_URL = "/music-placeholder.svg";
 
 export function isLocalOwnerUserId(id: string): boolean {
   return id === LOCAL_OWNER_USER_ID;

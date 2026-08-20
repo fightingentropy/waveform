@@ -38,6 +38,21 @@ export function text(value: string, status = 200): Response {
   });
 }
 
+export function withNoIndexHeader(response: Response): Response {
+  try {
+    response.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
+    return response;
+  } catch {
+    const headers = new Headers(response.headers);
+    headers.set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+}
+
 export async function readJsonBody<T>(request: Request): Promise<T | null> {
   try {
     return (await request.json()) as T;

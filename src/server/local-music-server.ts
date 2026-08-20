@@ -20,6 +20,10 @@ import {
 } from "../lib/licensed-source-download";
 import { maybeDecryptDeezerBuffer, resolveDeezerDecryptionId } from "../lib/deezer-decrypt";
 import {
+  isApiPath,
+  isLegacyPublicProfilePath,
+} from "../lib/private-web-surface";
+import {
   RemoteUrlError,
   fetchPublicHttpUrl,
 } from "../lib/safe-fetch";
@@ -56,7 +60,7 @@ import {
   requestRequiresPrivateProxyAuth,
 } from "./local-access";
 import { createPrivateProxyAuthenticator } from "./proxy-auth";
-import { json, jsonCached, text, readJsonBody } from "./local-http";
+import { json, jsonCached, text, readJsonBody, withNoIndexHeader } from "./local-http";
 import {
   MAX_AUDIO_BYTES,
   MAX_IMAGE_BYTES,
@@ -1443,7 +1447,7 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     return json({ user: localUser() });
   }
   if (pathname === "/api/register" && request.method === "POST") {
-    return json({ ok: true }, { status: 201 });
+    return json({ error: "Registration is disabled" }, { status: 403 });
   }
 
   if (pathname.startsWith("/api/profile/image/") && request.method === "GET") {
@@ -1815,6 +1819,13 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 }
 
 async function serveStaticAsset(request: Request, url: URL): Promise<Response> {
+  if (isLegacyPublicProfilePath(url.pathname)) return notFound();
+  if (url.pathname === "/register" || url.pathname === "/register/") {
+    return new Response(null, {
+      status: 302,
+      headers: { location: "/signin", "cache-control": "no-store" },
+    });
+  }
   const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;
   const relativePath = requestedPath
     .split("/")
@@ -1881,6 +1892,7 @@ function setCorsHeaders(headers: Headers, allowOrigin: string): void {
 // Add CORS headers to a finished response. serveFile/Bun.file responses can carry
 // immutable headers, so fall back to rebuilding with a mutable copy.
 function applyCors(request: Request, response: Response): Response {
+  response = withNoIndexHeader(response);
   const allow = corsAllowOrigin(request.headers.get("origin"));
   if (!allow) return response;
   try {
@@ -1920,7 +1932,7 @@ Bun.serve({
       return new Response(null, { status: 204, headers });
     }
     try {
-      const response = url.pathname.startsWith("/api/")
+      const response = isApiPath(url.pathname)
         ? await handleApi(request, url)
         : await serveStaticAsset(request, url);
       return applyCors(request, response);

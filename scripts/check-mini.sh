@@ -11,6 +11,7 @@ PORT="${PORT:-5174}"
 REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
 SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-app}"
 PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-https://music.streamarena.xyz}"
+WORKER_ORIGIN="${WORKER_ORIGIN:-https://spotify.erlinhoxha.workers.dev}"
 
 SSH_OPTS=(
   -i "$SSH_KEY"
@@ -22,6 +23,8 @@ source "$SCRIPT_DIR/mini-host.sh"
 resolve_mini_host
 
 fail=0
+SPOTIFY_CHECK_TMP="$(mktemp -d /tmp/spotify-private-check.XXXXXX)"
+trap 'rm -rf "$SPOTIFY_CHECK_TMP"' EXIT
 
 pass() {
   printf 'ok  %s\n' "$1"
@@ -30,6 +33,19 @@ pass() {
 bad() {
   printf 'bad %s\n' "$1" >&2
   fail=1
+}
+
+header_value() {
+  local name="$1"
+  local file="$2"
+  awk -F: -v name="$name" '
+    tolower($1) == tolower(name) {
+      value = substr($0, index($0, ":") + 1)
+      sub(/^[[:space:]]+/, "", value)
+      sub(/\r$/, "", value)
+    }
+    END { print value }
+  ' "$file"
 }
 
 remote_output="$(ssh "${SSH_OPTS[@]}" "$MINI_HOST" \
@@ -121,5 +137,67 @@ public_session_status="$(
 [[ "$public_session_status" == "200" ]] \
   && pass "public HTTPS session route returns HTTP 200" \
   || bad "public HTTPS session route returned HTTP ${public_session_status:-000}"
+
+settings_status="$(
+  curl -sS -D "$SPOTIFY_CHECK_TMP/settings.headers" -o /dev/null -w "%{http_code}" \
+    --max-time 15 "${PUBLIC_ORIGIN%/}/settings" || true
+)"
+settings_location="$(header_value location "$SPOTIFY_CHECK_TMP/settings.headers")"
+if [[ "$settings_status" == "302" && ( "$settings_location" == */signin || "$settings_location" == */signin\?* ) ]]; then
+  pass "anonymous settings page redirects to sign-in"
+else
+  bad "anonymous settings returned HTTP ${settings_status:-000} location '$settings_location' (expected 302 to /signin)"
+fi
+
+signin_status="$(
+  curl -sS -D "$SPOTIFY_CHECK_TMP/signin.headers" -o /dev/null -w "%{http_code}" \
+    --max-time 15 "${PUBLIC_ORIGIN%/}/signin" || true
+)"
+signin_robots="$(header_value x-robots-tag "$SPOTIFY_CHECK_TMP/signin.headers")"
+[[ "$signin_status" == "200" ]] \
+  && pass "public sign-in shell returns HTTP 200" \
+  || bad "public sign-in shell returned HTTP ${signin_status:-000}"
+[[ "$signin_robots" == "noindex, nofollow, noarchive, nosnippet" ]] \
+  && pass "public sign-in shell sends X-Robots-Tag" \
+  || bad "public sign-in shell X-Robots-Tag is '$signin_robots'"
+
+profile_status="$(
+  curl -sS -o /dev/null -w "%{http_code}" --max-time 15 \
+    "${PUBLIC_ORIGIN%/}/profile.jpg" || true
+)"
+[[ "$profile_status" == "404" ]] \
+  && pass "legacy public profile asset returns HTTP 404" \
+  || bad "legacy public profile asset returned HTTP ${profile_status:-000}"
+
+robots_status="$(
+  curl -sS -o "$SPOTIFY_CHECK_TMP/robots.txt" -w "%{http_code}" --max-time 15 \
+    "${PUBLIC_ORIGIN%/}/robots.txt" || true
+)"
+if [[ "$robots_status" == "200" ]] && grep -Fqx "Disallow: /" "$SPOTIFY_CHECK_TMP/robots.txt"; then
+  pass "robots.txt disallows all crawling"
+else
+  bad "robots.txt returned HTTP ${robots_status:-000} without 'Disallow: /'"
+fi
+
+worker_root_status="$(
+  curl -sS -o /dev/null -w "%{http_code}" --max-time 15 \
+    "${WORKER_ORIGIN%/}/" || true
+)"
+[[ "$worker_root_status" == "404" ]] \
+  && pass "workers.dev non-API surface returns HTTP 404" \
+  || bad "workers.dev non-API surface returned HTTP ${worker_root_status:-000}"
+
+wrong_method_status="$(
+  curl -sS -X POST -D "$SPOTIFY_CHECK_TMP/api-miss.headers" \
+    -o "$SPOTIFY_CHECK_TMP/api-miss.body" -w "%{http_code}" --max-time 15 \
+    "${PUBLIC_ORIGIN%/}/api/auth/page-gate" || true
+)"
+wrong_method_content_type="$(header_value content-type "$SPOTIFY_CHECK_TMP/api-miss.headers")"
+if [[ "$wrong_method_status" == "404" && "$wrong_method_content_type" == application/json* ]] \
+  && ! grep -Eiq '<!doctype[[:space:]]+html|<html([[:space:]>])' "$SPOTIFY_CHECK_TMP/api-miss.body"; then
+  pass "wrong-method API miss returns JSON, not the SPA"
+else
+  bad "wrong-method API miss returned HTTP ${wrong_method_status:-000} type '$wrong_method_content_type'"
+fi
 
 exit "$fail"

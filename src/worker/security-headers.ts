@@ -1,6 +1,7 @@
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
+  "X-Robots-Tag": "noindex, nofollow, noarchive, nosnippet",
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
   // SAFE SUBSET ONLY: no default-src/script-src/connect-src so the SPA keeps working.
