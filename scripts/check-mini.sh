@@ -149,6 +149,17 @@ else
   bad "anonymous settings returned HTTP ${settings_status:-000} location '$settings_location' (expected 302 to /signin)"
 fi
 
+register_status="$(
+  curl -sS -D "$SPOTIFY_CHECK_TMP/register.headers" -o /dev/null -w "%{http_code}" \
+    --max-time 15 "${PUBLIC_ORIGIN%/}/register" || true
+)"
+register_location="$(header_value location "$SPOTIFY_CHECK_TMP/register.headers")"
+if [[ "$register_status" == "302" && ( "$register_location" == */signin || "$register_location" == */signin\?* ) ]]; then
+  pass "public registration route redirects to sign-in"
+else
+  bad "public registration route returned HTTP ${register_status:-000} location '$register_location' (expected 302 to /signin)"
+fi
+
 signin_status="$(
   curl -sS -D "$SPOTIFY_CHECK_TMP/signin.headers" -o /dev/null -w "%{http_code}" \
     --max-time 15 "${PUBLIC_ORIGIN%/}/signin" || true

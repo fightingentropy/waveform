@@ -171,7 +171,7 @@ describe("persistent private-site deployment contract", () => {
       "utf8",
     );
     expect(caddyInstaller).toContain("\\t@spotify_register path /register /register/");
-    expect(caddyInstaller).toContain("\\t\\tredir /signin 302");
+    expect(caddyInstaller).toContain("\\t\\tredir * /signin 302");
     expect(caddyInstaller).toContain("\\t@spotify_legacy_profile path /profile.jpg");
     expect(caddyInstaller).toContain("\\t\\trespond 404");
     expect(caddyInstaller).toContain("\\t@spotify_public_web path /signin /signin/ /assets/*");
@@ -189,6 +189,7 @@ describe("persistent private-site deployment contract", () => {
     );
     for (const path of [
       '/settings"',
+      '/register"',
       '/signin"',
       '/profile.jpg"',
       '/robots.txt"',

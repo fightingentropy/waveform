@@ -250,7 +250,7 @@ https://{domain} {{
 
 \t@spotify_register path /register /register/
 \thandle @spotify_register {{
-\t\tredir /signin 302
+\t\tredir * /signin 302
 \t}}
 
 \t# The sign-in shell and only the static files needed to render it stay public.
