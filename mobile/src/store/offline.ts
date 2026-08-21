@@ -19,6 +19,7 @@ import {
   dbUpsertRows,
   readAllDownloadedRecords,
   resolveMediaPath,
+  toMediaRelativePath,
   verifyOrRepairRecord,
   type DownloadRow,
 } from "@/lib/offline-db";
@@ -72,6 +73,7 @@ import {
   cancelNativeBackgroundDownloads,
   enqueueNativeBackgroundDownloads,
   getNativeBackgroundDownloadSnapshot,
+  protectNativeOfflineMediaStorage,
   setNativeBackgroundDownloadAccount,
   supportsNativeBackgroundDownloads,
   type NativeBackgroundDownloadState,
@@ -936,6 +938,12 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
             // ready row. Queued/interrupted files are deliberately NOT promoted.
             await reconcileDownloadedFiles();
             await purgeOrphanedDownloadArtifacts();
+            if (nativeBackgroundDownloads) {
+              // Imported/restored downloads bypass the native move step that
+              // normally applies file protection and iCloud-backup exclusion.
+              // Normalize the complete tree before exposing it as hydrated.
+              await protectNativeOfflineMediaStorage().catch(() => {});
+            }
 
             if (nativeBackgroundDownloads) {
               // A terminal native item is removed only after SQLite contains the
@@ -1044,7 +1052,9 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
               persist({
                 ...current,
                 status: "queued",
-                audioPath: undefined,
+                audioPath: result.audioValid ? current.audioPath : undefined,
+                coverPath: result.coverValid ? current.coverPath : undefined,
+                lyricsPath: result.lyricsValid ? current.lyricsPath : undefined,
                 transferToken: nativeBackgroundDownloads
                   ? createDownloadTransferToken()
                   : current.transferToken,
@@ -1509,28 +1519,30 @@ export async function clearOfflineAccountData(scope: string): Promise<void> {
   void useOfflineStore.getState().refreshStorage();
 }
 
-// Validate and re-attach records that SQLite says completed. Queued/downloading
-// rows are NEVER promoted just because an "audio*" destination is non-empty: an
-// app kill can leave a truncated partial there, and treating it as ready makes a
-// corrupt download permanent. Conversely, a ready row whose file disappeared is
-// re-queued before hydration completes, so playback never prefers a dead file.
+async function isValidStoredDownloadPath(
+  path: string | null | undefined,
+): Promise<boolean> {
+  const livePath = resolveMediaPath(path);
+  if (!livePath) return false;
+  try {
+    const info = await FileSystem.getInfoAsync(livePath);
+    return info.exists && !info.isDirectory && info.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+// Validate and re-attach records that SQLite says completed. A catalogued cover
+// or lyrics file is part of a complete download, so a ready row missing either
+// is queued for an in-place sidecar repair before hydration completes. Existing
+// valid audio stays attached and native transport adopts it rather than fetching
+// the large payload again. Queued/downloading rows are never promoted from a
+// stray destination because an interrupted transfer can leave a partial file.
 async function reconcileDownloadedFiles(): Promise<void> {
   const records = Object.values(useOfflineStore.getState().records);
   const fixed: Record<string, OfflineDownloadRecord> = {};
   for (const rec of records) {
     if (rec.status !== "ready") continue;
-
-    const hasRelativePath =
-      !!rec.audioPath &&
-      !rec.audioPath.startsWith("file://") &&
-      !rec.audioPath.startsWith("/");
-    if (hasRelativePath) {
-      const livePath = resolveMediaPath(rec.audioPath);
-      try {
-        const info = livePath ? await FileSystem.getInfoAsync(livePath) : null;
-        if (info?.exists && !info.isDirectory && info.size > 0) continue;
-      } catch {}
-    }
 
     const relDir = `offline-media/${safeName(rec.songId)}`;
     const absDir = `${FileSystem.documentDirectory ?? ""}${relDir}`;
@@ -1538,42 +1550,61 @@ async function reconcileDownloadedFiles(): Promise<void> {
     try {
       names = await FileSystem.readDirectoryAsync(absDir);
     } catch {}
-    const audioName = names.find((n) => n.startsWith("audio"));
-    let size = 0;
-    if (audioName) {
-      try {
-        const info = await FileSystem.getInfoAsync(`${absDir}/${audioName}`);
-        size = info.exists && !info.isDirectory ? info.size : 0;
-      } catch {}
-    }
+    const audioName = names.find((name) => name.startsWith("audio"));
+    const coverName = names.find((name) => name.startsWith("cover"));
+    const lyricsName = names.find((name) => name.startsWith("lyrics"));
+    const discoveredAudio = audioName ? `${relDir}/${audioName}` : undefined;
+    const discoveredCover = coverName ? `${relDir}/${coverName}` : undefined;
+    const discoveredLyrics = lyricsName ? `${relDir}/${lyricsName}` : undefined;
 
-    const key = keyFor(rec.accountScope, rec.songId);
-    if (!audioName || size <= 0) {
-      fixed[key] = {
-        ...rec,
-        status: "queued",
-        audioPath: undefined,
-        coverPath: undefined,
-        lyricsPath: undefined,
-        resumeData: undefined,
-        transferToken: nativeBackgroundDownloads
-          ? createDownloadTransferToken()
-          : rec.transferToken,
-        error: undefined,
-        updatedAt: Date.now(),
-      };
+    const [storedAudioValid, storedCoverValid, storedLyricsValid] =
+      await Promise.all([
+        isValidStoredDownloadPath(rec.audioPath),
+        isValidStoredDownloadPath(rec.coverPath),
+        isValidStoredDownloadPath(rec.lyricsPath),
+      ]);
+    const audioPath = storedAudioValid
+      ? toMediaRelativePath(rec.audioPath) ?? undefined
+      : (await isValidStoredDownloadPath(discoveredAudio))
+        ? discoveredAudio
+        : undefined;
+    const coverPath = storedCoverValid
+      ? toMediaRelativePath(rec.coverPath) ?? undefined
+      : (await isValidStoredDownloadPath(discoveredCover))
+        ? discoveredCover
+        : undefined;
+    const lyricsPath = storedLyricsValid
+      ? toMediaRelativePath(rec.lyricsPath) ?? undefined
+      : (await isValidStoredDownloadPath(discoveredLyrics))
+        ? discoveredLyrics
+        : undefined;
+
+    const missingRequiredAsset =
+      !audioPath ||
+      (Boolean(rec.song.imageUrl?.trim()) && !coverPath) ||
+      (Boolean(rec.song.lyricsUrl?.trim()) && !lyricsPath);
+    const nextStatus = missingRequiredAsset ? "queued" : "ready";
+    if (
+      nextStatus === rec.status &&
+      audioPath === rec.audioPath &&
+      coverPath === rec.coverPath &&
+      lyricsPath === rec.lyricsPath
+    ) {
       continue;
     }
 
-    const coverName = names.find((name) => name.startsWith("cover"));
-    const lyricsName = names.find((name) => name.startsWith("lyrics"));
+    const key = keyFor(rec.accountScope, rec.songId);
     fixed[key] = {
       ...rec,
-      status: "ready",
-      audioPath: `${relDir}/${audioName}`,
-      coverPath: coverName ? `${relDir}/${coverName}` : undefined,
-      lyricsPath: lyricsName ? `${relDir}/${lyricsName}` : undefined,
+      status: nextStatus,
+      audioPath,
+      coverPath,
+      lyricsPath,
       resumeData: undefined,
+      transferToken:
+        missingRequiredAsset && nativeBackgroundDownloads
+          ? createDownloadTransferToken()
+          : rec.transferToken,
       error: undefined,
       updatedAt: Date.now(),
     };
@@ -1581,7 +1612,16 @@ async function reconcileDownloadedFiles(): Promise<void> {
   const keys = Object.keys(fixed);
   if (keys.length === 0) return;
   useOfflineStore.setState((s) => ({ records: { ...s.records, ...fixed } }));
-  await Promise.all(Object.values(fixed).map((r) => dbUpsertRow(recordToRow(r)).catch(() => {})));
+  const changed = Object.values(fixed);
+  for (
+    let offset = 0;
+    offset < changed.length;
+    offset += DOWNLOAD_RECORD_DB_CHUNK_SIZE
+  ) {
+    await dbUpsertRows(
+      changed.slice(offset, offset + DOWNLOAD_RECORD_DB_CHUNK_SIZE).map(recordToRow),
+    ).catch(() => {});
+  }
 }
 
 // Reclaim space left behind by interrupted downloads — two sources expo never

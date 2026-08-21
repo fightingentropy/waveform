@@ -54,7 +54,11 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
       song.source === "browser-local" ||
       song.source === "picked-file" ||
       /^(file|blob|data):/i.test(song.audioUrl);
-    const unavailable = !current && !isOnline && record?.status !== "ready" && !deviceLocal;
+    const unavailable =
+      !current &&
+      !isOnline &&
+      !record?.audioPath &&
+      !deviceLocal;
     return (
       <View
         className="flex-row items-center gap-3 px-4"

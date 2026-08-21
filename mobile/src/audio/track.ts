@@ -3,14 +3,18 @@ import { toAbsoluteApiUrl } from "@/lib/config";
 import { isRadioSong } from "@/lib/player-song";
 import type { PlayerSong } from "@/types/player";
 
-// Lock-screen / Control-Center artwork MUST be a remote http(s) URL — the native
-// now-playing center can't read file:// or data: covers (§11). For offline tracks
-// we hand RNTP `networkImageUrl` (the original remote cover), not the local file.
+// Prefer downloaded artwork for the lock screen too. The custom native engine
+// reads file:// covers directly; HTTP(S) remains the fallback for streamed
+// songs. data:/blob: URLs are process-bound and cannot be handed to native code.
 export function lockScreenArtwork(song: PlayerSong): string | undefined {
+  const localCandidate = song.imageUrl
+    ? toAbsoluteApiUrl(song.imageUrl)
+    : undefined;
+  if (localCandidate && /^file:/i.test(localCandidate)) return localCandidate;
   const candidate = song.networkImageUrl || song.imageUrl;
   if (!candidate) return undefined;
   const resolved = toAbsoluteApiUrl(candidate);
-  if (/^(file|data|blob):/i.test(resolved)) return undefined;
+  if (/^(data|blob):/i.test(resolved)) return undefined;
   return resolved;
 }
 

@@ -27,4 +27,10 @@ describe("native audio track-event contract", () => {
     expect(swift).toContain("clearDeckObservers(deck)");
     expect(swift).toContain("self.setupDeckObservers(deckObj)");
   });
+
+  test("lock-screen artwork can be decoded from a downloaded file", () => {
+    expect(swift).toContain("if url.isFileURL");
+    expect(swift).toContain("Data(contentsOf: url)");
+    expect(swift).toContain("private func applyArtwork(");
+  });
 });

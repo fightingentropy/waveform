@@ -174,27 +174,55 @@ export async function readAllDownloadedRecords(accountScope: string): Promise<Do
   );
 }
 
-// Check that a downloaded record's audio file still exists on disk with a
-// non-empty size. RN's port of the web verifyOrRepairRecord: there is no Cache
-// API to re-stage from, so a missing/empty file can't be repaired in place —
-// instead the row is flipped back to "queued" (audioPath cleared) so the serial
-// download pump re-downloads it on its next run. Cover/lyrics are best-effort
-// sidecars in the pump and are not gated here, matching the pump's own behavior.
-export async function verifyOrRepairRecord(row: DownloadRow): Promise<{ ok: boolean }> {
-  const audioPath = resolveMediaPath(row.audioPath);
-  if (audioPath) {
-    try {
-      const info = await FileSystem.getInfoAsync(audioPath);
-      if (info.exists && !info.isDirectory && info.size > 0) return { ok: true };
-    } catch {
-      // fall through to repair
-    }
+async function isNonEmptyFile(path: string | null): Promise<boolean> {
+  if (!path) return false;
+  try {
+    const info = await FileSystem.getInfoAsync(path);
+    return info.exists && !info.isDirectory && info.size > 0;
+  } catch {
+    return false;
   }
+}
+
+export type DownloadVerificationResult = {
+  ok: boolean;
+  audioValid: boolean;
+  coverValid: boolean;
+  lyricsValid: boolean;
+};
+
+// A ready download is complete only when its audio and every catalog-advertised
+// sidecar exist as non-empty files. Missing artwork/lyrics is repaired in place:
+// valid audio and other valid assets remain attached while native transport
+// fetches only the missing destinations under a fresh transfer generation.
+export async function verifyOrRepairRecord(
+  row: DownloadRow,
+): Promise<DownloadVerificationResult> {
+  let song: { imageUrl?: string; lyricsUrl?: string } = {};
+  try {
+    song = JSON.parse(row.song) as typeof song;
+  } catch {}
+
+  const [audioValid, coverValid, lyricsValid] = await Promise.all([
+    isNonEmptyFile(resolveMediaPath(row.audioPath)),
+    isNonEmptyFile(resolveMediaPath(row.coverPath)),
+    isNonEmptyFile(resolveMediaPath(row.lyricsPath)),
+  ]);
+  const coverRequired = Boolean(song.imageUrl?.trim());
+  const lyricsRequired = Boolean(song.lyricsUrl?.trim());
+  const ok =
+    audioValid &&
+    (!coverRequired || coverValid) &&
+    (!lyricsRequired || lyricsValid);
+  if (ok) return { ok, audioValid, coverValid, lyricsValid };
+
   await dbUpsertRow({
     ...row,
     status: "queued",
-    audioPath: null,
+    audioPath: audioValid ? row.audioPath : null,
+    coverPath: coverValid ? row.coverPath : null,
+    lyricsPath: lyricsValid ? row.lyricsPath : null,
     updatedAt: Date.now(),
   });
-  return { ok: false };
+  return { ok, audioValid, coverValid, lyricsValid };
 }

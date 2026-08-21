@@ -226,6 +226,12 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const song = usePlayerStore((state) => state.currentSong);
+  const offlineLyricsPath = useOfflineStore((state) =>
+    song
+      ? state.records[keyFor(getOfflineAccountScope(), song.id)]?.lyricsPath
+      : undefined,
+  );
+  const lyricsAvailable = Boolean(song?.lyricsUrl || offlineLyricsPath);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const shuffle = usePlayerStore((state) => state.shuffle);
   const smartShuffleEnabled = usePlayerStore((state) => state.smartShuffleEnabled);
@@ -297,7 +303,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
             >
               <MonochromeDownloadButton song={song} />
               <MonochromeLikeButton song={song} />
-              {song.lyricsUrl ? (
+              {lyricsAvailable ? (
                 <PlainIconButton
                   onPress={() => {
                     void selectionAsync();
@@ -331,7 +337,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
 
             {/* Artwork is the only expressive surface. Lyrics replace it in-place. */}
             <View className="flex-1 items-center justify-center">
-              {showLyrics && song.lyricsUrl ? (
+              {showLyrics && lyricsAvailable ? (
                 <View style={{ width: "100%", flex: 1 }}>
                   <LyricsView song={song} />
                 </View>

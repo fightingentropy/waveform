@@ -271,6 +271,20 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
           obsoleteTasks[task.taskIdentifier] = task
         }
 
+        // Verification can enqueue a new generation solely to repair artwork
+        // or lyrics. Adopt every already-valid destination up front so that
+        // generation skips the 58 GB audio payload and only fetches the missing
+        // sidecars. The normal scheduler still rejects missing/empty files.
+        let existingAudioPath =
+          isValidDownloadedFile(relativePath: request.audioPath)
+          ? request.audioPath : nil
+        let existingCoverPath = request.coverPath.flatMap {
+          isValidDownloadedFile(relativePath: $0) ? $0 : nil
+        }
+        let existingLyricsPath = request.lyricsPath.flatMap {
+          isValidDownloadedFile(relativePath: $0) ? $0 : nil
+        }
+
         jobs[request.key] = BackgroundDownloadJob(
           key: request.key,
           transferToken: request.transferToken,
@@ -285,12 +299,14 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
           requestedAudioPath: request.audioPath,
           requestedCoverPath: request.coverPath,
           requestedLyricsPath: request.lyricsPath,
-          audioPath: nil,
-          coverPath: nil,
-          lyricsPath: nil,
+          audioPath: existingAudioPath,
+          coverPath: existingCoverPath,
+          lyricsPath: existingLyricsPath,
           status: "queued",
-          progress: 0,
-          bytesWritten: 0,
+          progress: existingAudioPath == nil ? 0 : 0.99,
+          bytesWritten: existingAudioPath.map {
+            fileSize(relativePath: $0)
+          } ?? 0,
           bytesExpected: 0,
           error: nil,
           refreshAttempts: 0,
@@ -382,6 +398,73 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
       lastNotifiedProgress.removeAll()
       lastNotifiedAt.removeAll()
       cancelTasksLocked(keys: keys)
+    }
+  }
+
+  func protectOfflineMediaStorage() throws -> [String: Int] {
+    try stateQueue.sync {
+      guard
+        let documents = FileManager.default.urls(
+          for: .documentDirectory,
+          in: .userDomainMask
+        ).first
+      else {
+        throw BackgroundDownloadCoordinatorError.missingDocumentsDirectory
+      }
+      let root = documents.appendingPathComponent(
+        "offline-media",
+        isDirectory: true
+      )
+      var isDirectory: ObjCBool = false
+      guard
+        FileManager.default.fileExists(
+          atPath: root.path,
+          isDirectory: &isDirectory
+        ),
+        isDirectory.boolValue
+      else {
+        return ["directories": 0, "files": 0]
+      }
+
+      var directories = 0
+      var files = 0
+      func protectDirectory(_ url: URL) {
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableURL = url
+        try? mutableURL.setResourceValues(values)
+        try? FileManager.default.setAttributes(
+          [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+          ofItemAtPath: url.path
+        )
+        directories += 1
+      }
+
+      protectDirectory(root)
+      let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
+      if let enumerator = FileManager.default.enumerator(
+        at: root,
+        includingPropertiesForKeys: keys,
+        options: [.skipsHiddenFiles]
+      ) {
+        for case let url as URL in enumerator {
+          let values = try? url.resourceValues(forKeys: Set(keys))
+          if values?.isSymbolicLink == true {
+            enumerator.skipDescendants()
+            continue
+          }
+          if values?.isDirectory == true {
+            protectDirectory(url)
+          } else {
+            try? FileManager.default.setAttributes(
+              [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+              ofItemAtPath: url.path
+            )
+            files += 1
+          }
+        }
+      }
+      return ["directories": directories, "files": files]
     }
   }
 
@@ -635,7 +718,11 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
     var request = URLRequest(url: url)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.httpShouldHandleCookies = true
-    request.timeoutInterval = 7 * 24 * 60 * 60
+    // Audio may legitimately take hours, but a tiny cover, lyrics document, or
+    // metadata refresh must not monopolize one of the two host connections for
+    // days after a server stops responding.
+    request.timeoutInterval =
+      stage == .audio ? 7 * 24 * 60 * 60 : 90
 
     let task = session.downloadTask(with: request)
     let description = BackgroundDownloadTaskDescription(
@@ -793,6 +880,7 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
             toRelativePath: job.requestedAudioPath
           )
           job.audioPath = job.requestedAudioPath
+          job.refreshAttempts = 0
           job.progress = 0.99
           job.bytesWritten = max(
             job.bytesWritten,
@@ -807,6 +895,7 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
             try moveDownloadedFile(from: location, toRelativePath: coverPath)
             job.coverPath = coverPath
           }
+          job.refreshAttempts = 0
           jobs[job.key] = job
           try appendLedgerLocked(upserts: [job])
           try scheduleJobLocked(job.key)
@@ -816,6 +905,7 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
             try moveDownloadedFile(from: location, toRelativePath: lyricsPath)
             job.lyricsPath = lyricsPath
           }
+          job.refreshAttempts = 0
           jobs[job.key] = job
           try appendLedgerLocked(upserts: [job])
           try scheduleJobLocked(job.key)
@@ -901,7 +991,7 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
   ) {
     job.pendingStage = nil
     if
-      stage == .audio,
+      stage != .refresh,
       let statusCode,
       [401, 403, 404].contains(statusCode),
       job.refreshAttempts < 1,
@@ -930,25 +1020,9 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
       return
     }
 
-    // Artwork and lyrics are best-effort sidecars. A failed sidecar must not
-    // strand valid audio or block the rest of a large collection.
-    if stage == .cover {
-      job.coverURL = nil
-      job.requestedCoverPath = nil
-      jobs[job.key] = job
-      try? appendLedgerLocked(upserts: [job])
-      try? scheduleJobLocked(job.key)
-      return
-    }
-    if stage == .lyrics {
-      job.lyricsURL = nil
-      job.requestedLyricsPath = nil
-      jobs[job.key] = job
-      try? appendLedgerLocked(upserts: [job])
-      try? scheduleJobLocked(job.key)
-      return
-    }
-
+    // If the catalog advertises a sidecar, it is part of the durable download.
+    // Surface a retryable error instead of silently declaring incomplete media
+    // ready. Existing audioPath remains in the snapshot and stays playable.
     markErrorLocked(&job, message: message)
   }
 
@@ -1172,10 +1246,15 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
       }
     }
     let handle = try FileHandle(forWritingTo: Self.journalURL)
-    defer { try? handle.close() }
-    try handle.seekToEnd()
-    try handle.write(contentsOf: data)
-    try handle.synchronize()
+    do {
+      try handle.seekToEnd()
+      try handle.write(contentsOf: data)
+      try handle.synchronize()
+      try handle.close()
+    } catch {
+      try? handle.close()
+      throw error
+    }
     try? FileManager.default.setAttributes(
       [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
       ofItemAtPath: directory.path
@@ -1184,7 +1263,7 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
       [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
       ofItemAtPath: Self.journalURL.path
     )
-
+    try compactLedgerIfNeededLocked()
   }
 
   private func compactLedgerLocked() throws {

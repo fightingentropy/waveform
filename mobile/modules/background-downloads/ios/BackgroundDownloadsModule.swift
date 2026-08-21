@@ -102,6 +102,10 @@ public final class BackgroundDownloadsModule: Module {
       try BackgroundDownloadCoordinator.shared.cancelAll()
     }
 
+    AsyncFunction("protectOfflineMediaStorage") { () -> [String: Int] in
+      try BackgroundDownloadCoordinator.shared.protectOfflineMediaStorage()
+    }
+
     AsyncFunction("snapshot") { (accountScope: String?) -> [[String: Any]] in
       BackgroundDownloadCoordinator.shared.snapshot(accountScope: accountScope)
     }

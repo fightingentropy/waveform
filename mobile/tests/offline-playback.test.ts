@@ -36,6 +36,21 @@ describe("offline playback source preference", () => {
     expect(resolved.networkImageUrl).toBe(remoteSong.imageUrl);
   });
 
+  test("validated audio stays local while artwork or lyrics is being repaired", () => {
+    const resolved = preferDownloadedPlaybackSong(
+      remoteSong,
+      { ...readyRecord, status: "downloading" },
+      {
+        audioUrl: "file:///Documents/offline-media/song-1/audio.flac",
+        imageUrl: null,
+        lyricsUrl: null,
+      },
+    );
+
+    expect(resolved.source).toBe("offline");
+    expect(resolved.audioUrl).toStartWith("file://");
+  });
+
   test("a record without a usable local path leaves a server song remote", () => {
     expect(
       preferDownloadedPlaybackSong(remoteSong, readyRecord, {

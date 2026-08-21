@@ -43,6 +43,7 @@ describe("native background download durability contract", () => {
     expect(coordinator).toContain("private func appendLedgerLocked(");
     expect(coordinator).not.toContain("persistLedgerLocked");
     expect(coordinator).toContain("try handle.synchronize()");
+    expect(coordinator).toContain("try compactLedgerIfNeededLocked()");
   });
 
   test("does not promote legacy response bodies and keeps URL refresh intent durable", () => {
@@ -54,6 +55,22 @@ describe("native background download durability contract", () => {
     expect(coordinator).toContain(
       "refreshedSongId == job.songId",
     );
+  });
+
+  test("reuses audio for sidecar repair and makes advertised sidecars required", () => {
+    expect(coordinator).toContain("let existingAudioPath =");
+    expect(coordinator).toContain("stage != .refresh");
+    expect(coordinator).toContain(
+      "stage == .audio ? 7 * 24 * 60 * 60 : 90",
+    );
+    expect(coordinator).toContain("If the catalog advertises a sidecar");
+    expect(coordinator).not.toContain("Artwork and lyrics are best-effort sidecars");
+  });
+
+  test("normalizes restored media for file protection and backup exclusion", () => {
+    expect(coordinator).toContain("func protectOfflineMediaStorage()");
+    expect(coordinator).toContain("values.isExcludedFromBackup = true");
+    expect(bridge).toContain("protectNativeOfflineMediaStorage");
   });
 
   test("migrates transfer generations into the existing SQLite table", () => {

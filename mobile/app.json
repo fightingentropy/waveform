@@ -76,7 +76,8 @@
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": false
+      "reactCompiler": false,
+      "onDemandFilesystem": false
     }
   }
 }

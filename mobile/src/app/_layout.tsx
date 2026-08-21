@@ -10,17 +10,46 @@ import { DarkTheme, Redirect, Stack, ThemeProvider, useSegments } from "expo-rou
 import { ActivityIndicator, View } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import * as SystemUI from "expo-system-ui";
+import {
+  activateKeepAwakeAsync,
+  deactivateKeepAwake,
+} from "expo-keep-awake";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { AudioBootstrap } from "@/components/AudioBootstrap";
 import { MiniPlayer } from "@/components/player/MiniPlayer";
 import { PlayerSheets } from "@/components/player/PlayerSheets";
 import { TabBar } from "@/components/nav/TabBar";
 import { ProfileMenu } from "@/components/profile/ProfileMenu";
-import { initOfflineSync } from "@/store/offline";
+import { initOfflineSync, useOfflineStore } from "@/store/offline";
 import { initImportQueue } from "@/lib/import-queue";
 import { colors } from "@/theme";
 
 void SplashScreen.preventAutoHideAsync();
+
+const OFFLINE_DOWNLOAD_KEEP_AWAKE_TAG = "spotify-offline-downloads";
+
+function OfflineDownloadKeepAwake() {
+  const hasActiveDownloads = useOfflineStore((state) =>
+    Object.values(state.records).some(
+      (record) =>
+        record.status === "queued" || record.status === "downloading",
+    ),
+  );
+
+  useEffect(() => {
+    if (!hasActiveDownloads) {
+      void deactivateKeepAwake(OFFLINE_DOWNLOAD_KEEP_AWAKE_TAG);
+      return;
+    }
+
+    void activateKeepAwakeAsync(OFFLINE_DOWNLOAD_KEEP_AWAKE_TAG);
+    return () => {
+      void deactivateKeepAwake(OFFLINE_DOWNLOAD_KEEP_AWAKE_TAG);
+    };
+  }, [hasActiveDownloads]);
+
+  return null;
+}
 
 const headerOptions = {
   headerShown: true,
@@ -155,6 +184,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
       <SafeAreaProvider>
         <AuthProvider>
+          <OfflineDownloadKeepAwake />
           <AuthenticatedApp />
         </AuthProvider>
       </SafeAreaProvider>

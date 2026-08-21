@@ -476,18 +476,30 @@ public class AudioEngineModule: Module {
 
     private func loadArtwork(_ urlString: String?, generation: Int) {
         guard let urlString = urlString, let url = URL(string: urlString) else { return }
-        let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let data = data, let image = UIImage(data: data) else { return }
-            DispatchQueue.main.async {
-                guard let self = self, generation == self.artworkGeneration else { return }
-                guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-                self.artworkTask = nil
+        if url.isFileURL {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let data = try? Data(contentsOf: url) else { return }
+                self?.applyArtwork(data, generation: generation)
             }
+            return
+        }
+        let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let data = data else { return }
+            self?.applyArtwork(data, generation: generation)
         }
         artworkTask = task
         task.resume()
+    }
+
+    private func applyArtwork(_ data: Data, generation: Int) {
+        guard let image = UIImage(data: data) else { return }
+        DispatchQueue.main.async {
+            guard generation == self.artworkGeneration else { return }
+            guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            self.artworkTask = nil
+        }
     }
 
     private func setupRemoteCommands() {

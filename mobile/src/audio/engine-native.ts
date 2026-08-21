@@ -210,12 +210,13 @@ function computeStartAt(song: PlayerSong): number {
 }
 
 function setNowPlayingFor(song: PlayerSong): void {
+  const artworkSong = resolveOfflinePlaybackSong(song);
   void AudioEngine.setNowPlaying({
     title: song.title,
     artist: song.artist,
     album: song.album ?? "",
     duration: song.duration ?? 0,
-    artworkUrl: lockScreenArtwork(song),
+    artworkUrl: lockScreenArtwork(artworkSong),
   }).catch(() => {});
 }
 

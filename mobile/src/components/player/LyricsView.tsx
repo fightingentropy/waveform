@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as FileSystem from "expo-file-system/legacy";
 import {
   ActivityIndicator,
   type LayoutChangeEvent,
@@ -16,6 +17,9 @@ import { hasGreek, transliterateGreek } from "@/lib/greek-phonetics";
 import { apiFetch } from "@/lib/http";
 import { parseLrc, type LrcLine } from "@/lib/lrc";
 import { activeLyricIndex, hasSyncedTiming } from "@/lib/lyrics";
+import { loadLyricsText } from "@/lib/lyrics-source";
+import { resolveMediaPath } from "@/lib/offline-db";
+import { getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import { usePlayerStore } from "@/store/player";
 import { usePreferencesStore } from "@/store/preferences";
 import { colors } from "@/theme";
@@ -48,6 +52,14 @@ export function LyricsView({ song }: { song: PlayerSong }) {
   const [state, setState] = useState<LyricsState>({ status: "loading" });
   const replaceSong = usePlayerStore((s) => s.replaceSong);
   const greekPhonetics = usePreferencesStore((s) => s.greekPhonetics);
+  const offlineKey = keyFor(getOfflineAccountScope(), song.id);
+  const storedLyricsPath = useOfflineStore(
+    useCallback(
+      (offline) => offline.records[offlineKey]?.lyricsPath ?? null,
+      [offlineKey],
+    ),
+  );
+  const lyricsUrl = resolveMediaPath(storedLyricsPath) ?? song.lyricsUrl;
   // The last song we auto-requested lyrics for, so a 404 doesn't loop.
   const requestedRef = useRef<string | null>(null);
 
@@ -56,16 +68,18 @@ export function LyricsView({ song }: { song: PlayerSong }) {
     const controller = new AbortController();
 
     // Has a lyrics sidecar — load and parse it.
-    if (song.lyricsUrl) {
+    if (lyricsUrl) {
       setState({ status: "loading" });
       (async () => {
         try {
-          const res = await fetch(toAbsoluteApiUrl(song.lyricsUrl), {
-            credentials: "include",
-            signal: controller.signal,
+          const raw = await loadLyricsText(toAbsoluteApiUrl(lyricsUrl), {
+            readLocal: (url) => FileSystem.readAsStringAsync(url),
+            fetchRemote: (url) =>
+              fetch(url, {
+                credentials: "include",
+                signal: controller.signal,
+              }),
           });
-          if (!res.ok) throw new Error("No lyrics available");
-          const raw = await res.text();
           if (!cancelled) setState({ status: "ready", lines: parseLrc(raw) });
         } catch {
           if (!cancelled) setState({ status: "error", message: "No lyrics available" });
@@ -109,7 +123,7 @@ export function LyricsView({ song }: { song: PlayerSong }) {
       cancelled = true;
       controller.abort();
     };
-  }, [song.id, song.lyricsUrl, replaceSong]);
+  }, [song.id, lyricsUrl, replaceSong]);
 
   if (state.status === "finding") {
     return (

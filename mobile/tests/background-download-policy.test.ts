@@ -87,6 +87,42 @@ describe("native background download policy", () => {
     );
   });
 
+  test("reuses validated destinations for a sidecar-only repair generation", () => {
+    const existing = {
+      ...record(),
+      audioPath: "offline-media/song-1/audio.m4a",
+      coverPath: "offline-media/song-1/cover-old.jpg",
+    };
+    const job = createBackgroundDownloadTransportJob(
+      existing,
+      "user-a:song-1",
+      (url) => `https://music.example${url}`,
+    );
+
+    expect(job?.audioPath).toBe(existing.audioPath);
+    expect(job?.coverPath).toBe(existing.coverPath);
+    expect(job?.lyricsPath).toBe("offline-media/song-1/lyrics.lrc");
+  });
+
+  test("keeps validated local media attached during sidecar transport", () => {
+    const existing = {
+      ...record(),
+      status: "ready" as const,
+      audioPath: "offline-media/song-1/audio.m4a",
+      coverPath: "offline-media/song-1/cover.jpeg",
+    };
+    expect(
+      applyBackgroundDownloadTransportState(
+        existing,
+        state({ status: "downloading", audioPath: existing.audioPath }),
+      ),
+    ).toMatchObject({
+      status: "downloading",
+      audioPath: existing.audioPath,
+      coverPath: existing.coverPath,
+    });
+  });
+
   test("ignores a late completion from an obsolete transfer generation", () => {
     expect(
       applyBackgroundDownloadTransportState(

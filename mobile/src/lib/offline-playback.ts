@@ -1,9 +1,10 @@
 import type { PlayerSong } from "@/types/player";
 
 // Small, platform-free playback-source policy. Keeping this separate from the
-// SQLite/FileSystem store makes the important invariant testable: a ready local
-// file wins regardless of connectivity, while an offline-shaped queue entry can
-// still fall back to the record's original remote song when the file is absent.
+// SQLite/FileSystem store makes the important invariant testable: a validated
+// local file wins regardless of connectivity (including while its tiny
+// sidecars are being repaired), while an offline-shaped queue entry can still
+// fall back to the record's original remote song when the file is absent.
 export type OfflinePlaybackRecordLike = {
   status: string;
   song: PlayerSong;
@@ -29,7 +30,7 @@ export function preferDownloadedPlaybackSong(
     (/^file:\/\//i.test(media.audioUrl) || media.audioUrl.startsWith("/"))
       ? media.audioUrl
       : null;
-  if (!record || record.status !== "ready" || !localAudioUrl) return fallback;
+  if (!record || !localAudioUrl) return fallback;
 
   return {
     ...song,

@@ -13,6 +13,23 @@ import {
 } from "@/lib/offline-download-queue";
 import type { PlayerSong } from "@/types/player";
 
+async function downloadRequiredSidecar(
+  url: string,
+  path: string,
+  label: "Artwork" | "Lyrics",
+): Promise<void> {
+  const result = await FileSystem.downloadAsync(toAbsoluteApiUrl(url), path);
+  if (result.status >= 400) {
+    await FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+    throw new Error(`${label} download failed with HTTP ${result.status}`);
+  }
+  const info = await FileSystem.getInfoAsync(path);
+  if (!info.exists || info.isDirectory || info.size <= 0) {
+    await FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+    throw new Error(`${label} download is missing or empty`);
+  }
+}
+
 export type JsOfflineDownloadPumpDeps = {
   getAccountScope: () => string;
   nativeBackgroundDownloads: boolean;
@@ -172,20 +189,16 @@ export function createJsOfflineDownloadPump(deps: JsOfflineDownloadPumpDeps): {
 
           let coverPath: string | undefined;
           if (queued.song.imageUrl) {
-            try {
-              const coverExt = downloadExtension(queued.song.imageUrl, ".jpg");
-              const p = `${dir}cover${coverExt}`;
-              await FileSystem.downloadAsync(toAbsoluteApiUrl(queued.song.imageUrl), p);
-              coverPath = p;
-            } catch {}
+            const coverExt = downloadExtension(queued.song.imageUrl, ".jpg");
+            const p = `${dir}cover${coverExt}`;
+            await downloadRequiredSidecar(queued.song.imageUrl, p, "Artwork");
+            coverPath = p;
           }
           let lyricsPath: string | undefined;
           if (queued.song.lyricsUrl) {
-            try {
-              const p = `${dir}lyrics.lrc`;
-              await FileSystem.downloadAsync(toAbsoluteApiUrl(queued.song.lyricsUrl), p);
-              lyricsPath = p;
-            } catch {}
+            const p = `${dir}lyrics.lrc`;
+            await downloadRequiredSidecar(queued.song.lyricsUrl, p, "Lyrics");
+            lyricsPath = p;
           }
 
           // The record may have gained/lost scopes while downloading; re-read.

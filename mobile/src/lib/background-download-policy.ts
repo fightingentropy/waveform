@@ -100,7 +100,20 @@ export function createBackgroundDownloadTransportJob(
   toAbsoluteURL: (url: string) => string,
 ): BackgroundDownloadTransportJob | null {
   if (!record.transferToken || !record.song.audioUrl) return null;
-  const paths = backgroundDownloadPaths(record.song);
+  const defaultPaths = backgroundDownloadPaths(record.song);
+  // A verification/backfill generation can already own valid audio or one of
+  // the sidecars. Keep those stable destinations so native transport can
+  // validate and reuse the bytes in place instead of downloading the 58 GB
+  // audio library again (or leaving an old extension behind as an orphan).
+  const paths = {
+    audioPath: record.audioPath ?? defaultPaths.audioPath,
+    coverPath: record.song.imageUrl
+      ? record.coverPath ?? defaultPaths.coverPath
+      : undefined,
+    lyricsPath: record.song.lyricsUrl
+      ? record.lyricsPath ?? defaultPaths.lyricsPath
+      : undefined,
+  };
   return {
     key,
     transferToken: record.transferToken,
@@ -147,9 +160,12 @@ export function applyBackgroundDownloadTransportState(
     ...record,
     song,
     status: state.status,
-    audioPath: state.status === "ready" ? state.audioPath : undefined,
-    coverPath: state.status === "ready" ? state.coverPath : undefined,
-    lyricsPath: state.status === "ready" ? state.lyricsPath : undefined,
+    // Sidecar repair is a new transport generation over an already-playable
+    // audio file. Preserve every path native has validated while artwork or
+    // lyrics is queued/downloading/error so playback stays local throughout.
+    audioPath: state.audioPath ?? record.audioPath,
+    coverPath: state.coverPath ?? record.coverPath,
+    lyricsPath: state.lyricsPath ?? record.lyricsPath,
     error: state.status === "error" ? state.error ?? "Download failed" : undefined,
     resumeData: undefined,
     updatedAt: state.updatedAt,
@@ -188,9 +204,9 @@ export function restoreRecordFromBackgroundDownloadState(
     scopes,
     status: state.status,
     song,
-    audioPath: state.status === "ready" ? state.audioPath : undefined,
-    coverPath: state.status === "ready" ? state.coverPath : undefined,
-    lyricsPath: state.status === "ready" ? state.lyricsPath : undefined,
+    audioPath: state.audioPath,
+    coverPath: state.coverPath,
+    lyricsPath: state.lyricsPath,
     error: state.status === "error" ? state.error ?? "Download failed" : undefined,
     transferToken: state.transferToken,
     updatedAt: state.updatedAt,

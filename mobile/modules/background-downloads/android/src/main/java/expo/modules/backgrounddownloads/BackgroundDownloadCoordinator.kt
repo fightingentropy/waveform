@@ -580,11 +580,7 @@ class BackgroundDownloadWorker(
     if (!requestedCover.isNullOrEmpty() && !coverURL.isNullOrEmpty()) {
       val coverFile = coordinator.destinationFile(requestedCover)
       if (!isValidFile(coverFile)) {
-        try {
-          downloadTo(coordinator, job, coverURL, coverFile, reportProgress = false)
-        } catch (_: HttpStatusException) {
-          // Cover is optional once audio is on disk.
-        }
+        downloadTo(coordinator, job, coverURL, coverFile, reportProgress = false)
       }
       if (isValidFile(coverFile)) coverPath = requestedCover
     }
@@ -596,11 +592,7 @@ class BackgroundDownloadWorker(
     if (!requestedLyrics.isNullOrEmpty() && !lyricsURL.isNullOrEmpty()) {
       val lyricsFile = coordinator.destinationFile(requestedLyrics)
       if (!isValidFile(lyricsFile)) {
-        try {
-          downloadTo(coordinator, job, lyricsURL, lyricsFile, reportProgress = false)
-        } catch (_: HttpStatusException) {
-          // Lyrics are optional once audio is on disk.
-        }
+        downloadTo(coordinator, job, lyricsURL, lyricsFile, reportProgress = false)
       }
       if (isValidFile(lyricsFile)) lyricsPath = requestedLyrics
     }

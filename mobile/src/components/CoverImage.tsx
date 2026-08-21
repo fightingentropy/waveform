@@ -42,7 +42,9 @@ export function CoverImage({
       (state) => {
         if (!offlineKey) return null;
         const record = state.records[offlineKey];
-        return record?.status === "ready" ? (record.coverPath ?? null) : null;
+        // A verified local cover remains usable while another sidecar is being
+        // repaired; transport status must not force an unnecessary network read.
+        return record?.coverPath ?? null;
       },
       [offlineKey],
     ),
