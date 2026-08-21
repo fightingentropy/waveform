@@ -1,25 +1,22 @@
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, type Href } from "expo-router";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { EmailVerificationBanner } from "@/components/EmailVerificationBanner";
+import { MadeForYouCover } from "@/components/playlist/MadeForYouCover";
 import { ProfileButton } from "@/components/profile/ProfileButton";
-import { ScrollerTile } from "@/components/song/ScrollerTile";
 import { PlaylistScrollerTile } from "@/components/playlist/PlaylistScrollerTile";
 import { ErrorText } from "@/components/ui/States";
 import {
   type DiscoverPlaylistsPayload,
   type HomePayload,
-  type StatsHomePayload,
   useApiData,
   withAccountScope,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { playSongs } from "@/audio/actions";
-import { usePlayerStore } from "@/store/player";
+import { MADE_FOR_YOU_DEFINITIONS } from "@/lib/made-for-you";
 import { useLikesStore } from "@/store/likes";
 import { colors } from "@/theme";
-import type { PlayerSong } from "@/types/player";
 
 function greetingForNow(): string {
   const hour = new Date().getHours();
@@ -74,11 +71,6 @@ export default function HomeScreen() {
     if (Array.isArray(homeData.likedSongIds)) mergeInitialLikes(homeData.likedSongIds);
   }, [mergeInitialLikes, homeData.likedSongIds]);
 
-  const { data: statsData } = useApiData<StatsHomePayload>(
-    withAccountScope("/api/stats/home", scope),
-    { recentlyPlayed: [], mostPlayed: [] },
-    { enabled: status !== "loading", keepPreviousData: true },
-  );
   // The Discover first row is now auto-updating PLAYLISTS (Top 50 + the YouTube
   // Music Discover Mix), not individual tracks. Each card opens its detail screen.
   const { data: discoverData } = useApiData<DiscoverPlaylistsPayload>(
@@ -87,24 +79,6 @@ export default function HomeScreen() {
     { enabled: status !== "loading", keepPreviousData: true },
   );
   const discoverPlaylists = discoverData.playlists;
-
-  const currentSongId = usePlayerStore((s) => s.currentSong?.id ?? null);
-  const isPlaying = usePlayerStore((s) => s.isPlaying);
-  const toggle = usePlayerStore((s) => s.toggle);
-
-  const recentlyPlayed = statsData.recentlyPlayed as PlayerSong[];
-  const mostPlayed = statsData.mostPlayed;
-  const mostPlayedSongs = useMemo(() => mostPlayed.map((entry) => entry.song), [mostPlayed]);
-
-  const playScroller = (songs: PlayerSong[], index: number) => {
-    const song = songs[index];
-    if (!song) return;
-    if (song.id === currentSongId) {
-      toggle();
-      return;
-    }
-    playSongs(songs, index);
-  };
 
   if ((loading && (homeData.likedSongIds?.length ?? 0) === 0) || status === "loading") {
     return (
@@ -165,6 +139,26 @@ export default function HomeScreen() {
         </View>
         {error ? <View className="mb-4"><ErrorText>{error}</ErrorText></View> : null}
 
+        <View style={{ marginBottom: 34 }}>
+          <SectionTitle title="Made for you" />
+          <HScroller>
+            {MADE_FOR_YOU_DEFINITIONS.map((definition) => (
+              <PlaylistScrollerTile
+                key={definition.kind}
+                name={definition.name}
+                subtitle={definition.subtitle}
+                cover={<MadeForYouCover kind={definition.kind} />}
+                onPress={() =>
+                  router.push({
+                    pathname: "/made-for-you/[kind]",
+                    params: { kind: definition.kind },
+                  } as unknown as Href)
+                }
+              />
+            ))}
+          </HScroller>
+        </View>
+
         {discoverPlaylists.length > 0 ? (
           <View style={{ marginBottom: 34 }}>
             <SectionTitle title="Discover" />
@@ -182,53 +176,7 @@ export default function HomeScreen() {
           </View>
         ) : null}
 
-        {recentlyPlayed.length > 0 ? (
-          <View style={{ marginBottom: 34 }}>
-            <SectionTitle title="Continue listening" />
-            <HScroller>
-              {recentlyPlayed.map((song, index) => (
-                <ScrollerTile
-                  key={song.id}
-                  title={song.title}
-                  artist={song.artist}
-                  songId={song.id}
-                  imageUrl={song.imageUrl}
-                  networkImageUrl={song.networkImageUrl}
-                  active={currentSongId === song.id}
-                  isPlaying={currentSongId === song.id && isPlaying}
-                  onPress={() => playScroller(recentlyPlayed, index)}
-                />
-              ))}
-            </HScroller>
-          </View>
-        ) : null}
-
-        {mostPlayed.length > 0 ? (
-          <View style={{ marginBottom: 34 }}>
-            <SectionTitle title="Most played" />
-            <HScroller>
-              {mostPlayed.map((entry, index) => {
-                const song = entry.song;
-                return (
-                  <ScrollerTile
-                    key={song.id}
-                    title={song.title}
-                    artist={song.artist}
-                    songId={song.id}
-                    imageUrl={song.imageUrl}
-                    networkImageUrl={song.networkImageUrl}
-                    subtitle={entry.playCount > 0 ? `${entry.playCount} ${entry.playCount === 1 ? "play" : "plays"}` : undefined}
-                    active={currentSongId === song.id}
-                    isPlaying={currentSongId === song.id && isPlaying}
-                    onPress={() => playScroller(mostPlayedSongs, index)}
-                  />
-                );
-              })}
-            </HScroller>
-          </View>
-        ) : null}
-
-        {discoverPlaylists.length === 0 && recentlyPlayed.length === 0 && mostPlayed.length === 0 ? (
+        {discoverPlaylists.length === 0 ? (
           <View
             style={{
               marginTop: 36,
@@ -250,7 +198,7 @@ export default function HomeScreen() {
                 textAlign: "center",
               }}
             >
-              Start playing something and it will appear here.
+              Your music recommendations will appear here.
             </Text>
           </View>
         ) : null}

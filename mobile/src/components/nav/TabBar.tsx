@@ -1,16 +1,17 @@
 import { Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { usePathname, useRouter, type Href } from "expo-router";
+import { usePathname, useRouter } from "expo-router";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CreateTabIcon, HomeTabIcon, LibraryTabIcon, SearchTabIcon } from "@/components/icons/TabIcons";
 import { selectionAsync } from "@/lib/haptics";
+import { shouldNavigateToTabRoot, type RootTabPath } from "@/lib/tab-navigation-policy";
 import { useUiStore } from "@/store/ui";
 import { usePrefsStore } from "@/store/prefs";
 import { layout } from "@/theme";
 
 type TabKey = "index" | "search" | "library" | "create";
 
-const TABS: { key: TabKey; label: string; path: Href; Icon: typeof HomeTabIcon }[] = [
+const TABS: { key: TabKey; label: string; path: RootTabPath; Icon: typeof HomeTabIcon }[] = [
   { key: "index", label: "Home", path: "/", Icon: HomeTabIcon },
   { key: "search", label: "Search", path: "/search", Icon: SearchTabIcon },
   { key: "library", label: "Library", path: "/library", Icon: LibraryTabIcon },
@@ -89,11 +90,14 @@ export function TabBar() {
             // the way). Using navigate() to "go back" here instead pushes a SECOND tabs
             // instance and leaves the sub-screen mounted underneath — duplicates that
             // never unmount. Then switch tab only if we're not already on it.
-            if (router.canDismiss()) router.dismissAll();
-            // Always dispatch the requested root. On a pushed route, `isActive`
-            // describes the highlighted owner, not necessarily the tab beneath
-            // that route (Settings can be opened over Home, for example).
-            router.navigate(tab.path);
+            const hasDismissibleRoute = router.canDismiss();
+            if (hasDismissibleRoute) router.dismissAll();
+            // Dispatch after an unwind or when switching tabs. On a pushed
+            // route, `isActive` describes the highlighted owner, not necessarily
+            // the tab beneath it (Settings can be opened over Home, for example).
+            if (shouldNavigateToTabRoot(pathname, tab.path, hasDismissibleRoute)) {
+              router.navigate(tab.path);
+            }
           };
           const tint = isActive ? "#fff" : "rgba(255,255,255,0.58)";
           return (

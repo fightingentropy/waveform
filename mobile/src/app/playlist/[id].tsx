@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -37,12 +37,28 @@ type PlaylistDetailScreenProps = {
   playlistId?: string;
   apiPath?: string;
   queueContextKey?: `playlist:${string}`;
+  localPayload?: PlaylistPayload;
+  localLoading?: boolean;
+  localError?: string | null;
+  onLocalRetry?: () => void;
+  coverContent?: ReactElement;
+  showDownloadAction?: boolean;
+  emptyTitle?: string;
+  emptySubtitle?: string;
 };
 
 export function PlaylistDetailScreen({
   playlistId,
   apiPath,
   queueContextKey,
+  localPayload,
+  localLoading = false,
+  localError = null,
+  onLocalRetry,
+  coverContent,
+  showDownloadAction = true,
+  emptyTitle,
+  emptySubtitle,
 }: PlaylistDetailScreenProps = {}) {
   const insets = useSafeAreaInsets();
   const { id: routeId } = useLocalSearchParams<{ id: string }>();
@@ -54,15 +70,22 @@ export function PlaylistDetailScreen({
   // navigator, so apiPath is absent even though the resolved request is still
   // provider-backed. Classify the actual request path to preserve local-first
   // reconciliation and offline filtering on every entry point.
-  const providerReadThrough = isProviderReadThroughRequest(requestPath);
-  const { data, loading, error, retry } = useApiData<PlaylistPayload>(
+  const providerReadThrough = !localPayload && isProviderReadThroughRequest(requestPath);
+  const remotePlaylist = useApiData<PlaylistPayload>(
     withAccountScope(requestPath, user?.id ?? status),
     // Unknown until the server answers. Treating the loading state as an
     // authoritative empty set would briefly clear every heart in the global
     // likes store; catalog/read-through playlists deliberately return null too.
     { playlist: null, songs: [], likedSongIds: null },
-    { enabled: status !== "loading" && !!id, keepPreviousData: !providerReadThrough },
+    {
+      enabled: !localPayload && status !== "loading" && !!id,
+      keepPreviousData: !providerReadThrough,
+    },
   );
+  const data = localPayload ?? remotePlaylist.data;
+  const loading = localPayload ? localLoading : remotePlaylist.loading;
+  const error = localPayload ? localError : remotePlaylist.error;
+  const retry = localPayload ? (onLocalRetry ?? remotePlaylist.retry) : remotePlaylist.retry;
   const library = useApiData<SearchIndexPayload>(
     withAccountScope("/api/search-index", user?.id ?? status),
     { songs: [] },
@@ -78,7 +101,8 @@ export function PlaylistDetailScreen({
         .map((record) => record.song),
     [accountScope, offlineRecords],
   );
-  const spotifyCatalogPlaylist = !!apiPath && apiPath.startsWith("/api/catalog/spotify/playlists/");
+  const spotifyCatalogPlaylist =
+    !localPayload && !!apiPath && apiPath.startsWith("/api/catalog/spotify/playlists/");
   const [additionalSongs, setAdditionalSongs] = useState<PlaylistPayload["songs"]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -349,11 +373,11 @@ export function PlaylistDetailScreen({
               borderColor: colors.hairline,
             }}
           >
-            {cover ? (
+            {coverContent ?? (cover ? (
               <CoverImage src={cover} style={{ width: "100%", height: "100%" }} />
             ) : (
               <Music size={52} color={colors.muted} />
-            )}
+            ))}
           </View>
         </View>
         <Text numberOfLines={2} className="mt-5 text-center text-3xl font-extrabold" style={{ color: "#fff" }}>
@@ -370,7 +394,9 @@ export function PlaylistDetailScreen({
         style={{ backgroundColor: colors.background }}
       >
         <View className="flex-row items-center" style={{ gap: 22 }}>
-          {count > 0 ? <BatchDownloadButton songs={songs} scope={contextKey} size={30} /> : null}
+          {count > 0 && showDownloadAction ? (
+            <BatchDownloadButton songs={songs} scope={contextKey} size={30} />
+          ) : null}
           {editable ? (
             <PressableScale onPress={() => setMenuOpen(true)} hitSlop={8} accessibilityLabel="Playlist options">
               <View>
@@ -474,11 +500,15 @@ export function PlaylistDetailScreen({
         emptyComponent={
           loading ? null : (
             <EmptyState
-              title={providerReadThrough && !isOnline ? "Connect to view this playlist" : "This playlist is empty"}
+              title={
+                emptyTitle ??
+                (providerReadThrough && !isOnline ? "Connect to view this playlist" : "This playlist is empty")
+              }
               subtitle={
-                providerReadThrough && !isOnline
+                emptySubtitle ??
+                (providerReadThrough && !isOnline
                   ? "Downloaded matches from your library stay available offline."
-                  : undefined
+                  : undefined)
               }
             />
           )

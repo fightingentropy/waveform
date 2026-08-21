@@ -209,6 +209,70 @@ function LibraryAddActionsList({ actions }: { actions: AddAction[] }) {
   );
 }
 
+function LibraryAddActionsGrid({
+  actions,
+  cellWidth,
+}: {
+  actions: AddAction[];
+  cellWidth: number;
+}) {
+  return (
+    <View style={{ paddingTop: GRID_GAP, borderTopWidth: 0.5, borderTopColor: colors.line }}>
+      <View
+        style={{
+          flexDirection: "row",
+          flexWrap: "wrap",
+          columnGap: GRID_GAP,
+          rowGap: GRID_GAP,
+          paddingHorizontal: 16,
+        }}
+      >
+        {actions.map((action) => (
+          <PressableScale
+            key={action.key}
+            scaleTo={0.97}
+            onPress={action.onPress}
+            accessibilityRole="button"
+            accessibilityLabel={action.label}
+            style={{ width: cellWidth, paddingBottom: 6 }}
+          >
+            <View
+              style={{
+                width: cellWidth,
+                height: cellWidth,
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 10,
+                borderCurve: "continuous",
+                backgroundColor: "rgba(255,255,255,0.075)",
+              }}
+            >
+              <action.Icon
+                size={Math.max(30, Math.round(cellWidth * 0.24))}
+                color={colors.iconIdle}
+                strokeWidth={1.8}
+              />
+            </View>
+            <Text
+              numberOfLines={2}
+              style={{
+                marginTop: 9,
+                color: colors.foreground,
+                fontSize: 15,
+                fontWeight: "700",
+                letterSpacing: -0.25,
+                lineHeight: 19,
+              }}
+            >
+              {action.label}
+            </Text>
+          </PressableScale>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function FilterButton({
   label,
   active,
@@ -483,7 +547,11 @@ export default function LibraryScreen() {
 
       {filter === "all" ? (
         <View style={{ marginTop: view === "grid" ? 20 : 8 }}>
-          <LibraryAddActionsList actions={addActions} />
+          {view === "grid" ? (
+            <LibraryAddActionsGrid actions={addActions} cellWidth={cellWidth} />
+          ) : (
+            <LibraryAddActionsList actions={addActions} />
+          )}
         </View>
       ) : null}
     </View>
