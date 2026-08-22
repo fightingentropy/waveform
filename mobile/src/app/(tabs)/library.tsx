@@ -391,7 +391,10 @@ export default function LibraryScreen() {
 
     if (filter === "playlists") return [liked, ...playlists];
     if (filter === "podcasts") return shows;
-    return [liked, radio, podcastsShortcut, events, ...playlists];
+    // Keep content rows in their dedicated filters. "All" is the library's
+    // destination overview, so a playlist such as Discover Mix is shown only
+    // under Playlists instead of being repeated here as well.
+    return [liked, radio, podcastsShortcut, events];
   }, [filter, data.playlists, userShows, user, router]);
 
   // Pinned items float to the top in pin order (newest first); the rest follow the

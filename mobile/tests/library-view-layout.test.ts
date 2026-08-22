@@ -12,4 +12,14 @@ describe("library view layout", () => {
     );
     expect(libraryScreen).toContain("<LibraryAddActionsList actions={addActions} />");
   });
+
+  test("shows playlist rows only in the Playlists filter", () => {
+    expect(libraryScreen).toContain(
+      'if (filter === "playlists") return [liked, ...playlists];',
+    );
+    expect(libraryScreen).toContain("return [liked, radio, podcastsShortcut, events];");
+    expect(libraryScreen).not.toContain(
+      "return [liked, radio, podcastsShortcut, events, ...playlists];",
+    );
+  });
 });
