@@ -12,6 +12,7 @@ import {
   communitySessionFromEnv,
   communityUserAgent,
   signSpotiflacCommunityHeaders,
+  type SpotiflacCommunitySession,
 } from "./spotiflac-community";
 
 const QOBUZ_API_BASE_URL = "https://www.qobuz.com/api.json/0.2";
@@ -611,18 +612,24 @@ async function downloadFromMusicDL(trackId: string, quality: string): Promise<st
 
 function mapQobuzSpotbyeQuality(quality: string): string {
   const normalized = quality.trim();
+  if (normalized === "27") return "24";
+  if (normalized === "7") return "16";
   if (normalized === "24" || normalized === "16" || normalized === "6") return normalized;
   return "";
 }
 
-async function downloadFromSpotbyeCommunity(trackId: string, quality: string): Promise<string> {
+async function downloadFromSpotbyeCommunity(
+  trackId: string,
+  quality: string,
+  communitySession?: SpotiflacCommunitySession | null,
+): Promise<string> {
   const spotbyeQuality = mapQobuzSpotbyeQuality(quality);
   if (!spotbyeQuality) {
     throw new QobuzDownloadError(
       `Spotbye community Qobuz does not support quality ${quality || "default"}`,
     );
   }
-  const session = communitySessionFromEnv(process.env);
+  const session = communitySession ?? communitySessionFromEnv(process.env);
   if (!session) {
     throw new QobuzDownloadError("Spotbye community Qobuz needs a SpotiFLAC HMAC session");
   }
@@ -688,6 +695,7 @@ export async function resolveQobuzStreamUrl(options: {
   album?: string;
   quality: string;
   credentials?: QobuzCredentials;
+  communitySession?: SpotiflacCommunitySession | null;
 }): Promise<string> {
   const track = await resolveQobuzTrack(options);
   const trackId = qobuzTrackId(track);
@@ -696,7 +704,7 @@ export async function resolveQobuzStreamUrl(options: {
   }
 
   const attempts: Array<() => Promise<string>> = [
-    () => downloadFromSpotbyeCommunity(trackId, options.quality),
+    () => downloadFromSpotbyeCommunity(trackId, options.quality, options.communitySession),
     () => downloadFromWJHE(trackId, options.quality),
     ...QOBUZ_GDSTUDIO_API_URLS.map(
       (apiUrl) => () => downloadFromGDStudio(trackId, options.quality, apiUrl),

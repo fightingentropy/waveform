@@ -4,6 +4,7 @@ import {
   shouldProxyMusicPathnameToMacMini,
 } from "../src/worker/mac-mini-proxy";
 import {
+  spotiflacEndpointIsDown,
   spotiflacStatusKeyForEndpoint,
   withSecurityHeaders,
 } from "../src/worker/index";
@@ -99,6 +100,13 @@ describe("security headers on proxied responses", () => {
 });
 
 describe("SpotiFLAC status mapping", () => {
+  test("does not skip community oss hosts when status says they are down", () => {
+    const status = { tidal: "down", qobuz: "down", amazon: "down", qobuz_x: "down" };
+    expect(spotiflacEndpointIsDown(status, "https://tdl-oss.spotbye.qzz.io/api/dl")).toBe("");
+    expect(spotiflacEndpointIsDown(status, "https://qbz-oss.spotbye.qzz.io/api/dl")).toBe("");
+    expect(spotiflacEndpointIsDown(status, "https://qbz-x.spotbye.qzz.io/api/dl")).toBe("qobuz_x is down");
+  });
+
   test("maps spotbye resolver hosts to status keys", () => {
     expect(spotiflacStatusKeyForEndpoint("https://qbz-x.spotbye.qzz.io/api/dl")).toBe("qobuz_x");
     expect(spotiflacStatusKeyForEndpoint("https://amz-a.spotbye.qzz.io/api/dl")).toBe("amazon_a");

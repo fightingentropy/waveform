@@ -55,7 +55,7 @@
 		"EMAIL_FROM": "noreply@streamarena.xyz",
 		"APP_ORIGIN": "https://music.streamarena.xyz",
 		"MAC_MINI_ORIGIN": "https://music.streamarena.xyz",
-		"SPOTIFLAC_PROVIDER_ORDER": "qobuz-qobuz_x-qobuz_custom-tidal-tidal_x-tidal_custom-amazon-amazon_x-deezer-deezer_x-deezer_custom-apple",
+		"SPOTIFLAC_PROVIDER_ORDER": "tidal-qobuz-amazon-deezer-apple",
 		"SPOTIFLAC_TIDAL_APIS": "https://tdl-oss.spotbye.qzz.io",
 		"SPOTIFLAC_ACTIVE_TIDAL_API": "https://tdl-oss.spotbye.qzz.io"
 	}

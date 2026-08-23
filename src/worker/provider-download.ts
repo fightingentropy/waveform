@@ -1212,7 +1212,11 @@ async function spotiflacStatus(env: CloudflareEnv): Promise<Record<string, strin
   return promise;
 }
 
-function spotiflacEndpointIsDown(status: Record<string, string> | null, endpointUrl: string): string {
+export function spotiflacEndpointIsDown(status: Record<string, string> | null, endpointUrl: string): string {
+  // 7.2 community oss hosts are the live download APIs. Their status key is
+  // "tidal" / "qobuz" / "amazon", which goes "down" during a scheduled break.
+  // Skipping them then falls through to DNS-dead lettered hosts.
+  if (isSpotiflacCommunityHost(endpointUrl)) return "";
   const key = spotiflacStatusKeyForEndpoint(endpointUrl);
   if (!key || !status) return "";
   const state = status[key];
@@ -1340,6 +1344,7 @@ async function resolveQobuzDownload(
         album,
         quality: quality || "6",
         credentials: qobuzCredentialsFromEnv(env),
+        communitySession: communitySessionFromEnv(env),
       }),
       minimumQuality: qobuzQualityIsLossless(quality),
     };

@@ -155,7 +155,7 @@ import {
 export { mergeRefreshedPlayEventMediaUrls, playEventSongHasDeviceLocalUrl } from "./play-events";
 export { withSecurityHeaders } from "./security-headers";
 export { parseYouTubePlaylistSearchPayload } from "./youtube-catalog";
-export { parseSpotiflacStatusPayload, spotiflacStatusKeyForEndpoint } from "./provider-download";
+export { parseSpotiflacStatusPayload, spotiflacEndpointIsDown, spotiflacStatusKeyForEndpoint } from "./provider-download";
 
 type PlaybackStateWritePayload = {
   state?: unknown;
