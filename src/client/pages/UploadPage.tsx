@@ -8,6 +8,7 @@ import { useAuth } from "@/client/auth";
 import { readSpotifyCookie, writeSpotifyCookie } from "@/lib/spotify-cookie";
 import { formatTime } from "@/lib/utils";
 import { resolveSpotifyBatchOnClient } from "@/lib/spotify-batch-client";
+import { formatSpotifyImportErrorMessage } from "@/lib/spotify-import-error";
 
 type SpotifyTrack = {
   spotifyId: string;
@@ -879,7 +880,7 @@ export default function UploadPage() {
     if (contentType.includes("application/x-ndjson") && res.body) {
       const outcome = await consumeImportProgressStream(res.body, setImportProgress);
       if (outcome.kind === "duplicate") throw duplicateSongError(outcome.existingSong);
-      if (outcome.kind === "error") throw new Error(outcome.error);
+      if (outcome.kind === "error") throw new Error(formatSpotifyImportErrorMessage(outcome.error));
       invalidateLibraryApiCache();
       return;
     }
@@ -919,7 +920,7 @@ export default function UploadPage() {
     } catch (err) {
       setImportProgress(null);
       setDownloadStatus("error");
-      setError(err instanceof Error ? err.message : "Failed to replace existing song");
+      setError(formatSpotifyImportErrorMessage(err));
     }
   }
 
@@ -949,7 +950,7 @@ export default function UploadPage() {
         return;
       }
       setDownloadStatus("error");
-      setError(err instanceof Error ? err.message : "Failed to add song from Spotify");
+      setError(formatSpotifyImportErrorMessage(err));
     }
   }
 
@@ -1202,7 +1203,14 @@ export default function UploadPage() {
             </div>
           )}
 
-          {error && <div className="text-sm text-red-600">{error}</div>}
+          {error && (
+            <div
+              role="alert"
+              className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm leading-relaxed text-red-300"
+            >
+              {formatSpotifyImportErrorMessage(error)}
+            </div>
+          )}
         </div>
       )}
     </div>

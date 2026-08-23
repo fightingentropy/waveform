@@ -5,6 +5,7 @@ import {
 } from "../src/worker/mac-mini-proxy";
 import {
   isSpotiflacCommunityCooldownError,
+  isSpotiflacVerificationRequiredError,
   shouldFallbackLicensedSourceToMacMini,
   spotiflacEndpointIsDown,
   spotiflacStatusKeyForEndpoint,
@@ -121,6 +122,15 @@ describe("SpotiFLAC community fallback", () => {
       ),
     ).toBe(true);
     expect(isSpotiflacCommunityCooldownError(new LicensedSourceDownloadError("Signed request validation failed.", 401))).toBe(false);
+  });
+
+  test("stops the provider chain when the Mac mini session needs verification", () => {
+    expect(
+      isSpotiflacVerificationRequiredError(
+        new Error("SpotiFLAC community session is not available on this Mac"),
+      ),
+    ).toBe(true);
+    expect(isSpotiflacVerificationRequiredError(new Error("GDStudio returned 401"))).toBe(false);
   });
 });
 

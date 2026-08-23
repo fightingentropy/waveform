@@ -20,6 +20,7 @@ import {
   type LicensedSourceStream,
 } from "../lib/licensed-source-download";
 import { communityUserAgent, isSpotiflacCommunityHost } from "../lib/spotiflac-community";
+import { SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE } from "../lib/spotify-import-error";
 import { loadDesktopSpotiflacCommunitySession } from "./spotiflac-community-session";
 import { maybeDecryptDeezerBuffer, resolveDeezerDecryptionId } from "../lib/deezer-decrypt";
 import {
@@ -1190,7 +1191,7 @@ async function handleLicensedSourceResolve(request: Request): Promise<Response> 
   }
   const session = loadDesktopSpotiflacCommunitySession();
   if (!session) {
-    return json({ error: "SpotiFLAC community session is not available on this Mac" }, { status: 503 });
+    return json({ error: SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE }, { status: 503 });
   }
   const body =
     payload?.body && typeof payload.body === "object" && !Array.isArray(payload.body)

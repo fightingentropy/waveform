@@ -46,6 +46,10 @@ import {
   fetchWithTimeout,
 } from "./fetch";
 import { SERVER_IMPORT_OUTPUT_FORMAT, type BatchResponseTrack, type SongPayload } from "./payloads";
+import {
+  SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE,
+  isSpotiflacVerificationRequiredMessage,
+} from "@/lib/spotify-import-error";
 
 export type DownloadProviderService =
   | "licensed"
@@ -1773,8 +1777,12 @@ async function resolveLicensedSourceOnMacMini(
   });
   const payload = toObject(await response.json().catch(() => null));
   if (!response.ok) {
+    const message = toStringValue(payload?.error) || `Mac mini community resolve returned ${response.status}`;
+    if (isSpotiflacVerificationRequiredMessage(message)) {
+      throw new ApiError(SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE, 503);
+    }
     throw new ApiError(
-      toStringValue(payload?.error) || `Mac mini community resolve returned ${response.status}`,
+      message,
       502,
     );
   }
@@ -1796,6 +1804,10 @@ export function isSpotiflacCommunityCooldownError(error: unknown): boolean {
   const status = error instanceof LicensedSourceDownloadError ? error.status : 0;
   const message = error instanceof Error ? error.message : "";
   return status === 429 || status === 503 || /overloaded|short break|try again in about/i.test(message);
+}
+
+export function isSpotiflacVerificationRequiredError(error: unknown): boolean {
+  return isSpotiflacVerificationRequiredMessage(error);
 }
 
 async function resolveLicensedSourceWithCommunityFallback(
@@ -1907,6 +1919,7 @@ async function resolveConfiguredLicensedProviderDownload(
           minimumQuality: "lossless",
         });
       } catch (error) {
+        if (isSpotiflacVerificationRequiredError(error)) throw error;
         const message = error instanceof Error ? error.message : `${service} provider failed`;
         errors.push(message);
         if (isSpotiflacCommunityHost(endpointUrl) && isSpotiflacCommunityCooldownError(error)) {
@@ -1976,6 +1989,7 @@ async function resolveProviderDownload(
         await resolveConfiguredLicensedProviderDownload(env, service, trackId, songLinkPayload, payload),
       ));
     } catch (error) {
+      if (isSpotiflacVerificationRequiredError(error)) throw error;
       if (isSpotiflacCommunityCooldownError(error)) throw error;
       errors.push(error instanceof Error ? error.message : `${service} failed`);
     }
@@ -2051,6 +2065,7 @@ async function resolveSpotiFlacDownloadStack(
       // to cut request pressure / rate-limit load.
       if (candidates.length > 0) break;
     } catch (error) {
+      if (isSpotiflacVerificationRequiredError(error)) throw error;
       if (isSpotiflacCommunityCooldownError(error)) throw error;
       errors.push(error instanceof Error ? `${provider}: ${error.message}` : `${provider} failed`);
     }

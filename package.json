@@ -20,6 +20,7 @@
     "mini:install-server": "bash scripts/install-mini-server.sh",
     "mini:install-yt-dlp": "bash scripts/install-mini-yt-dlp.sh",
     "mini:sync-music": "bash scripts/sync-mini-music.sh",
+    "mini:sync-spotiflac-session": "bash scripts/sync-spotiflac-session.sh",
     "mini:check": "bash scripts/check-mini.sh",
     "db:migrate:local": "wrangler d1 migrations apply spotify-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply spotify-db --remote",

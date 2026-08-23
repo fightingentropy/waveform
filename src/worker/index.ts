@@ -157,6 +157,7 @@ export { withSecurityHeaders } from "./security-headers";
 export { parseYouTubePlaylistSearchPayload } from "./youtube-catalog";
 export {
   isSpotiflacCommunityCooldownError,
+  isSpotiflacVerificationRequiredError,
   parseSpotiflacStatusPayload,
   shouldFallbackLicensedSourceToMacMini,
   spotiflacEndpointIsDown,
