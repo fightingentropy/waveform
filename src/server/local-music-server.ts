@@ -16,8 +16,11 @@ import { parseFile } from "music-metadata";
 import {
   LicensedSourceDownloadError,
   materializeLicensedSourceStream,
+  resolveLicensedSourceStreamUrl,
   type LicensedSourceStream,
 } from "../lib/licensed-source-download";
+import { communityUserAgent, isSpotiflacCommunityHost } from "../lib/spotiflac-community";
+import { loadDesktopSpotiflacCommunitySession } from "./spotiflac-community-session";
 import { maybeDecryptDeezerBuffer, resolveDeezerDecryptionId } from "../lib/deezer-decrypt";
 import {
   isApiPath,
@@ -425,6 +428,11 @@ function currentUserIdentityForRequest(request: Request): RequestUserIdentity | 
 
 function currentUserIdForRequest(request: Request): string | null {
   return currentUserIdentityForRequest(request)?.id ?? null;
+}
+
+function isAuthorizedLicensedSourceRequest(request: Request): boolean {
+  if (currentUserIdForRequest(request)) return true;
+  return privateProxyAuthenticator.authenticate(request).authenticated;
 }
 
 function isLocalLibraryOwner(identity: RequestUserIdentity | null): boolean {
@@ -1167,6 +1175,50 @@ async function materializeLicensedStreamToResponse(
   return materializeLicensedSourceStream(stream, { maxBytes: MAX_AUDIO_BYTES, userAgent });
 }
 
+async function handleLicensedSourceResolve(request: Request): Promise<Response> {
+  if (!isAuthorizedLicensedSourceRequest(request)) {
+    return json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const payload = await readJsonBody<{
+    endpointUrl?: unknown;
+    body?: unknown;
+    userAgent?: unknown;
+  }>(request);
+  const endpointUrl = typeof payload?.endpointUrl === "string" ? payload.endpointUrl.trim() : "";
+  if (!endpointUrl || !isSpotiflacCommunityHost(endpointUrl)) {
+    return json({ error: "Unsupported community endpoint" }, { status: 400 });
+  }
+  const session = loadDesktopSpotiflacCommunitySession();
+  if (!session) {
+    return json({ error: "SpotiFLAC community session is not available on this Mac" }, { status: 503 });
+  }
+  const body =
+    payload?.body && typeof payload.body === "object" && !Array.isArray(payload.body)
+      ? (payload.body as Record<string, unknown>)
+      : {};
+  const userAgent =
+    typeof payload?.userAgent === "string" && payload.userAgent.trim()
+      ? payload.userAgent.trim()
+      : communityUserAgent(session);
+  try {
+    return json(
+      await resolveLicensedSourceStreamUrl({
+        endpointUrl,
+        body,
+        userAgent,
+        communitySession: session,
+        spotifyId: typeof body.spotifyId === "string" ? body.spotifyId : "",
+        spotifyUrl: typeof body.spotifyUrl === "string" ? body.spotifyUrl : "",
+      }),
+    );
+  } catch (error) {
+    if (error instanceof LicensedSourceDownloadError) {
+      return json({ error: error.message }, { status: error.status });
+    }
+    throw error;
+  }
+}
+
 async function handleLicensedSourceMaterialize(request: Request): Promise<Response> {
   if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
   const payload = await readJsonBody<{
@@ -1670,6 +1722,10 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/likes") {
     return handleLikes(request);
+  }
+
+  if (pathname === "/api/licensed-source/resolve" && request.method === "POST") {
+    return handleLicensedSourceResolve(request);
   }
 
   if (pathname === "/api/licensed-source/materialize" && request.method === "POST") {

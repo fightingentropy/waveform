@@ -102,6 +102,41 @@ describe("licensed source downloader", () => {
     expect(stream.metadata.captchaToken).toBe("captcha-token");
   });
 
+  test("signs SpotiFLAC community HMAC headers for oss hosts", async () => {
+    let requestInit: RequestInit | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestInit = init;
+      return new Response(JSON.stringify({
+        streamUrl: "https://media.example.test/community.flac",
+        contentType: "audio/flac",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await resolveLicensedSourceStreamUrl({
+      endpointUrl: "https://tdl-oss.spotbye.qzz.io/api/dl",
+      spotifyId: "7gLT8aVOkQkXQk2yTkZzhF",
+      spotifyUrl: "https://open.spotify.com/track/7gLT8aVOkQkXQk2yTkZzhF",
+      body: { id: "528127333", quality: "16" },
+      communitySession: {
+        sessionId: "sess-test",
+        sessionSecret: "secret-test",
+        appVersion: "7.2.2",
+        platform: "desktop",
+      },
+    });
+
+    const headers = new Headers(requestInit?.headers);
+    expect(headers.get("user-agent")).toBe("SpotiFLAC/7.2.2");
+    expect(headers.get("x-sig-session")).toBe("sess-test");
+    expect(headers.get("x-sig-app-version")).toBe("7.2.2");
+    expect(headers.get("x-sig-platform")).toBe("desktop");
+    expect(headers.get("x-sig-signature")).toBeTruthy();
+    expect(JSON.parse(String(requestInit?.body))).toEqual({ id: "528127333", quality: "16" });
+  });
+
   test("fails clearly when the provider is not configured", async () => {
     await expect(resolveLicensedSourceStreamUrl({
       endpointUrl: "",

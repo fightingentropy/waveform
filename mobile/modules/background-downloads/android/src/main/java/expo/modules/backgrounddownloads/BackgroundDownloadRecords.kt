@@ -8,7 +8,7 @@ class BackgroundDownloadRequestRecord : Record {
   @Field var transferToken: String = ""
   @Field var accountScope: String = ""
   @Field var songId: String = ""
-  @Field var scopes: Array<String> = emptyArray()
+  @Field var scopes: List<String> = emptyList()
   @Field var songJSON: String = ""
   @Field var audioURL: String = ""
   @Field var coverURL: String? = null

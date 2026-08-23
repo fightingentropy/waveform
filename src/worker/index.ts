@@ -155,7 +155,7 @@ import {
 export { mergeRefreshedPlayEventMediaUrls, playEventSongHasDeviceLocalUrl } from "./play-events";
 export { withSecurityHeaders } from "./security-headers";
 export { parseYouTubePlaylistSearchPayload } from "./youtube-catalog";
-export { spotiflacStatusKeyForEndpoint } from "./provider-download";
+export { parseSpotiflacStatusPayload, spotiflacStatusKeyForEndpoint } from "./provider-download";
 
 type PlaybackStateWritePayload = {
   state?: unknown;
@@ -928,8 +928,15 @@ const AUTH_OPEN_API_PATHS = new Set([
   "/api/register",
 ]);
 
-function isAuthOpenApiPath(pathname: string): boolean {
+// Native image views do not send the session cookie used by fetch/XHR. Keep
+// only the unguessable, image-only profile object shape open; every other R2
+// path still reaches the authenticated ownership check in r2-media.
+const PUBLIC_PROFILE_IMAGE_API_PATH =
+  /^\/api\/files\/users\/[a-zA-Z0-9._-]+\/profile\/[a-zA-Z0-9._-]+\.(?:jpe?g|png|gif|webp)$/i;
+
+export function isAuthOpenApiPath(pathname: string): boolean {
   if (AUTH_OPEN_API_PATHS.has(pathname)) return true;
+  if (PUBLIC_PROFILE_IMAGE_API_PATH.test(pathname)) return true;
   return pathname.startsWith("/api/auth/verify/");
 }
 

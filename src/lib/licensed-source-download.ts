@@ -1,5 +1,11 @@
 import { toObject, toStringValue } from "./provider-http";
 import { fetchPublicHttpUrl } from "./safe-fetch";
+import {
+  communityUserAgent,
+  isSpotiflacCommunityHost,
+  signSpotiflacCommunityHeaders,
+  type SpotiflacCommunitySession,
+} from "./spotiflac-community";
 import { isSpotByeEnvelopeHost, postSpotByeEnvelope } from "./spotbye-envelope";
 
 // NOTE: this provider's DEFAULT_USER_AGENT and fetchWithTimeout deliberately
@@ -297,6 +303,7 @@ export async function resolveLicensedSourceStreamUrl(options: {
   outputFormat?: string;
   body?: JsonObject;
   timeoutMs?: number;
+  communitySession?: SpotiflacCommunitySession | null;
 }): Promise<LicensedSourceStream> {
   const endpoint = parseHttpUrl(options.endpointUrl);
   if (!endpoint) {
@@ -339,14 +346,28 @@ export async function resolveLicensedSourceStreamUrl(options: {
     const headers = new Headers({
       accept: "application/json, text/plain, */*",
       "content-type": "application/json",
-      "user-agent": options.userAgent || DEFAULT_USER_AGENT,
+      "user-agent":
+        options.userAgent ||
+        (options.communitySession ? communityUserAgent(options.communitySession) : DEFAULT_USER_AGENT),
     });
     if (options.apiKey) headers.set("authorization", `Bearer ${options.apiKey}`);
+    const bodyText = JSON.stringify(requestBody);
+    if (options.communitySession && isSpotiflacCommunityHost(endpoint.toString())) {
+      const signed = await signSpotiflacCommunityHeaders({
+        method: "POST",
+        pathname: endpoint.pathname,
+        // SpotiFLAC 7.2.2 always signs an empty query, even if the URL has one.
+        query: "",
+        body: new TextEncoder().encode(bodyText),
+        session: options.communitySession,
+      });
+      for (const [key, value] of Object.entries(signed)) headers.set(key, value);
+    }
 
     const response = await fetchWithTimeout(endpoint.toString(), {
       method: "POST",
       headers,
-      body: JSON.stringify(requestBody),
+      body: bodyText,
     }, options.timeoutMs);
     responseOk = response.ok;
     responseStatus = response.status;

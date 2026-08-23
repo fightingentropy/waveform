@@ -32,12 +32,12 @@ class BackgroundDownloadsModule : Module() {
       coordinator = null
     }
 
-    AsyncFunction("enqueue") { records: Array<BackgroundDownloadRequestRecord> ->
-      requireCoordinator().enqueue(records.toList())
+    AsyncFunction("enqueue") { records: List<BackgroundDownloadRequestRecord> ->
+      requireCoordinator().enqueue(records)
     }
 
-    AsyncFunction("cancel") { records: Array<BackgroundDownloadReferenceRecord> ->
-      requireCoordinator().cancel(records.toList())
+    AsyncFunction("cancel") { records: List<BackgroundDownloadReferenceRecord> ->
+      requireCoordinator().cancel(records)
     }
 
     AsyncFunction("cancelAccount") { accountScope: String ->
@@ -52,8 +52,8 @@ class BackgroundDownloadsModule : Module() {
       requireCoordinator().snapshot(accountScope)
     }
 
-    AsyncFunction("acknowledge") { records: Array<BackgroundDownloadAcknowledgementRecord> ->
-      requireCoordinator().acknowledge(records.toList())
+    AsyncFunction("acknowledge") { records: List<BackgroundDownloadAcknowledgementRecord> ->
+      requireCoordinator().acknowledge(records)
     }
 
     AsyncFunction("setActiveAccount") { accountScope: String ->

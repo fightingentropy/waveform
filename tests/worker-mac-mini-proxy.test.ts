@@ -104,6 +104,9 @@ describe("SpotiFLAC status mapping", () => {
     expect(spotiflacStatusKeyForEndpoint("https://amz-a.spotbye.qzz.io/api/dl")).toBe("amazon_a");
     expect(spotiflacStatusKeyForEndpoint("https://dzr-e.spotbye.qzz.io/api/dl")).toBe("deezer_e");
     expect(spotiflacStatusKeyForEndpoint("https://am.spotbye.qzz.io/api/dl")).toBe("apple");
+    expect(spotiflacStatusKeyForEndpoint("https://tdl-oss.spotbye.qzz.io/api/dl")).toBe("tidal");
+    expect(spotiflacStatusKeyForEndpoint("https://qbz-oss.spotbye.qzz.io/api/dl")).toBe("qobuz");
+    expect(spotiflacStatusKeyForEndpoint("https://amz-oss.spotbye.qzz.io/api/dl")).toBe("amazon");
     expect(spotiflacStatusKeyForEndpoint("https://provider.example.test/api/dl")).toBe("");
   });
 });

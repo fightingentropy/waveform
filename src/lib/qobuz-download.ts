@@ -8,6 +8,11 @@ import {
   type FetchWithTimeoutOptions,
 } from "./provider-http";
 import { scoreTitleArtistAlbum } from "./search-scoring";
+import {
+  communitySessionFromEnv,
+  communityUserAgent,
+  signSpotiflacCommunityHeaders,
+} from "./spotiflac-community";
 
 const QOBUZ_API_BASE_URL = "https://www.qobuz.com/api.json/0.2";
 const QOBUZ_DEFAULT_APP_ID = "712109809";
@@ -37,21 +42,7 @@ const QOBUZ_LEGACY_STREAM_API_BASES = [
   "https://dabmusic.xyz/api/stream?trackId=",
   "https://qobuz.squid.wtf/api/download-music?track_id=",
 ];
-const QOBUZ_SPOTBYE_API_URLS = [
-  "https://qbz-a.spotbye.qzz.io/api/dl",
-  "https://qbz-b.spotbye.qzz.io/api/dl",
-  "https://qbz-c.spotbye.qzz.io/api/dl",
-  "https://qbz-d.spotbye.qzz.io/api/dl",
-  "https://qbz-e.spotbye.qzz.io/api/dl",
-];
-// The spotbye "community/FOSS" Qobuz endpoint. Unlike qbz-a..e (which since
-// ~2026-06-24 reject plain JSON with "Encrypted request required"), this tier
-// takes plain {id,quality} JSON plus a static x-api-key baked into the public
-// SpotiFLAC app — no per-request encryption — and returns a direct Qobuz CDN
-// FLAC URL. The key is decrypted at runtime below (same AES-256-GCM scheme as
-// the musicdl debug key) so it never appears in source as plaintext.
-const QOBUZ_SPOTBYE_COMMUNITY_API_URL = "https://qbz-foss.spotbye.qzz.io/api/dl";
-const QOBUZ_SPOTBYE_COMMUNITY_USER_AGENT = "SpotiFLAC/1.3.8";
+const QOBUZ_SPOTBYE_COMMUNITY_API_URL = "https://qbz-oss.spotbye.qzz.io/api/dl";
 
 const qobuzMusicDLDebugKeySeedParts = [
   Buffer.from([0x73, 0x70, 0x6f, 0x74, 0x69, 0x66]),
@@ -77,29 +68,6 @@ const qobuzMusicDLDebugKeyCiphertext = Buffer.from([
 const qobuzMusicDLDebugKeyTag = Buffer.from([
   0x69, 0x0c, 0x42, 0x70, 0x14, 0x83, 0xff, 0x14, 0xc8, 0xbe, 0x17, 0x00,
   0x69, 0xb1, 0xfe, 0xbb,
-]);
-
-// Community/FOSS spotbye Qobuz api-key — an AES-256-GCM blob lifted from the
-// public SpotiFLAC binary; decrypted at runtime so the key never appears as
-// plaintext. Seed parts concat to "spotiflac:community:apikey:v1".
-const spotbyeCommunityApiKeySeedParts = [
-  Buffer.from("spotif"),
-  Buffer.from("lac:co"),
-  Buffer.from("mmunity:apikey:v1"),
-];
-const spotbyeCommunityApiKeyAAD = Buffer.from("spotiflac|community|apikey|v1");
-const spotbyeCommunityApiKeyNonce = Buffer.from([
-  0x20, 0x5c, 0x92, 0x4b, 0x61, 0xc2, 0x79, 0xd3, 0xea, 0x5d, 0xdd, 0xd4,
-]);
-const spotbyeCommunityApiKeyCiphertext = Buffer.from([
-  0x51, 0x0b, 0x26, 0xaf, 0xac, 0x6f, 0xf6, 0x41, 0x79, 0xde, 0x8d, 0x36,
-  0x83, 0x46, 0xb5, 0xd5, 0x96, 0xef, 0xad, 0xed, 0xe0, 0xd0, 0xc7, 0xc2,
-  0x90, 0x01, 0x50, 0x5f, 0x55, 0x59, 0x9f, 0xac, 0x1f, 0xd0, 0x70, 0x18,
-  0x91, 0x4f, 0x7a, 0x32,
-]);
-const spotbyeCommunityApiKeyTag = Buffer.from([
-  0x56, 0xb0, 0x28, 0x68, 0x9f, 0x39, 0x0d, 0xbc, 0xc0, 0x8e, 0xfb, 0x52,
-  0x3a, 0xd6, 0x18, 0xae,
 ]);
 
 export type QobuzCredentials = {
@@ -145,7 +113,6 @@ export class QobuzDownloadError extends Error {
 
 let qobuzCredentials: QobuzCredentials | null = null;
 let qobuzMusicDLDebugKey: string | null = null;
-let spotbyeCommunityApiKey: string | null = null;
 
 function fetchWithTimeout(
   url: string,
@@ -648,48 +615,6 @@ function mapQobuzSpotbyeQuality(quality: string): string {
   return "";
 }
 
-async function downloadFromSpotbye(trackId: string, quality: string, apiUrl: string): Promise<string> {
-  const spotbyeQuality = mapQobuzSpotbyeQuality(quality);
-  if (!spotbyeQuality) {
-    throw new QobuzDownloadError(`Spotbye Qobuz does not support quality ${quality || "default"}`);
-  }
-
-  const response = await fetchWithTimeout(apiUrl, {
-    method: "POST",
-    timeoutMs: 25_000,
-    headers: {
-      accept: "application/json, text/plain, */*",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ id: trackId, quality: spotbyeQuality }),
-  });
-  const streamUrl = await extractStreamUrlFromResponse(response);
-  if (streamUrl) return streamUrl;
-  throw new QobuzDownloadError(`Spotbye Qobuz returned ${response.status} without a stream URL`);
-}
-
-function getSpotbyeCommunityApiKey(): string {
-  if (spotbyeCommunityApiKey) return spotbyeCommunityApiKey;
-
-  const hash = createHash("sha256");
-  for (const part of spotbyeCommunityApiKeySeedParts) {
-    hash.update(part);
-  }
-
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    hash.digest(),
-    spotbyeCommunityApiKeyNonce,
-  );
-  decipher.setAAD(spotbyeCommunityApiKeyAAD);
-  decipher.setAuthTag(spotbyeCommunityApiKeyTag);
-  spotbyeCommunityApiKey = Buffer.concat([
-    decipher.update(spotbyeCommunityApiKeyCiphertext),
-    decipher.final(),
-  ]).toString("utf8");
-  return spotbyeCommunityApiKey;
-}
-
 async function downloadFromSpotbyeCommunity(trackId: string, quality: string): Promise<string> {
   const spotbyeQuality = mapQobuzSpotbyeQuality(quality);
   if (!spotbyeQuality) {
@@ -697,21 +622,31 @@ async function downloadFromSpotbyeCommunity(trackId: string, quality: string): P
       `Spotbye community Qobuz does not support quality ${quality || "default"}`,
     );
   }
+  const session = communitySessionFromEnv(process.env);
+  if (!session) {
+    throw new QobuzDownloadError("Spotbye community Qobuz needs a SpotiFLAC HMAC session");
+  }
 
+  const bodyText = JSON.stringify({ id: trackId, quality: spotbyeQuality });
+  const endpoint = new URL(QOBUZ_SPOTBYE_COMMUNITY_API_URL);
+  const signed = await signSpotiflacCommunityHeaders({
+    method: "POST",
+    pathname: endpoint.pathname,
+    query: "",
+    body: new TextEncoder().encode(bodyText),
+    session,
+  });
   const response = await fetchWithTimeout(QOBUZ_SPOTBYE_COMMUNITY_API_URL, {
     method: "POST",
     timeoutMs: 25_000,
-    // redirect:"manual" so the secret x-api-key is never auto-forwarded to a 3xx
-    // target (e.g. the CDN). extractStreamUrlFromResponse reads the Location
-    // header first, so a redirect still yields the stream URL.
     redirect: "manual",
     headers: {
       accept: "application/json, text/plain, */*",
       "content-type": "application/json",
-      "x-api-key": getSpotbyeCommunityApiKey(),
-      "user-agent": QOBUZ_SPOTBYE_COMMUNITY_USER_AGENT,
+      "user-agent": communityUserAgent(session),
+      ...signed,
     },
-    body: JSON.stringify({ id: trackId, quality: spotbyeQuality }),
+    body: bodyText,
   });
 
   // The community tier rate-limits aggressively (429 / 503 + Retry-After). Don't
@@ -762,9 +697,6 @@ export async function resolveQobuzStreamUrl(options: {
 
   const attempts: Array<() => Promise<string>> = [
     () => downloadFromSpotbyeCommunity(trackId, options.quality),
-    ...QOBUZ_SPOTBYE_API_URLS.map(
-      (apiUrl) => () => downloadFromSpotbye(trackId, options.quality, apiUrl),
-    ),
     () => downloadFromWJHE(trackId, options.quality),
     ...QOBUZ_GDSTUDIO_API_URLS.map(
       (apiUrl) => () => downloadFromGDStudio(trackId, options.quality, apiUrl),

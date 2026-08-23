@@ -15,6 +15,12 @@ import {
   type LicensedSourceStream,
 } from "@/lib/licensed-source-download";
 import {
+  communitySessionFromEnv,
+  communityUserAgent,
+  isSpotiflacCommunityHost,
+} from "@/lib/spotiflac-community";
+import { canUseMacMiniProxy, fetchMacMini } from "./mac-mini-proxy";
+import {
   AmazonDownloadError,
   resolveAmazonAsinFromSpotify,
   resolveAmazonStreamUrl,
@@ -212,6 +218,304 @@ async function fetchSongLinkPayload(trackId: string, region: string): Promise<Re
   return fetchJsonObject(`https://api.song.link/v1-alpha.1/links?${params.toString()}`);
 }
 
+const SONG_LINK_PAGE_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+
+type SongLinkPlatformName =
+  | "tidal"
+  | "qobuz"
+  | "deezer"
+  | "amazonMusic"
+  | "amazon"
+  | "appleMusic"
+  | "itunes";
+
+function songLinkEntityPrefix(platform: SongLinkPlatformName): string {
+  switch (platform) {
+    case "tidal":
+      return "TIDAL_SONG::";
+    case "qobuz":
+      return "QOBUZ_SONG::";
+    case "deezer":
+      return "DEEZER_SONG::";
+    case "amazonMusic":
+    case "amazon":
+      return "AMAZON_SONG::";
+    case "appleMusic":
+      return "APPLE_MUSIC_SONG::";
+    case "itunes":
+      return "ITUNES_SONG::";
+  }
+}
+
+function platformIdFromSongLinkUrl(platform: SongLinkPlatformName, url: string): string {
+  if (platform === "tidal" || platform === "deezer" || platform === "qobuz") {
+    return url.match(/\/(?:track|tracks)\/(\d+)/i)?.[1] ?? "";
+  }
+  if (platform === "amazonMusic" || platform === "amazon") {
+    return amazonAsinFromValue(url);
+  }
+  try {
+    const parsed = new URL(url);
+    const queryId = parsed.searchParams.get("i") || "";
+    if (/^\d+$/.test(queryId)) return queryId;
+    return parsed.pathname.match(/\/(\d+)(?:$|\/)/)?.[1] ?? "";
+  } catch {
+    return url.match(/\/(\d+)(?:$|[?#/])/)?.[1] ?? "";
+  }
+}
+
+function normalizeSongLinkPlatform(value: string): SongLinkPlatformName | "" {
+  const platform = value.trim();
+  if (
+    platform === "tidal" ||
+    platform === "qobuz" ||
+    platform === "deezer" ||
+    platform === "amazonMusic" ||
+    platform === "amazon" ||
+    platform === "appleMusic" ||
+    platform === "itunes"
+  ) {
+    return platform;
+  }
+  return "";
+}
+
+export function parseSpotiflacStatusPayload(payload: unknown): Record<string, string> | null {
+  const root = toObject(payload);
+  if (!root) return null;
+  const buckets = [
+    toObject(root.status),
+    toObject(toObject(root.next)?.status),
+    toObject(toObject(root.standard)?.status),
+    toObject(toObject(root.community)?.status),
+    toObject(toObject(root.spotiflac)?.status),
+  ];
+  const out: Record<string, string> = {};
+  for (const bucket of buckets) {
+    if (!bucket) continue;
+    for (const [key, value] of Object.entries(bucket)) {
+      const normalized = toStringValue(value).toLowerCase();
+      if (!key || !normalized || out[key]) continue;
+      out[key] = normalized;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+export function parseSongLinkNextDataHtml(html: string, trackId: string): Record<string, unknown> | null {
+  const raw = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/i)?.[1];
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const nextData = toObject(parsed);
+  const pageData = toObject(toObject(toObject(nextData?.props)?.pageProps)?.pageData);
+  if (!pageData) return null;
+
+  const entity = toObject(pageData.entityData) ?? {};
+  const title = toStringValue(entity.title) || toStringValue(entity.name);
+  const artist = toStringValue(entity.artistName);
+  const thumbnailUrl = toStringValue(entity.thumbnailUrl);
+  const isrc = toStringValue(entity.isrc).toUpperCase();
+  const spotifyKey = `SPOTIFY_SONG::${trackId}`;
+  const linksByPlatform: Record<string, { url: string; entityUniqueId: string }> = {};
+
+  const sections = Array.isArray(pageData.sections) ? pageData.sections : [];
+  for (const section of sections) {
+    const sectionObject = toObject(section);
+    const links = Array.isArray(sectionObject?.links) ? sectionObject.links : [];
+    for (const rawLink of links) {
+      const link = toObject(rawLink);
+      const platform = normalizeSongLinkPlatform(toStringValue(link?.platform));
+      const url = toStringValue(link?.url);
+      if (!platform || !url || linksByPlatform[platform]) continue;
+      const id = platformIdFromSongLinkUrl(platform, url);
+      linksByPlatform[platform] = {
+        url,
+        entityUniqueId: `${songLinkEntityPrefix(platform)}${id || url}`,
+      };
+    }
+  }
+
+  if (!title && !artist && Object.keys(linksByPlatform).length === 0) return null;
+  return {
+    entityUniqueId: spotifyKey,
+    entitiesByUniqueId: {
+      [spotifyKey]: {
+        title,
+        artistName: artist,
+        thumbnailUrl,
+        ...(isrc ? { isrc } : {}),
+      },
+    },
+    linksByPlatform,
+  };
+}
+
+export function parseSongstatsSameAsLinks(html: string): Partial<Record<SongLinkPlatformName, string>> {
+  const out: Partial<Record<SongLinkPlatformName, string>> = {};
+  const scripts = html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
+  for (const match of scripts) {
+    const raw = match[1]?.trim().replace(/&quot;/g, '"').replace(/&amp;/g, "&") ?? "";
+    if (!raw) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    collectSongstatsSameAs(parsed, out);
+  }
+  return out;
+}
+
+function collectSongstatsSameAs(
+  value: unknown,
+  out: Partial<Record<SongLinkPlatformName, string>>,
+): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectSongstatsSameAs(item, out);
+    return;
+  }
+  const object = toObject(value);
+  if (!object) return;
+  const sameAs = object.sameAs;
+  if (typeof sameAs === "string") assignSongstatsLink(sameAs, out);
+  else if (Array.isArray(sameAs)) {
+    for (const item of sameAs) {
+      if (typeof item === "string") assignSongstatsLink(item, out);
+    }
+  }
+  for (const nested of Object.values(object)) collectSongstatsSameAs(nested, out);
+}
+
+function assignSongstatsLink(raw: string, out: Partial<Record<SongLinkPlatformName, string>>): void {
+  const link = raw.trim();
+  if (!link) return;
+  if (!out.tidal && /listen\.tidal\.com\/track/i.test(link)) out.tidal = link;
+  else if (!out.amazonMusic && /music\.amazon\./i.test(link)) out.amazonMusic = link;
+  else if (!out.deezer && /deezer\.com/i.test(link)) out.deezer = link;
+}
+
+function injectSongLinkPlatform(
+  payload: Record<string, unknown>,
+  platform: SongLinkPlatformName,
+  url: string,
+): void {
+  if (!url || getPlatformLink(payload, platform)) return;
+  const id = platformIdFromSongLinkUrl(platform, url);
+  injectPlatformLink(payload, platform, url, `${songLinkEntityPrefix(platform)}${id || url}`);
+}
+
+function mergeSongLinkPayloads(
+  ...payloads: Array<Record<string, unknown> | null>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    entityUniqueId: "",
+    entitiesByUniqueId: {},
+    linksByPlatform: {},
+  };
+  for (const payload of payloads) {
+    if (!payload) continue;
+    if (!toStringValue(out.entityUniqueId)) {
+      out.entityUniqueId = toStringValue(payload.entityUniqueId);
+    }
+    const entities = toObject(payload.entitiesByUniqueId);
+    if (entities) {
+      const dest = toObject(out.entitiesByUniqueId) ?? {};
+      for (const [key, value] of Object.entries(entities)) {
+        const incoming = toObject(value);
+        const existing = toObject(dest[key]);
+        dest[key] = existing ? { ...incoming, ...existing } : incoming;
+        const merged = toObject(dest[key]);
+        if (merged && incoming) {
+          for (const [field, fieldValue] of Object.entries(incoming)) {
+            if (!toStringValue(merged[field]) && fieldValue) merged[field] = fieldValue;
+          }
+          dest[key] = merged;
+        }
+      }
+      out.entitiesByUniqueId = dest;
+    }
+    const links = toObject(payload.linksByPlatform);
+    if (links) {
+      const dest = toObject(out.linksByPlatform) ?? {};
+      for (const [platform, value] of Object.entries(links)) {
+        if (!getPlatformLink({ linksByPlatform: dest }, platform)) dest[platform] = value;
+      }
+      out.linksByPlatform = dest;
+    }
+  }
+  return out;
+}
+
+function isrcFromSongLinkPayload(songLinkPayload: Record<string, unknown>): string {
+  const entities = toObject(songLinkPayload.entitiesByUniqueId);
+  if (entities) {
+    for (const value of Object.values(entities)) {
+      const isrc = toStringValue(toObject(value)?.isrc).toUpperCase();
+      if (isrc) return isrc;
+    }
+  }
+  return toStringValue(songLinkPayload.isrc).toUpperCase();
+}
+
+function songLinkPayloadHasProviderLink(payload: Record<string, unknown>): boolean {
+  return Boolean(
+    getPlatformLink(payload, "tidal") ||
+      getPlatformLink(payload, "qobuz") ||
+      getPlatformLink(payload, "deezer") ||
+      getPlatformLink(payload, "amazonMusic") ||
+      getPlatformLink(payload, "amazon") ||
+      getPlatformLink(payload, "appleMusic"),
+  );
+}
+
+async function scrapeSongLinkPayload(trackId: string, region: string): Promise<Record<string, unknown> | null> {
+  const pageUrl = new URL(`https://song.link/s/${trackId}`);
+  if (region) pageUrl.searchParams.set("country", region);
+  const response = await fetchWithTimeout(pageUrl.toString(), SPOTIFY_REQUEST_TIMEOUT_MS, {
+    headers: {
+      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "accept-language": "en-US,en;q=0.9",
+      "user-agent": SONG_LINK_PAGE_USER_AGENT,
+    },
+  }).catch(() => null);
+  if (!response?.ok) return null;
+  const html = await response.text().catch(() => "");
+  return html ? parseSongLinkNextDataHtml(html, trackId) : null;
+}
+
+async function enrichSongstatsLinks(songLinkPayload: Record<string, unknown>): Promise<void> {
+  const missingTidal = !getPlatformLink(songLinkPayload, "tidal");
+  const missingAmazon = !getPlatformLink(songLinkPayload, "amazonMusic") && !getPlatformLink(songLinkPayload, "amazon");
+  const missingDeezer = !getPlatformLink(songLinkPayload, "deezer");
+  if (!missingTidal && !missingAmazon && !missingDeezer) return;
+  const isrc = isrcFromSongLinkPayload(songLinkPayload);
+  if (!isrc) return;
+  const response = await fetchWithTimeout(
+    `https://songstats.com/${encodeURIComponent(isrc)}?ref=ISRCFinder`,
+    SPOTIFY_REQUEST_TIMEOUT_MS,
+    {
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "user-agent": SONG_LINK_PAGE_USER_AGENT,
+      },
+    },
+  ).catch(() => null);
+  if (!response?.ok) return;
+  const html = await response.text().catch(() => "");
+  if (!html) return;
+  const links = parseSongstatsSameAsLinks(html);
+  if (links.tidal) injectSongLinkPlatform(songLinkPayload, "tidal", links.tidal);
+  if (links.amazonMusic) injectSongLinkPlatform(songLinkPayload, "amazonMusic", links.amazonMusic);
+  if (links.deezer) injectSongLinkPlatform(songLinkPayload, "deezer", links.deezer);
+}
+
 const SPOTIFY_FALLBACK_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -267,16 +571,26 @@ function buildFallbackSongLinkPayload(
   title: string,
   artist: string,
   thumbnailUrl = "",
+  isrc = "",
 ): Record<string, unknown> {
   const spotifyKey = `SPOTIFY_SONG::${trackId}`;
-  const deezerKey = `DEEZER_SONG::${deezerId}`;
-  const entity = { title, artistName: artist, thumbnailUrl };
+  const entity = {
+    title,
+    artistName: artist,
+    thumbnailUrl,
+    ...(isrc ? { isrc: isrc.toUpperCase() } : {}),
+  };
+  const linksByPlatform: Record<string, { url: string; entityUniqueId: string }> = {};
+  const entitiesByUniqueId: Record<string, unknown> = { [spotifyKey]: entity };
+  if (deezerId) {
+    const deezerKey = `DEEZER_SONG::${deezerId}`;
+    entitiesByUniqueId[deezerKey] = entity;
+    linksByPlatform.deezer = { url: `https://www.deezer.com/track/${deezerId}`, entityUniqueId: deezerKey };
+  }
   return {
     entityUniqueId: spotifyKey,
-    entitiesByUniqueId: { [spotifyKey]: entity, [deezerKey]: entity },
-    linksByPlatform: {
-      deezer: { url: `https://www.deezer.com/track/${deezerId}`, entityUniqueId: deezerKey },
-    },
+    entitiesByUniqueId,
+    linksByPlatform,
   };
 }
 
@@ -300,20 +614,40 @@ async function resolveViaSpotify(trackId: string, spotifyCookie: string): Promis
   if (!meta || !meta.title) return null;
   let deezerId = meta.isrc ? await deezerIdByIsrc(meta.isrc).catch(() => "") : "";
   if (!deezerId) deezerId = await searchDeezerTrackId(meta.title, meta.artist).catch(() => "");
-  if (!deezerId) return null;
-  return buildFallbackSongLinkPayload(trackId, deezerId, meta.title, meta.artist, meta.imageUrl);
+  return buildFallbackSongLinkPayload(trackId, deezerId, meta.title, meta.artist, meta.imageUrl, meta.isrc);
 }
 
-// Resolve a Spotify track to a song.link-shaped payload. Primary source is
-// Spotify itself (authenticated via sp_dc) for canonical metadata + exact ISRC;
-// then Odesli (retries 429); then an auth-free Spotify-embed -> Deezer lookup.
+// Resolve a Spotify track to a song.link-shaped payload. SpotiFLAC 7.2.2
+// scrapes song.link HTML (the public Odesli API now returns 401
+// PUBLIC_API_ACCESS_DEPRECATED) and falls back to Songstats. We do the same,
+// then merge Spotify/Deezer metadata so Tidal/Amazon IDs survive even when
+// the authenticated Spotify path would previously return Deezer-only.
 export async function resolveTrackPayload(
   trackId: string,
   region: string,
   spotifyCookie = "",
 ): Promise<Record<string, unknown>> {
-  const viaSpotify = await resolveViaSpotify(trackId, spotifyCookie).catch(() => null);
-  if (viaSpotify) return viaSpotify;
+  const [scraped, viaSpotify] = await Promise.all([
+    scrapeSongLinkPayload(trackId, region).catch(() => null),
+    resolveViaSpotify(trackId, spotifyCookie).catch(() => null),
+  ]);
+  let merged = mergeSongLinkPayloads(scraped, viaSpotify);
+  if (!getPlatformLink(merged, "deezer")) {
+    const isrc = isrcFromSongLinkPayload(merged);
+    const deezerId = isrc
+      ? await deezerIdByIsrc(isrc).catch(() => "")
+      : await searchDeezerTrackId(
+          parseSongLinkMetadata(merged, trackId).title,
+          parseSongLinkMetadata(merged, trackId).artist,
+        ).catch(() => "");
+    if (deezerId) {
+      injectSongLinkPlatform(merged, "deezer", `https://www.deezer.com/track/${deezerId}`);
+    }
+  }
+  if (songLinkPayloadHasProviderLink(merged) || parseSongLinkMetadata(merged, trackId).title) {
+    await enrichSongstatsLinks(merged).catch(() => undefined);
+    return merged;
+  }
 
   const odesli = await fetchSongLinkPayload(trackId, region).catch(() => null);
   if (odesli && toObject(odesli.entitiesByUniqueId)) return odesli;
@@ -321,7 +655,9 @@ export async function resolveTrackPayload(
   const meta = await fetchSpotifyEmbedMetadata(trackId);
   const deezerId = await searchDeezerTrackId(meta.title, meta.artist);
   if (!deezerId) throw new ApiError("Could not resolve this track on any provider", 502);
-  return buildFallbackSongLinkPayload(trackId, deezerId, meta.title, meta.artist);
+  merged = buildFallbackSongLinkPayload(trackId, deezerId, meta.title, meta.artist);
+  await enrichSongstatsLinks(merged).catch(() => undefined);
+  return merged;
 }
 
 // Best-effort: when a resolved payload has an ISRC (via its Deezer link) but no
@@ -729,6 +1065,8 @@ export async function fetchLyricsText(trackId: string, title: string, artist: st
 }
 
 async function resolveDeezerIsrc(songLinkPayload: Record<string, unknown>): Promise<string> {
+  const fromEntity = isrcFromSongLinkPayload(songLinkPayload);
+  if (fromEntity) return fromEntity;
   const deezerId = parseDeezerTrackId(songLinkPayload);
   if (!deezerId) return "";
   const deezerPayload = await fetchJsonObject(`https://api.deezer.com/track/${deezerId}`).catch(() => null);
@@ -778,38 +1116,9 @@ const DEFAULT_SPOTIFLAC_PROVIDER_ORDER: DownloadProviderService[] = [
 ];
 
 const DEFAULT_SPOTIFLAC_CONFIGURED_PROVIDER_URLS: Partial<Record<DownloadProviderService, string[]>> = {
-  tidal: [
-    "https://tdl-a.spotbye.qzz.io/api/dl",
-    "https://tdl-b.spotbye.qzz.io/api/dl",
-    "https://tdl-c.spotbye.qzz.io/api/dl",
-    "https://tdl-d.spotbye.qzz.io/api/dl",
-    "https://tdl-e.spotbye.qzz.io/api/dl",
-  ],
-  qobuz: [
-    "https://qbz-a.spotbye.qzz.io/api/dl",
-    "https://qbz-b.spotbye.qzz.io/api/dl",
-    "https://qbz-c.spotbye.qzz.io/api/dl",
-    "https://qbz-d.spotbye.qzz.io/api/dl",
-    "https://qbz-e.spotbye.qzz.io/api/dl",
-  ],
-  amazon: [
-    "https://amz-a.spotbye.qzz.io/api/dl",
-    "https://amz-b.spotbye.qzz.io/api/dl",
-    "https://amz-c.spotbye.qzz.io/api/dl",
-    "https://amz-d.spotbye.qzz.io/api/dl",
-    "https://amz-e.spotbye.qzz.io/api/dl",
-  ],
-  amazon_x: ["https://amz-x.spotbye.qzz.io/api/dl"],
-  qobuz_x: ["https://qbz-x.spotbye.qzz.io/api/dl"],
-  deezer: [
-    "https://dzr-a.spotbye.qzz.io/api/dl",
-    "https://dzr-b.spotbye.qzz.io/api/dl",
-    "https://dzr-c.spotbye.qzz.io/api/dl",
-    "https://dzr-d.spotbye.qzz.io/api/dl",
-    "https://dzr-e.spotbye.qzz.io/api/dl",
-  ],
-  deezer_x: ["https://dzr-x.spotbye.qzz.io/api/dl"],
-  apple: ["https://am.spotbye.qzz.io/api/dl"],
+  tidal: ["https://tdl-oss.spotbye.qzz.io/api/dl"],
+  qobuz: ["https://qbz-oss.spotbye.qzz.io/api/dl"],
+  amazon: ["https://amz-oss.spotbye.qzz.io/api/dl"],
 };
 const DEFAULT_SPOTIFLAC_STATUS_URL = "https://spotbye.qzz.io/api/status";
 const SPOTIFLAC_STATUS_CACHE_MS = 30_000;
@@ -845,6 +1154,7 @@ function providerEnvStem(service: DownloadProviderService): string {
 
 function isSpotiFlacApiDlHost(hostname: string): boolean {
   return /^(?:tdl|qbz|amz|dzr)-[a-zx]\.spotbye\.qzz\.io$/i.test(hostname) ||
+    /^(?:tdl|qbz|amz)-oss\.spotbye\.qzz\.io$/i.test(hostname) ||
     hostname === "am.spotbye.qzz.io";
 }
 
@@ -852,6 +1162,10 @@ export function spotiflacStatusKeyForEndpoint(endpointUrl: string): string {
   try {
     const url = new URL(endpointUrl);
     if (url.hostname === "am.spotbye.qzz.io") return "apple";
+    const oss = url.hostname.match(/^(tdl|qbz|amz)-oss\.spotbye\.qzz\.io$/i);
+    if (oss) {
+      return { tdl: "tidal", qbz: "qobuz", amz: "amazon" }[oss[1]?.toLowerCase() || ""] ?? "";
+    }
     const match = url.hostname.match(/^(tdl|qbz|amz|dzr)-([a-ex])\.spotbye\.qzz\.io$/i);
     if (!match) return "";
     const provider = {
@@ -889,14 +1203,7 @@ async function spotiflacStatus(env: CloudflareEnv): Promise<Record<string, strin
       });
       if (!response.ok) return null;
       const payload = toObject(await response.json().catch(() => null));
-      const rawStatus = toObject(payload?.status);
-      if (!rawStatus) return null;
-      const out: Record<string, string> = {};
-      for (const [key, value] of Object.entries(rawStatus)) {
-        const normalized = toStringValue(value).toLowerCase();
-        if (key && normalized) out[key] = normalized;
-      }
-      return out;
+      return parseSpotiflacStatusPayload(payload);
     } catch {
       return null;
     }
@@ -1195,9 +1502,9 @@ function spotiflacApiDlProviderKind(endpoint: string): SpotiFlacApiDlProviderKin
   try {
     const url = new URL(endpoint);
     if (url.pathname !== "/api/dl") return "";
-    if (/^tdl-[a-z]\.spotbye\.qzz\.io$/i.test(url.hostname)) return "tidal";
-    if (/^qbz-[a-zx]\.spotbye\.qzz\.io$/i.test(url.hostname)) return "qobuz";
-    if (/^amz-[a-zx]\.spotbye\.qzz\.io$/i.test(url.hostname)) return "amazon";
+    if (/^tdl-(?:[a-z]|oss)\.spotbye\.qzz\.io$/i.test(url.hostname)) return "tidal";
+    if (/^qbz-(?:[a-zx]|oss)\.spotbye\.qzz\.io$/i.test(url.hostname)) return "qobuz";
+    if (/^amz-(?:[a-zx]|oss)\.spotbye\.qzz\.io$/i.test(url.hostname)) return "amazon";
     if (/^dzr-[a-zx]\.spotbye\.qzz\.io$/i.test(url.hostname)) return "deezer";
     if (url.hostname === "am.spotbye.qzz.io") return "apple";
   } catch {}
@@ -1443,6 +1750,55 @@ async function spotiflacApiDlProviderBodies(options: {
   return uniqueProviderBodies(bodies);
 }
 
+async function resolveLicensedSourceOnMacMini(
+  env: CloudflareEnv,
+  options: Parameters<typeof resolveLicensedSourceProviderStreamUrl>[0],
+): Promise<LicensedSourceStream> {
+  const response = await fetchMacMini({
+    env,
+    target: "/api/licensed-source/resolve",
+    method: "POST",
+    user: null,
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({
+      endpointUrl: options.endpointUrl,
+      body: options.body ?? null,
+      userAgent: options.userAgent ?? "",
+    }),
+  });
+  const payload = toObject(await response.json().catch(() => null));
+  if (!response.ok) {
+    throw new ApiError(
+      toStringValue(payload?.error) || `Mac mini community resolve returned ${response.status}`,
+      502,
+    );
+  }
+  const streamUrl = toStringValue(payload?.streamUrl);
+  if (!streamUrl && toStringValue(payload?.kind) !== "dash") {
+    throw new ApiError("Mac mini community resolve returned no stream URL", 502);
+  }
+  return payload as LicensedSourceStream;
+}
+
+async function resolveLicensedSourceWithCommunityFallback(
+  env: CloudflareEnv,
+  options: Parameters<typeof resolveLicensedSourceProviderStreamUrl>[0],
+): Promise<LicensedSourceStream> {
+  const communityHost = isSpotiflacCommunityHost(options.endpointUrl);
+  const canAskMini = communityHost && canUseMacMiniProxy(env);
+  // Cloudflare cannot read ~/.spotiflac; skip the unsigned 428 and sign on the Mac.
+  if (canAskMini && !options.communitySession) {
+    return resolveLicensedSourceOnMacMini(env, options);
+  }
+  try {
+    return await resolveLicensedSourceProviderStreamUrl(options);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!canAskMini || !/428|401|verification session/i.test(message)) throw error;
+    return resolveLicensedSourceOnMacMini(env, options);
+  }
+}
+
 async function resolveConfiguredLicensedProviderDownload(
   env: CloudflareEnv,
   service: DownloadProviderService,
@@ -1500,10 +1856,13 @@ async function resolveConfiguredLicensedProviderDownload(
       providerBodies.push(undefined);
     }
 
+    const communitySession = communitySessionFromEnv(env);
     for (const providerBody of providerBodies) {
       try {
-        const userAgent = configuredProviderUserAgent(env, service, endpointUrl);
-        const stream = await resolveLicensedSourceProviderStreamUrl({
+        const userAgent =
+          configuredProviderUserAgent(env, service, endpointUrl) ||
+          (isSpotiflacCommunityHost(endpointUrl) ? communityUserAgent(communitySession) : "");
+        const stream = await resolveLicensedSourceWithCommunityFallback(env, {
           endpointUrl,
           apiKey: configuredProviderApiKey(env, service),
           userAgent,
@@ -1518,6 +1877,7 @@ async function resolveConfiguredLicensedProviderDownload(
           outputFormat: toStringValue(payload.outputFormat) || SERVER_IMPORT_OUTPUT_FORMAT,
           body: providerBody,
           timeoutMs: configuredProviderResolveTimeoutMs(env, service),
+          communitySession,
         });
         candidates.push({
           service,
@@ -1614,13 +1974,14 @@ async function resolveProviderDownload(
       }
     }
   } else if (provider === "qobuz") {
+    await addConfigured("qobuz");
     for (const quality of qualities.qobuz) {
       try {
         const resolved = flattenResolvedAudioDownload(await resolveQobuzDownload(env, songLinkPayload, quality, payload));
         if (resolved.length > 0) {
           candidates.push(...resolved);
-          // One lossless Qobuz quality is enough — stop so we don't hit the
-          // rate-limited qbz-foss community endpoint again for the lower qualities.
+          // One lossless Qobuz quality is enough — stop so we don't keep
+          // probing the rest of the Qobuz fallback chain.
           break;
         }
       } catch (error) {
@@ -1662,8 +2023,7 @@ async function resolveSpotiFlacDownloadStack(
         await resolveProviderDownload(env, provider, trackId, songLinkPayload, payload, qualities),
       ));
       // First provider that yields a candidate wins — stop probing the rest
-      // (the dead encrypted spotbye hosts) to cut request pressure / rate-limit
-      // load. With Qobuz ordered first, this resolves in one qbz-foss hit.
+      // to cut request pressure / rate-limit load.
       if (candidates.length > 0) break;
     } catch (error) {
       errors.push(error instanceof Error ? `${provider}: ${error.message}` : `${provider} failed`);

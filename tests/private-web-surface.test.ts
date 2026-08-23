@@ -7,7 +7,7 @@ import {
   safePrivatePageNext,
 } from "../src/lib/private-web-surface";
 import { withNoIndexHeader } from "../src/server/local-http";
-import worker from "../src/worker/index";
+import worker, { isAuthOpenApiPath } from "../src/worker/index";
 
 class FakePreparedStatement {
   constructor(
@@ -83,6 +83,16 @@ describe("private web path policy", () => {
     expect(safePrivatePageNext("https://example.test/steal")).toBe("/");
     expect(safePrivatePageNext("/signin")).toBe("/");
     expect(safePrivatePageNext("/register")).toBe("/");
+  });
+
+  test("opens only the constrained native profile-avatar object shape", () => {
+    expect(isAuthOpenApiPath("/api/files/users/user-123/profile/avatar.jpg")).toBe(true);
+    expect(isAuthOpenApiPath("/api/files/users/user-123/profile/avatar.webp")).toBe(true);
+
+    expect(isAuthOpenApiPath("/api/files/users/user-123/audio/song.mp3")).toBe(false);
+    expect(isAuthOpenApiPath("/api/files/users/user-123/profile/avatar.html")).toBe(false);
+    expect(isAuthOpenApiPath("/api/files/users/user-123/profile/nested/avatar.jpg")).toBe(false);
+    expect(isAuthOpenApiPath("/api/files/users/user-123%2Fother/profile/avatar.jpg")).toBe(false);
   });
 });
 

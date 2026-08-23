@@ -18,6 +18,18 @@ const androidManifest = await Bun.file(
     import.meta.url,
   ),
 ).text();
+const androidModule = await Bun.file(
+  new URL(
+    "../modules/background-downloads/android/src/main/java/expo/modules/backgrounddownloads/BackgroundDownloadsModule.kt",
+    import.meta.url,
+  ),
+).text();
+const androidRecords = await Bun.file(
+  new URL(
+    "../modules/background-downloads/android/src/main/java/expo/modules/backgrounddownloads/BackgroundDownloadRecords.kt",
+    import.meta.url,
+  ),
+).text();
 const bridge = await Bun.file(
   new URL("../modules/background-downloads/index.ts", import.meta.url),
 ).text();
@@ -105,5 +117,21 @@ describe("android WorkManager background downloads", () => {
     );
     expect(bridge).toContain("requireOptionalNativeModule<NativeBackgroundDownloadsModule>");
     expect(bridge).toContain('"BackgroundDownloads"');
+  });
+
+  test("uses lists for JavaScript record arrays on the Expo bridge", () => {
+    expect(androidModule).toContain(
+      'AsyncFunction("enqueue") { records: List<BackgroundDownloadRequestRecord> ->',
+    );
+    expect(androidModule).toContain(
+      'AsyncFunction("cancel") { records: List<BackgroundDownloadReferenceRecord> ->',
+    );
+    expect(androidModule).toContain(
+      'AsyncFunction("acknowledge") { records: List<BackgroundDownloadAcknowledgementRecord> ->',
+    );
+    expect(androidModule).not.toContain("Array<BackgroundDownload");
+    expect(androidRecords).toContain(
+      "@Field var scopes: List<String> = emptyList()",
+    );
   });
 });
