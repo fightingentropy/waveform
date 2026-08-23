@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>xyz.streamarena.spotify-spotiflac-session</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__MAINTENANCE_SCRIPT__</string>
+    <string>__BUN_BIN__</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__WORKING_DIRECTORY__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>WatchPaths</key>
+  <array>
+    <string>__SESSION_FILE__</string>
+  </array>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__STANDARD_OUT__</string>
+  <key>StandardErrorPath</key>
+  <string>__STANDARD_ERROR__</string>
+</dict>
+</plist>

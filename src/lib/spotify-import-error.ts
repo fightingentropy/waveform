@@ -1,5 +1,5 @@
 export const SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE =
-  "The lossless provider needs verification again. Open SpotiFLAC on your Mac, complete its verification, sync the refreshed session to the Mac mini, and retry.";
+  "The lossless provider needs verification again. The background session service will renew and sync it; if a SpotiFLAC verification page opens, complete it, then retry.";
 
 const SPOTIFLAC_SESSION_PATTERNS = [
   /SpotiFLAC community session is not available/i,

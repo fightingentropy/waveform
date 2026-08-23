@@ -6,6 +6,7 @@ import {
   isSpotiflacCommunityHost,
   parseSpotiflacCommunitySession,
   signSpotiflacCommunityHeaders,
+  spotiflacCommunitySessionNeedsRefresh,
 } from "../src/lib/spotiflac-community";
 
 const session = {
@@ -45,6 +46,29 @@ describe("SpotiFLAC community session", () => {
         expires_at: "2020-01-01T00:00:00.000Z",
       }),
     ).toBeNull();
+  });
+
+  test("refreshes a missing, expired, or nearly expired session", () => {
+    const nowMs = Date.parse("2026-08-23T18:00:00.000Z");
+    expect(spotiflacCommunitySessionNeedsRefresh(null, { nowMs })).toBe(true);
+    expect(
+      spotiflacCommunitySessionNeedsRefresh(
+        { session_id: "abc", session_secret: "xyz", expires_at: "2026-08-23T17:59:59.000Z" },
+        { nowMs },
+      ),
+    ).toBe(true);
+    expect(
+      spotiflacCommunitySessionNeedsRefresh(
+        { session_id: "abc", session_secret: "xyz", expires_at: "2026-08-23T18:09:00.000Z" },
+        { nowMs },
+      ),
+    ).toBe(true);
+    expect(
+      spotiflacCommunitySessionNeedsRefresh(
+        { session_id: "abc", session_secret: "xyz", expires_at: "2026-08-23T18:11:00.000Z" },
+        { nowMs },
+      ),
+    ).toBe(false);
   });
 
   test("matches SpotiFLAC 7.2.2 hostnames and user-agent", () => {

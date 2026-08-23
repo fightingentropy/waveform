@@ -26,6 +26,8 @@ export type SpotiflacCommunitySessionInput = {
   expiresAt?: unknown;
 };
 
+export const SPOTIFLAC_SESSION_REFRESH_AHEAD_MS = 10 * 60 * 1000;
+
 function textEncoder(): TextEncoder {
   return new TextEncoder();
 }
@@ -121,6 +123,31 @@ export function parseSpotiflacCommunitySession(
     platform: readString(parsed.platform) || DEFAULT_PLATFORM,
     ...(expiresAt ? { expiresAt } : {}),
   };
+}
+
+export function spotiflacCommunitySessionNeedsRefresh(
+  value: SpotiflacCommunitySessionInput | string | null | undefined,
+  options: { nowMs?: number; refreshAheadMs?: number } = {},
+): boolean {
+  const parsed =
+    typeof value === "string"
+      ? (() => {
+          try {
+            return JSON.parse(value) as SpotiflacCommunitySessionInput;
+          } catch {
+            return null;
+          }
+        })()
+      : value;
+  if (!parsed || typeof parsed !== "object") return true;
+  const sessionId = readString(parsed.session_id) || readString(parsed.sessionId);
+  const sessionSecret = readString(parsed.session_secret) || readString(parsed.sessionSecret);
+  const expiresAt = readString(parsed.expires_at) || readString(parsed.expiresAt);
+  const expiresMs = Date.parse(expiresAt);
+  if (!sessionId || !sessionSecret || !Number.isFinite(expiresMs)) return true;
+  const nowMs = options.nowMs ?? Date.now();
+  const refreshAheadMs = Math.max(0, options.refreshAheadMs ?? SPOTIFLAC_SESSION_REFRESH_AHEAD_MS);
+  return expiresMs <= nowMs + refreshAheadMs;
 }
 
 function envValue(env: object, key: string): unknown {
