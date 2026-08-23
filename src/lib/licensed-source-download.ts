@@ -393,7 +393,14 @@ export async function resolveLicensedSourceStreamUrl(options: {
   const audio = readNestedObject(payload, "audio") ?? {};
   const stream = readNestedObject(payload, "stream") ?? {};
   const data = readNestedObject(payload, "data") ?? {};
-  const message = firstString(payload.error, payload.message, data.error, data.message);
+  const message = firstString(
+    payload.error,
+    payload.message,
+    payload.detail,
+    data.error,
+    data.message,
+    data.detail,
+  );
 
   if (!responseOk) {
     throw new LicensedSourceDownloadError(
