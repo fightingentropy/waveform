@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import {
   SPOTIFLAC_SESSION_REFRESH_AHEAD_MS,
   spotiflacCommunitySessionNeedsRefresh,
-} from "../src/lib/spotiflac-community";
+} from "../lib/spotiflac-community";
 
 const DEFAULT_VERIFY_URL = "https://verify.spotbye.qzz.io";
 const VERIFICATION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -203,7 +203,10 @@ export async function refreshDesktopSpotiflacSession(options: { force?: boolean 
 }> {
   const path = desktopSpotiflacSessionPath();
   const record = await readDesktopSpotiflacSession(path);
-  if (!record.install_id) record.install_id = randomHex(16);
+  if (!record.install_id) {
+    record.install_id = randomHex(16);
+    await writePrivateFile(path, `${JSON.stringify(record, null, 2)}\n`);
+  }
   if (
     !options.force &&
     !spotiflacCommunitySessionNeedsRefresh(record, { refreshAheadMs: SPOTIFLAC_SESSION_REFRESH_AHEAD_MS })
@@ -216,18 +219,4 @@ export async function refreshDesktopSpotiflacSession(options: { force?: boolean 
   const refreshed = await exchangeGrant(record, appVersion, grant);
   await writePrivateFile(path, `${JSON.stringify(refreshed, null, 2)}\n`);
   return { expiresAt: text(refreshed.expires_at), refreshed: true };
-}
-
-if (import.meta.main) {
-  try {
-    const result = await refreshDesktopSpotiflacSession({ force: process.argv.includes("--force") });
-    console.log(
-      result.refreshed
-        ? `SpotiFLAC verification succeeded; session expires at ${result.expiresAt}`
-        : `SpotiFLAC session is already valid until ${result.expiresAt}`,
-    );
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : "SpotiFLAC verification failed");
-    process.exitCode = 1;
-  }
 }

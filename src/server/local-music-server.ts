@@ -19,9 +19,17 @@ import {
   resolveLicensedSourceStreamUrl,
   type LicensedSourceStream,
 } from "../lib/licensed-source-download";
-import { communityUserAgent, isSpotiflacCommunityHost } from "../lib/spotiflac-community";
+import {
+  communityUserAgent,
+  isSpotiflacCommunityHost,
+  type SpotiflacCommunitySession,
+} from "../lib/spotiflac-community";
 import { SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE } from "../lib/spotify-import-error";
-import { loadDesktopSpotiflacCommunitySession } from "./spotiflac-community-session";
+import {
+  ensureDesktopSpotiflacCommunitySession,
+  forceRefreshDesktopSpotiflacCommunitySession,
+  spotiflacProviderRejectedSession,
+} from "./spotiflac-community-session";
 import { maybeDecryptDeezerBuffer, resolveDeezerDecryptionId } from "../lib/deezer-decrypt";
 import {
   isApiPath,
@@ -1189,8 +1197,11 @@ async function handleLicensedSourceResolve(request: Request): Promise<Response> 
   if (!endpointUrl || !isSpotiflacCommunityHost(endpointUrl)) {
     return json({ error: "Unsupported community endpoint" }, { status: 400 });
   }
-  const session = loadDesktopSpotiflacCommunitySession();
-  if (!session) {
+  let session: SpotiflacCommunitySession;
+  try {
+    session = await ensureDesktopSpotiflacCommunitySession();
+  } catch (error) {
+    console.error(`SpotiFLAC request-time session refresh failed: ${error instanceof Error ? error.message : "unknown error"}`);
     return json({ error: SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE }, { status: 503 });
   }
   const body =
@@ -1201,18 +1212,39 @@ async function handleLicensedSourceResolve(request: Request): Promise<Response> 
     typeof payload?.userAgent === "string" && payload.userAgent.trim()
       ? payload.userAgent.trim()
       : communityUserAgent(session);
+  const resolveWithSession = (communitySession: SpotiflacCommunitySession) =>
+    resolveLicensedSourceStreamUrl({
+      endpointUrl,
+      body,
+      userAgent,
+      communitySession,
+      spotifyId: typeof body.spotifyId === "string" ? body.spotifyId : "",
+      spotifyUrl: typeof body.spotifyUrl === "string" ? body.spotifyUrl : "",
+    });
   try {
-    return json(
-      await resolveLicensedSourceStreamUrl({
-        endpointUrl,
-        body,
-        userAgent,
-        communitySession: session,
-        spotifyId: typeof body.spotifyId === "string" ? body.spotifyId : "",
-        spotifyUrl: typeof body.spotifyUrl === "string" ? body.spotifyUrl : "",
-      }),
-    );
+    return json(await resolveWithSession(session));
   } catch (error) {
+    if (spotiflacProviderRejectedSession(error)) {
+      try {
+        session = await forceRefreshDesktopSpotiflacCommunitySession();
+      } catch (refreshError) {
+        console.error(
+          `SpotiFLAC rejected the session and request-time renewal failed: ${refreshError instanceof Error ? refreshError.message : "unknown error"}`,
+        );
+        return json({ error: SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE }, { status: 503 });
+      }
+      try {
+        return json(await resolveWithSession(session));
+      } catch (retryError) {
+        if (spotiflacProviderRejectedSession(retryError)) {
+          return json({ error: SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE }, { status: 503 });
+        }
+        if (retryError instanceof LicensedSourceDownloadError) {
+          return json({ error: retryError.message }, { status: retryError.status });
+        }
+        throw retryError;
+      }
+    }
     if (error instanceof LicensedSourceDownloadError) {
       return json({ error: error.message }, { status: error.status });
     }

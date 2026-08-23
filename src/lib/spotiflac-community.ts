@@ -26,7 +26,9 @@ export type SpotiflacCommunitySessionInput = {
   expiresAt?: unknown;
 };
 
-export const SPOTIFLAC_SESSION_REFRESH_AHEAD_MS = 10 * 60 * 1000;
+// Match SpotiFLAC's own communitySessionSkew: renew only when a download is
+// attempted with five minutes or less remaining.
+export const SPOTIFLAC_SESSION_REFRESH_AHEAD_MS = 5 * 60 * 1000;
 
 function textEncoder(): TextEncoder {
   return new TextEncoder();

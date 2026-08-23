@@ -134,14 +134,13 @@ bun run mini:install-server
 bun run mini:install-caddy
 bun run mini:install-dns-watch
 bun run mini:sync-music
-bun run spotiflac:install-session-agent
 ```
 
-The SpotiFLAC session agent runs every five minutes and watches the desktop
-session file. It renews sessions shortly before expiry through SpotiFLAC's
-official browser verification flow, then syncs changes to the Mac mini. Normal
-renewals need no terminal command; if the provider presents a CAPTCHA, the user
-must complete that browser challenge.
+The Mac mini checks its SpotiFLAC session only when a lossless download is
+requested. A session with five minutes or less remaining is renewed through
+SpotiFLAC's official browser verification flow before the provider request is
+retried. There is no scheduled watcher; if the provider presents a CAPTCHA,
+the user must complete that browser challenge on the Mac mini.
 
 A private host environment file should be owner-readable only and may contain:
 

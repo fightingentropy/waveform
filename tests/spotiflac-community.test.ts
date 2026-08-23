@@ -59,13 +59,13 @@ describe("SpotiFLAC community session", () => {
     ).toBe(true);
     expect(
       spotiflacCommunitySessionNeedsRefresh(
-        { session_id: "abc", session_secret: "xyz", expires_at: "2026-08-23T18:09:00.000Z" },
+        { session_id: "abc", session_secret: "xyz", expires_at: "2026-08-23T18:04:00.000Z" },
         { nowMs },
       ),
     ).toBe(true);
     expect(
       spotiflacCommunitySessionNeedsRefresh(
-        { session_id: "abc", session_secret: "xyz", expires_at: "2026-08-23T18:11:00.000Z" },
+        { session_id: "abc", session_secret: "xyz", expires_at: "2026-08-23T18:06:00.000Z" },
         { nowMs },
       ),
     ).toBe(false);
