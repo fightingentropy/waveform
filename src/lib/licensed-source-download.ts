@@ -403,10 +403,16 @@ export async function resolveLicensedSourceStreamUrl(options: {
   );
 
   if (!responseOk) {
-    throw new LicensedSourceDownloadError(
-      message || `Licensed source provider returned ${responseStatus}`,
-      responseStatus,
-    );
+    const detail = message || `Licensed source provider returned ${responseStatus}`;
+    if (isSpotiflacCommunityHost(endpoint.toString())) {
+      console.warn("spotiflac community resolve failed", {
+        status: responseStatus,
+        host: endpoint.hostname,
+        path: endpoint.pathname,
+        detail: detail.slice(0, 160),
+      });
+    }
+    throw new LicensedSourceDownloadError(detail, responseStatus);
   }
 
   // spotbye returns Tidal/Qobuz lossless streams as an inline DASH manifest

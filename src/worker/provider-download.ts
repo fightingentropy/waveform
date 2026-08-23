@@ -1785,6 +1785,19 @@ async function resolveLicensedSourceOnMacMini(
   return payload as LicensedSourceStream;
 }
 
+export function shouldFallbackLicensedSourceToMacMini(error: unknown): boolean {
+  const status = error instanceof LicensedSourceDownloadError ? error.status : 0;
+  if (status === 401 || status === 403 || status === 428) return true;
+  const message = error instanceof Error ? error.message : "";
+  return /428|401|verification session|signed request validation/i.test(message);
+}
+
+export function isSpotiflacCommunityCooldownError(error: unknown): boolean {
+  const status = error instanceof LicensedSourceDownloadError ? error.status : 0;
+  const message = error instanceof Error ? error.message : "";
+  return status === 429 || status === 503 || /overloaded|short break|try again in about/i.test(message);
+}
+
 async function resolveLicensedSourceWithCommunityFallback(
   env: CloudflareEnv,
   options: Parameters<typeof resolveLicensedSourceProviderStreamUrl>[0],
@@ -1798,8 +1811,8 @@ async function resolveLicensedSourceWithCommunityFallback(
   try {
     return await resolveLicensedSourceProviderStreamUrl(options);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (!canAskMini || !/428|401|verification session/i.test(message)) throw error;
+    if (isSpotiflacCommunityCooldownError(error)) throw error;
+    if (!canAskMini || !shouldFallbackLicensedSourceToMacMini(error)) throw error;
     return resolveLicensedSourceOnMacMini(env, options);
   }
 }
@@ -1894,7 +1907,11 @@ async function resolveConfiguredLicensedProviderDownload(
           minimumQuality: "lossless",
         });
       } catch (error) {
-        errors.push(error instanceof Error ? error.message : `${service} provider failed`);
+        const message = error instanceof Error ? error.message : `${service} provider failed`;
+        errors.push(message);
+        if (isSpotiflacCommunityHost(endpointUrl) && isSpotiflacCommunityCooldownError(error)) {
+          throw new ApiError(message, error instanceof LicensedSourceDownloadError ? error.status : 503);
+        }
       }
     }
   }
@@ -1959,6 +1976,7 @@ async function resolveProviderDownload(
         await resolveConfiguredLicensedProviderDownload(env, service, trackId, songLinkPayload, payload),
       ));
     } catch (error) {
+      if (isSpotiflacCommunityCooldownError(error)) throw error;
       errors.push(error instanceof Error ? error.message : `${service} failed`);
     }
   };
@@ -1975,6 +1993,7 @@ async function resolveProviderDownload(
           minimumQuality: tidalQualityIsLossless(quality),
         });
       } catch (error) {
+        if (isSpotiflacCommunityCooldownError(error)) throw error;
         errors.push(error instanceof Error ? error.message : `tidal quality ${quality} failed`);
       }
     }
@@ -1990,6 +2009,7 @@ async function resolveProviderDownload(
           break;
         }
       } catch (error) {
+        if (isSpotiflacCommunityCooldownError(error)) throw error;
         errors.push(error instanceof Error ? error.message : `qobuz quality ${quality} failed`);
       }
     }
@@ -2031,6 +2051,7 @@ async function resolveSpotiFlacDownloadStack(
       // to cut request pressure / rate-limit load.
       if (candidates.length > 0) break;
     } catch (error) {
+      if (isSpotiflacCommunityCooldownError(error)) throw error;
       errors.push(error instanceof Error ? `${provider}: ${error.message}` : `${provider} failed`);
     }
   }

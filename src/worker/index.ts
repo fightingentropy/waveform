@@ -155,7 +155,13 @@ import {
 export { mergeRefreshedPlayEventMediaUrls, playEventSongHasDeviceLocalUrl } from "./play-events";
 export { withSecurityHeaders } from "./security-headers";
 export { parseYouTubePlaylistSearchPayload } from "./youtube-catalog";
-export { parseSpotiflacStatusPayload, spotiflacEndpointIsDown, spotiflacStatusKeyForEndpoint } from "./provider-download";
+export {
+  isSpotiflacCommunityCooldownError,
+  parseSpotiflacStatusPayload,
+  shouldFallbackLicensedSourceToMacMini,
+  spotiflacEndpointIsDown,
+  spotiflacStatusKeyForEndpoint,
+} from "./provider-download";
 
 type PlaybackStateWritePayload = {
   state?: unknown;

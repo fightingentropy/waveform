@@ -31,7 +31,20 @@ function textEncoder(): TextEncoder {
 }
 
 function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  // Copy onto a fresh buffer. Workers/Node may hand us a view over a pooled
+  // ArrayBuffer; hashing the whole pool would invalidate the HMAC.
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
+function padUtc(value: number, width = 2): string {
+  return String(value).padStart(width, "0");
+}
+
+/** Go `time.RFC3339Nano` layout `2006-01-02T15:04:05.000Z` — UTC, exactly 3 ms digits. */
+export function formatSpotiflacCommunityTimestamp(date = new Date()): string {
+  return `${date.getUTCFullYear()}-${padUtc(date.getUTCMonth() + 1)}-${padUtc(date.getUTCDate())}T${padUtc(date.getUTCHours())}:${padUtc(date.getUTCMinutes())}:${padUtc(date.getUTCSeconds())}.${padUtc(date.getUTCMilliseconds(), 3)}Z`;
 }
 
 function toHex(bytes: Uint8Array): string {
@@ -143,7 +156,7 @@ export async function signSpotiflacCommunityHeaders(options: {
 }): Promise<Record<string, string>> {
   const method = options.method.toUpperCase();
   const query = options.query ?? "";
-  const timestamp = options.timestamp ?? new Date().toISOString();
+  const timestamp = options.timestamp ?? formatSpotiflacCommunityTimestamp();
   const nonce = options.nonce ?? randomHex(12);
   const bodyHash = await sha256Hex(options.body);
   const parsedTimestamp = Date.parse(timestamp);

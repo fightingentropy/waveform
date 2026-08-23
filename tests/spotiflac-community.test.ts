@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   communitySessionFromEnv,
   communityUserAgent,
+  formatSpotiflacCommunityTimestamp,
   isSpotiflacCommunityHost,
   parseSpotiflacCommunitySession,
   signSpotiflacCommunityHeaders,
@@ -52,6 +53,18 @@ describe("SpotiFLAC community session", () => {
     expect(isSpotiflacCommunityHost("https://amz-oss.spotbye.qzz.io/api/dl")).toBe(true);
     expect(isSpotiflacCommunityHost("https://tdl-a.spotbye.qzz.io/api/dl")).toBe(false);
     expect(communityUserAgent(session)).toBe("SpotiFLAC/7.2.2");
+  });
+
+  test("formats timestamps the way SpotiFLAC 7.2.2 does", () => {
+    expect(formatSpotiflacCommunityTimestamp(new Date("2026-08-23T10:00:00.000Z"))).toBe(
+      "2026-08-23T10:00:00.000Z",
+    );
+    expect(formatSpotiflacCommunityTimestamp(new Date("2026-08-23T10:00:00.007Z"))).toBe(
+      "2026-08-23T10:00:00.007Z",
+    );
+    expect(formatSpotiflacCommunityTimestamp(new Date("2026-08-23T10:00:00Z"))).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
   });
 
   test("signs a stable HMAC for a fixed timestamp and nonce", async () => {

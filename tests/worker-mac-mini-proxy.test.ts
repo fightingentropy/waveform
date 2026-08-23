@@ -4,10 +4,13 @@ import {
   shouldProxyMusicPathnameToMacMini,
 } from "../src/worker/mac-mini-proxy";
 import {
+  isSpotiflacCommunityCooldownError,
+  shouldFallbackLicensedSourceToMacMini,
   spotiflacEndpointIsDown,
   spotiflacStatusKeyForEndpoint,
   withSecurityHeaders,
 } from "../src/worker/index";
+import { LicensedSourceDownloadError } from "../src/lib/licensed-source-download";
 
 describe("Mac mini proxy user forwarding", () => {
   test("forwards user context for local library reads", () => {
@@ -96,6 +99,28 @@ describe("security headers on proxied responses", () => {
     const secured = withSecurityHeaders(res);
     expect(secured).toBe(res);
     expect(secured.headers.get("x-frame-options")).toBe("DENY");
+  });
+});
+
+describe("SpotiFLAC community fallback", () => {
+  test("falls back to the Mac mini when HMAC validation fails without a 401 in the message", () => {
+    expect(
+      shouldFallbackLicensedSourceToMacMini(
+        new LicensedSourceDownloadError("Signed request validation failed.", 401),
+      ),
+    ).toBe(true);
+    expect(shouldFallbackLicensedSourceToMacMini(new Error("Signed request validation failed."))).toBe(true);
+    expect(shouldFallbackLicensedSourceToMacMini(new LicensedSourceDownloadError("Verification session required.", 428))).toBe(true);
+    expect(shouldFallbackLicensedSourceToMacMini(new LicensedSourceDownloadError("legacy Qobuz provider returned 530", 530))).toBe(false);
+  });
+
+  test("surfaces community cooldown instead of walking dead fallbacks", () => {
+    expect(
+      isSpotiflacCommunityCooldownError(
+        new LicensedSourceDownloadError("The server is overloaded and taking a short break. Please try again in about 88 minute(s).", 503),
+      ),
+    ).toBe(true);
+    expect(isSpotiflacCommunityCooldownError(new LicensedSourceDownloadError("Signed request validation failed.", 401))).toBe(false);
   });
 });
 
