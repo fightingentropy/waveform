@@ -8,6 +8,7 @@
     "./local-owner": "./src/local-owner.ts",
     "./cursor-page": "./src/cursor-page.ts",
     "./account-scope": "./src/account-scope.ts",
+    "./api-cache-updates": "./src/api-cache-updates.ts",
     "./api-timeout-policy": "./src/api-timeout-policy.ts",
     "./catalog-search": "./src/catalog-search.ts",
     "./like-cache": "./src/like-cache.ts",

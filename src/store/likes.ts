@@ -131,6 +131,20 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       return { ok: true, status: 200 };
     }
 
+    // Capture before promotion (the first possible await) so a later auth
+    // transition can never redirect this mutation's cache patch to a new user.
+    const accountScope = getAccountScope();
+    let optimisticCachePatched = false;
+    const patchOptimisticCache = () => {
+      patchLikeApiCache(songId, nextLiked, song, accountScope);
+      optimisticCachePatched = true;
+    };
+    const rollbackOptimisticCache = () => {
+      if (optimisticCachePatched) {
+        patchLikeApiCache(songId, prevLiked, song, accountScope);
+      }
+    };
+
     // Optimistically reflect the like immediately so the heart responds on tap,
     // even while a staged Discover track is being promoted (a round-trip that can
     // take a moment). Reverted below if the promote or the save fails.
@@ -139,6 +153,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       pending: { ...state.pending, [songId]: true },
       hydrated: true,
     }));
+    if (!(nextLiked && song?.discoverTrackId)) patchOptimisticCache();
 
     // Keep a Discover track: promote it into the library first (you can't like a
     // song that isn't in the library yet). Promotion is idempotent and usually
@@ -153,6 +168,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
           pending: removeKey(state.pending, songId),
           hydrated: true,
         }));
+        rollbackOptimisticCache();
         return { ok: false, status: 502, error: "Couldn't save this track" };
       }
       if (promoted.id !== songId) {
@@ -165,11 +181,8 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       }
       song = promoted;
       songId = promoted.id;
+      patchOptimisticCache();
     }
-
-    // Capture the account scope before the await: reading it afterwards would
-    // patch the wrong account's caches if the user switched accounts in-flight.
-    const accountScope = getAccountScope();
 
     try {
       const response = await fetch("/api/likes", {
@@ -188,6 +201,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
           pending: removeKey(state.pending, songId),
           hydrated: true,
         }));
+        rollbackOptimisticCache();
 
         let message: string | undefined;
         try {
@@ -215,6 +229,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
         pending: removeKey(state.pending, songId),
         hydrated: true,
       }));
+      rollbackOptimisticCache();
 
       return {
         ok: false,

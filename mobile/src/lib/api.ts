@@ -4,6 +4,10 @@ import {
   getApiPath,
   withAccountScope,
 } from "@spotify/shared/account-scope";
+import {
+  publishApiCacheUpdate,
+  subscribeApiCacheUpdate,
+} from "@spotify/shared/api-cache-updates";
 import { updateLikedIdsInPayload, updateLikedSongsInPayload } from "@spotify/shared/like-cache";
 import { apiReadTimeoutMs, isProviderReadThroughRequest } from "@/lib/api-timeout-policy";
 import { markOffline } from "@/lib/connectivity";
@@ -138,6 +142,7 @@ function primeFromSnapshotSync<T>(url: string): T | undefined {
 function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
   const entry: ApiCacheEntry<T> = { data, etag: etag ?? null, fetchedAt: Date.now() };
   apiCache.set(url, entry);
+  publishApiCacheUpdate(url, data);
   if (isPersistableApiUrl(url)) {
     void writeOfflineApiSnapshot(url, data, entry.etag, entry.fetchedAt);
   }
@@ -234,6 +239,13 @@ export function patchLikeApiCache(
   accountScope?: string,
 ): void {
   const scopedAccount = accountScope?.trim();
+  // The mutation response does not return a refreshed /api/liked row. Stamp a
+  // newly liked song at tap time so a mounted "Date added" view puts it where
+  // the eventual server payload will, rather than sorting it to the bottom.
+  const likedSong =
+    nextLiked && song && !song.likedAt
+      ? { ...song, likedAt: new Date().toISOString() }
+      : song;
   for (const [url, entry] of Array.from(apiCache.entries())) {
     if (entry.data === undefined) continue;
     if (scopedAccount && getApiAuthScope(url) !== scopedAccount) continue;
@@ -250,7 +262,7 @@ export function patchLikeApiCache(
     const next = shallowCloneCacheData(entry.data);
     let changed = updateLikedIdsInPayload(next, songId, nextLiked);
     if (path === "/api/liked") {
-      changed = updateLikedSongsInPayload(next, { songId, nextLiked, song }) || changed;
+      changed = updateLikedSongsInPayload(next, { songId, nextLiked, song: likedSong }) || changed;
     }
     if (changed) writeApiCache(url, next, null);
   }
@@ -431,6 +443,19 @@ export function useApiData<T>(
     },
     [enabled, isOnline, keepPreviousData, url],
   );
+
+  // Cache writes can come from another mounted screen (most notably an
+  // optimistic like/unlike). Mirror them into this hook's React state so the
+  // current view updates immediately instead of waiting for a remount.
+  useEffect(() => {
+    if (!enabled) return;
+    return subscribeApiCacheUpdate<T>(url, (payload) => {
+      setDataState(payload);
+      dataUrlRef.current = url;
+      setLoading(false);
+      setError(null);
+    });
+  }, [enabled, url]);
 
   useEffect(() => {
     return startLoad(false);

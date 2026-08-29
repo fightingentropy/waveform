@@ -5,6 +5,10 @@ import {
   normalizeAccountScope,
   withAccountScope,
 } from "@spotify/shared/account-scope";
+import {
+  publishApiCacheUpdate,
+  subscribeApiCacheUpdate,
+} from "@spotify/shared/api-cache-updates";
 import { updateLikedIdsInPayload, updateLikedSongsInPayload } from "@spotify/shared/like-cache";
 import { apiReadTimeoutMs } from "@spotify/shared/api-timeout-policy";
 import type { PlayerSong } from "@/types/player";
@@ -71,6 +75,7 @@ function getCachedData<T>(url: string): T | undefined {
 
 function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
   apiCache.set(url, { data, etag: etag ?? null, fetchedAt: Date.now() });
+  publishApiCacheUpdate(url, data);
   return data;
 }
 
@@ -132,6 +137,12 @@ export function patchLikeApiCache(
   accountScope?: string,
 ): void {
   const scopedAccount = accountScope?.trim();
+  // Preserve Date-added ordering while the server mutation is in flight. The
+  // next authoritative /api/liked response will replace this client timestamp.
+  const likedSong =
+    nextLiked && song && !song.likedAt
+      ? { ...song, likedAt: new Date().toISOString() }
+      : song;
   for (const [url, entry] of Array.from(apiCache.entries())) {
     if (entry.data === undefined) continue;
     if (scopedAccount && getApiAuthScope(url) !== scopedAccount) continue;
@@ -148,7 +159,7 @@ export function patchLikeApiCache(
     const next = cloneCacheData(entry.data);
     let changed = updateLikedIdsInPayload(next, songId, nextLiked);
     if (path === "/api/liked") {
-      changed = updateLikedSongsInPayload(next, { songId, nextLiked, song }) || changed;
+      changed = updateLikedSongsInPayload(next, { songId, nextLiked, song: likedSong }) || changed;
     }
     if (changed) writeApiCache(url, next, null);
   }
@@ -317,6 +328,18 @@ export function useApiData<T>(
       cancelled = true;
     };
   }, [enabled, keepPreviousData, url]);
+
+  // Keep mounted consumers synchronized with cache patches made by actions on
+  // other views (for example, adding/removing a track from Liked Songs).
+  useEffect(() => {
+    if (!enabled) return;
+    return subscribeApiCacheUpdate<T>(url, (payload) => {
+      setDataState(payload);
+      dataUrlRef.current = url;
+      setLoading(false);
+      setError(null);
+    });
+  }, [enabled, url]);
 
   useEffect(() => {
     return startLoad(false);
