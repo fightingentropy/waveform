@@ -103,5 +103,11 @@ export async function stageDiscoverSong(
     throw new Error(body?.error || `Couldn't load this track (${res.status})`);
   }
   const real = (await res.json()) as PlayerSong;
-  return { ...real, discoverTrackId: trackId };
+  return {
+    ...real,
+    discoverTrackId: trackId,
+    // Preserve staging quality on the queue item. Besides documenting the source,
+    // this prevents a late preview response from replacing a lossless upgrade.
+    preview: opts?.preview === true || Boolean(song.youtubeVideoId),
+  };
 }

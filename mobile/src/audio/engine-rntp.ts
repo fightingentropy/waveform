@@ -3,6 +3,7 @@ import { toAbsoluteApiUrl } from "@/lib/config";
 import { getIsOnline, markOffline, subscribeOnline } from "@/lib/connectivity";
 import { isUnstagedDiscoverSong } from "@/lib/discover-queue";
 import { isLikelyNetworkPlaybackError } from "@/lib/playback-continuity";
+import { effectivePlaybackDuration } from "@/lib/playback-duration";
 import { shouldPublishQueueMutation } from "@/lib/queue-publish-policy";
 import { isPodcastSong } from "@/lib/player-song";
 import {
@@ -51,6 +52,7 @@ let lastLoadedKey: string | null = null;
 // it synchronously at a selection boundary lets us reject late progress/end/error
 // events emitted by the outgoing RNTP item during reset().
 let loadedSongId: string | null = null;
+let loadedDiscoverTrackId: string | null = null;
 let currentListen: PlayListenEntry | null = null;
 
 // error circuit-breaker
@@ -127,6 +129,7 @@ async function loadCurrentSong(song: PlayerSong | null, isPlaying: boolean): Pro
     currentListen = null;
     lastLoadedKey = null;
     loadedSongId = null;
+    loadedDiscoverTrackId = null;
     loadSeq += 1; // supersede any in-flight load from the prior track
     await TrackPlayer.reset();
     setLastPosition(0, song.id);
@@ -142,13 +145,18 @@ async function loadCurrentSong(song: PlayerSong | null, isPlaying: boolean): Pro
     return;
   }
 
-  const sameLogicalSong = !!song && loadedSongId === song.id;
+  const previousLoadedId = loadedSongId;
+  const sameLogicalSong = !!song && (
+    loadedSongId === song.id ||
+    Boolean(song.discoverTrackId && song.discoverTrackId === loadedDiscoverTrackId)
+  );
   if (!sameLogicalSong) {
     flushPlayListen(currentListen);
     currentListen = song ? createPlayListen(song) : null;
   }
   lastLoadedKey = key;
   loadedSongId = null;
+  loadedDiscoverTrackId = null;
   erroredSrcRetry = null;
 
   const seq = ++loadSeq;
@@ -165,9 +173,12 @@ async function loadCurrentSong(song: PlayerSong | null, isPlaying: boolean): Pro
   await TrackPlayer.add(buildTrack(resolved));
   if (seq !== loadSeq) return;
   loadedSongId = song.id;
+  loadedDiscoverTrackId = song.discoverTrackId ?? null;
 
   // Resume-seek injection (cross-device resume or podcast resume ≥10s).
-  const sourceSwapPosition = sameLogicalSong ? getLastPosition(song.id) : null;
+  const sourceSwapPosition = sameLogicalSong && previousLoadedId
+    ? getLastPosition(previousLoadedId)
+    : null;
   const pendingSeek = sameLogicalSong ? null : takePendingResumeSeek(song.id);
   if (sourceSwapPosition != null) {
     setLastPosition(sourceSwapPosition, song.id);
@@ -303,13 +314,14 @@ function onProgress(position: number, duration: number): void {
   const s = usePlayerStore.getState();
   const song = s.currentSong;
   if (!song || loadedSongId !== song.id) return;
+  const effectiveDuration = effectivePlaybackDuration(song, duration);
   setLastPosition(position, song.id);
-  setAudioProgress(position, duration);
+  setAudioProgress(position, effectiveDuration);
 
   // play-listen tracking → fire play-event at 30s OR ≥50%.
   if (currentListen) {
     if (position > currentListen.maxPositionSeconds) currentListen.maxPositionSeconds = position;
-    if (Number.isFinite(duration) && duration > 0) currentListen.durationSeconds = duration;
+    if (effectiveDuration > 0) currentListen.durationSeconds = effectiveDuration;
     flushPlayListen(currentListen); // no-op until the threshold is crossed
   }
 
@@ -318,7 +330,7 @@ function onProgress(position: number, duration: number): void {
     const now = Date.now();
     if (now - lastPodcastWriteMs >= PODCAST_PROGRESS_WRITE_INTERVAL_MS) {
       lastPodcastWriteMs = now;
-      writeEpisodeProgressGuarded(song.id, position, duration);
+      writeEpisodeProgressGuarded(song.id, position, effectiveDuration);
     }
   }
 

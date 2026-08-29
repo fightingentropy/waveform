@@ -226,7 +226,24 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     // song that isn't in the library yet). Promotion is idempotent and usually
     // keeps the same id; if it differs, move the optimistic like onto the new id.
     if (nextLiked && song?.discoverTrackId) {
-      const promoted = await promoteStagedSong(song);
+      const promoted = await promoteStagedSong(song, (previous, replacement) => {
+        if (!accountStillCurrent() || previous.id === replacement.id) return;
+        set((state) => {
+          const wasLiked = !!state.likedSongIds[previous.id];
+          const wasPending = !!state.pending[previous.id];
+          if (!wasLiked && !wasPending) return state;
+          return {
+            likedSongIds: wasLiked
+              ? { ...removeKey(state.likedSongIds, previous.id), [replacement.id]: true }
+              : state.likedSongIds,
+            pending: wasPending
+              ? { ...removeKey(state.pending, previous.id), [replacement.id]: true }
+              : state.pending,
+            hydrated: true,
+          };
+        });
+        if (songId === previous.id) songId = replacement.id;
+      });
       if (!accountStillCurrent()) {
         return { ok: false, status: 409, error: "Account changed while saving" };
       }

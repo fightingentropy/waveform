@@ -8,6 +8,10 @@ import {
 import { getIsOnline } from "@/lib/connectivity";
 import { songKind } from "@/lib/player-song";
 import {
+  findStagedSongReplacementIndex,
+  isStagedSongReplacementTarget,
+} from "@/lib/staged-song-replacement";
+import {
   appendQueuePage,
   insertIntoShuffleRemaining,
   mergeOrderedQueuePage,
@@ -105,9 +109,8 @@ type PlayerState = {
   setSong: (song: PlayerSong | null) => void;
   advanceToIndex: (index: number, options?: AdvanceToIndexOptions) => void;
   replaceSong: (song: PlayerSong) => void;
-  // Swap a staged Discover track (matched by its old id) for the promoted,
-  // now-in-library song after a "keep" action, so future loads use the library
-  // copy instead of the .discover staging URL. Pure data swap — no reload.
+  // Swap a staged Discover track (matched by old id or logical provider id) for
+  // its preview, lossless upgrade, or promoted library copy. Pure data swap.
   replaceStagedSong: (oldId: string, song: PlayerSong) => void;
   addToQueue: (song: PlayerSong) => void;
   // Append a fetched page without rebuilding or restarting the active queue.
@@ -558,15 +561,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }),
   replaceStagedSong: (oldId, song) =>
     set((s) => {
+      const matchIndex = findStagedSongReplacementIndex(s.queue, oldId, song);
+      const currentMatches = isStagedSongReplacementTarget(s.currentSong, oldId, song);
+      const replacedId = matchIndex >= 0
+        ? s.queue[matchIndex].id
+        : currentMatches
+          ? s.currentSong!.id
+          : oldId;
       // Staging swaps the whole song and its id changes, so carry rec-membership
       // across (oldId → song.id) — otherwise the sparkle would vanish once a
       // recommended track finishes staging. Fresh Set so subscribers re-render.
-      const recommendedIds = s.recommendedIds.has(oldId)
-        ? new Set([...s.recommendedIds].map((id) => (id === oldId ? song.id : id)))
+      const recommendedIds = s.recommendedIds.has(replacedId)
+        ? new Set([...s.recommendedIds].map((id) => (id === replacedId ? song.id : id)))
         : s.recommendedIds;
-      const matchIndex = s.queue.findIndex((item) => item.id === oldId);
       if (matchIndex < 0) {
-        return s.currentSong?.id === oldId
+        return currentMatches
           ? { currentSong: song, recommendedIds }
           : recommendedIds === s.recommendedIds
             ? s
@@ -576,7 +585,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       queue[matchIndex] = song;
       return {
         queue,
-        currentSong: s.currentSong?.id === oldId ? song : s.currentSong,
+        currentSong: currentMatches ? song : s.currentSong,
         recommendedIds,
       };
     }),

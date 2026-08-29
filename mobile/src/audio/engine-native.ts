@@ -13,9 +13,11 @@ import { toAbsoluteApiUrl } from "@/lib/config";
 import { getIsOnline, markOffline, subscribeOnline } from "@/lib/connectivity";
 import { isUnstagedDiscoverSong } from "@/lib/discover-queue";
 import { isLikelyNetworkPlaybackError } from "@/lib/playback-continuity";
+import { effectivePlaybackDuration } from "@/lib/playback-duration";
 import { isCurrentTrackEvent } from "@/lib/native-audio-event";
 import { shouldPublishQueueMutation } from "@/lib/queue-publish-policy";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
+import { isSameLogicalPlaybackSong } from "@/lib/staged-song-replacement";
 import { createPlayListen, flushPlayListen, type PlayListenEntry } from "@/lib/play-events";
 import {
   isEpisodeFinished,
@@ -282,7 +284,7 @@ async function hardLoad(song: PlayerSong | null, isPlaying: boolean): Promise<vo
   // Switching tracks by hand cancels any in-flight / prepared crossfade.
   await abortCrossfade();
 
-  const sameLogicalSong = !!song && deckSong[activeDeck]?.id === song.id;
+  const sameLogicalSong = isSameLogicalPlaybackSong(deckSong[activeDeck], song);
   if (!sameLogicalSong) {
     flushPlayListen(currentListen);
     currentListen = song ? createPlayListen(song) : null;
@@ -372,13 +374,14 @@ function onTime(e: TimeEvent): void {
   // deck is async. Ignore a tail event from the outgoing deck during that gap so
   // its position/listen/end state cannot be attributed to the newly-selected song.
   if (!song || !isCurrentTrackEvent(e, activeDeck, song.id, deckSong[e.deck]?.id)) return;
+  const duration = effectivePlaybackDuration(song, e.duration);
   setLastPosition(e.currentTime, song.id);
-  setAudioProgress(e.currentTime, e.duration);
+  setAudioProgress(e.currentTime, duration);
 
   // play-listen tracking → fire play-event at 30s OR ≥50%.
   if (currentListen) {
     if (e.currentTime > currentListen.maxPositionSeconds) currentListen.maxPositionSeconds = e.currentTime;
-    if (Number.isFinite(e.duration) && e.duration > 0) currentListen.durationSeconds = e.duration;
+    if (duration > 0) currentListen.durationSeconds = duration;
     flushPlayListen(currentListen);
   }
 
@@ -387,7 +390,7 @@ function onTime(e: TimeEvent): void {
     const now = Date.now();
     if (now - lastPodcastWriteMs >= PODCAST_PROGRESS_WRITE_INTERVAL_MS) {
       lastPodcastWriteMs = now;
-      writeEpisodeProgressGuarded(song.id, e.currentTime, e.duration);
+      writeEpisodeProgressGuarded(song.id, e.currentTime, duration);
     }
   }
 
@@ -407,7 +410,7 @@ function onTime(e: TimeEvent): void {
   // cross-device resume publish (self-throttled to ~8s).
   if (s.isPlaying) void publishPlaybackState(false);
 
-  maybeCrossfade(e, s, song);
+  maybeCrossfade(duration === e.duration ? e : { ...e, duration }, s, song);
 }
 
 function maybeCrossfade(e: TimeEvent, s: StoreState, song: PlayerSong): void {

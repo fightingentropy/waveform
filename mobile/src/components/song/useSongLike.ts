@@ -1,3 +1,4 @@
+import { Alert } from "react-native";
 import { useAuth } from "@/lib/auth";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { useLikesStore } from "@/store/likes";
@@ -13,7 +14,14 @@ export function useSongLike(song: PlayerSong) {
   const canLike = (status === "authenticated" || isLocal) && !isRadioSong(song) && !isPodcastSong(song);
 
   const toggle = () => {
-    void useLikesStore.getState().toggleLike(song.id, !liked, song);
+    const nextLiked = !liked;
+    void useLikesStore.getState().toggleLike(song.id, nextLiked, song).then((result) => {
+      if (result.ok) return;
+      Alert.alert(
+        nextLiked ? "Couldn't add to Liked Songs" : "Couldn't remove from Liked Songs",
+        result.error || "Please try again.",
+      );
+    });
   };
 
   return { liked, pending, canLike, toggle };

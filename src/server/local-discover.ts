@@ -9,6 +9,7 @@ import {
   LOCAL_MEDIA_DISCOVER_DIRNAME,
 } from "../lib/local-media-path";
 import type { PlayerSong } from "../types/player";
+import { createDiscoverStageCoordinator } from "./discover-stage-coordinator";
 import { json, jsonCached, readJsonBody } from "./local-http";
 import {
   MAX_AUDIO_BYTES,
@@ -154,7 +155,7 @@ function discoverManifestPath(source: LibrarySource): string {
 
 let discoverManifestCache: DiscoverManifest | null = null;
 let discoverManifestChain: Promise<unknown> = Promise.resolve();
-const discoverInFlight = new Set<string>();
+const coordinateDiscoverStage = createDiscoverStageCoordinator<DiscoverStagingEntry>();
 
 async function readDiscoverManifest(source: LibrarySource): Promise<DiscoverManifest> {
   if (discoverManifestCache) return discoverManifestCache;
@@ -348,32 +349,37 @@ async function writeDiscoverStagedFile(
 }
 
 async function stageDiscoverTrack(source: LibrarySource, item: DiscoverStageItem): Promise<DiscoverStagingEntry | null> {
-  const manifest = await readDiscoverManifest(source);
-  const existing = manifest.entries[item.trackId];
-  const existingUsable = existing && existsSync(resolve(source.root, existing.stagedRelPath));
-  // Reuse a staged copy when it satisfies the request. A lossy preview does NOT
-  // satisfy a lossless (Add) request, so fall through and re-stage as FLAC.
-  if (existingUsable && (item.preview || existing.lossless !== false)) return existing;
-  if (discoverInFlight.has(item.trackId)) return null;
-  discoverInFlight.add(item.trackId);
-  try {
-    const audio = item.preview
-      ? await fetchYouTubePreviewAudio(item)
-      : item.resolved
-        ? await fetchDiscoverCandidateAudio(item.resolved)
-        : null;
-    if (!audio) return null;
-    const entry = await writeDiscoverStagedFile(source, item, audio);
-    return withDiscoverManifestLock(async () => {
-      const current = await readDiscoverManifest(source);
-      const firstSeenAt = current.entries[item.trackId]?.firstSeenAt ?? entry.firstSeenAt;
-      current.entries[item.trackId] = { ...entry, firstSeenAt };
-      await writeDiscoverManifest(source, current);
-      return current.entries[item.trackId];
-    });
-  } finally {
-    discoverInFlight.delete(item.trackId);
-  }
+  // Include the source root so two configured libraries cannot block each other
+  // merely because they happen to stage the same provider track id.
+  const coordinationKey = `${source.root}\0${item.trackId}`;
+  return coordinateDiscoverStage(
+    coordinationKey,
+    async () => {
+      const manifest = await readDiscoverManifest(source);
+      const existing = manifest.entries[item.trackId];
+      const existingUsable = existing && existsSync(resolve(source.root, existing.stagedRelPath));
+      // Reuse a staged copy when it satisfies the request. This check runs after
+      // any earlier same-track request finishes. A lossy preview does NOT satisfy
+      // a lossless (Add) request, so that waiter falls through and upgrades it.
+      return existingUsable && (item.preview || existing.lossless !== false) ? existing : null;
+    },
+    async () => {
+      const audio = item.preview
+        ? await fetchYouTubePreviewAudio(item)
+        : item.resolved
+          ? await fetchDiscoverCandidateAudio(item.resolved)
+          : null;
+      if (!audio) return null;
+      const entry = await writeDiscoverStagedFile(source, item, audio);
+      return withDiscoverManifestLock(async () => {
+        const current = await readDiscoverManifest(source);
+        const firstSeenAt = current.entries[item.trackId]?.firstSeenAt ?? entry.firstSeenAt;
+        current.entries[item.trackId] = { ...entry, firstSeenAt };
+        await writeDiscoverManifest(source, current);
+        return current.entries[item.trackId];
+      });
+    },
+  );
 }
 
 async function pruneDiscoverStaging(source: LibrarySource, presentTrackIds: Set<string>): Promise<void> {
