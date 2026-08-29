@@ -1,4 +1,5 @@
 import { toObject, toStringValue } from "@/lib/provider-http";
+import { YOUTUBE_PLAYLIST_SEARCH_INCLUDE } from "@spotify/shared/catalog-search";
 
 export type YouTubeCatalogPlaylist = {
   kind: "playlist";
@@ -9,6 +10,13 @@ export type YouTubeCatalogPlaylist = {
   ownerName?: string;
   externalUrl: string;
 };
+
+export function shouldIncludeYouTubePlaylistSearch(searchParams: URLSearchParams): boolean {
+  return searchParams
+    .getAll("include")
+    .flatMap((value) => value.split(","))
+    .some((value) => value.trim().toLowerCase() === YOUTUBE_PLAYLIST_SEARCH_INCLUDE);
+}
 
 function parseHttpUrl(value: string): URL | null {
   try {

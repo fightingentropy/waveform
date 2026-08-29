@@ -6,6 +6,7 @@ import {
   withAccountScope,
 } from "@spotify/shared/account-scope";
 import { updateLikedIdsInPayload, updateLikedSongsInPayload } from "@spotify/shared/like-cache";
+import { apiReadTimeoutMs } from "@spotify/shared/api-timeout-policy";
 import type { PlayerSong } from "@/types/player";
 
 export { normalizeAccountScope, withAccountScope };
@@ -43,7 +44,6 @@ type ApiCacheEntry<T = unknown> = {
 };
 
 export const API_AUTH_REQUIRED_EVENT = "spotify:api-auth-required";
-const API_FETCH_TIMEOUT_MS = 5_000;
 const apiCache = new Map<string, ApiCacheEntry>();
 
 function getCacheEntry<T>(url: string): ApiCacheEntry<T> | undefined {
@@ -51,7 +51,7 @@ function getCacheEntry<T>(url: string): ApiCacheEntry<T> | undefined {
   if (!memory) return undefined;
   if (memory.promise) {
     const startedAt = memory.promiseStartedAt ?? (memory.fetchedAt > 0 ? memory.fetchedAt : 0);
-    if (!startedAt || Date.now() - startedAt > API_FETCH_TIMEOUT_MS + 2_000) {
+    if (!startedAt || Date.now() - startedAt > apiReadTimeoutMs(url) + 2_000) {
       apiCache.set(url, {
         data: memory.data,
         etag: memory.etag,
@@ -96,6 +96,9 @@ function dispatchApiAuthRequired(url: string): void {
 async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   if (typeof window === "undefined") return fetch(input, init);
   const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const requestUrl =
+    typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  const timeoutMs = apiReadTimeoutMs(requestUrl);
   let timeoutId: number | undefined;
   try {
     const request = fetch(input, {
@@ -106,7 +109,7 @@ async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): P
       timeoutId = window.setTimeout(() => {
         controller?.abort();
         reject(new Error("Request timed out"));
-      }, API_FETCH_TIMEOUT_MS);
+      }, timeoutMs);
     });
     return await Promise.race([request, timeout]);
   } finally {

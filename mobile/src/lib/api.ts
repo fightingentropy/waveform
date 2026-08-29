@@ -514,7 +514,7 @@ export type SearchIndexPayload = {
 };
 
 export type CatalogProvider = "spotify" | "youtube";
-export type CatalogProviderStatus = "ok" | "unavailable" | "not_configured";
+export type CatalogProviderStatus = "ok" | "unavailable" | "not_configured" | "not_requested";
 
 export type CatalogPlaylist = {
   kind: "playlist";

@@ -67,6 +67,7 @@ import {
 import { corsAllowOrigin, withSecurityHeaders } from "./security-headers";
 import {
   parseYouTubePlaylistSearchPayload,
+  shouldIncludeYouTubePlaylistSearch,
   type YouTubeCatalogPlaylist,
 } from "./youtube-catalog";
 import { LOCAL_MAC_MINI_AUTH_USER, type AppEnv, type AuthUser } from "./env";
@@ -1175,7 +1176,7 @@ app.get("/api/search-index", async (c) => {
 
 type CatalogProviderStatus = {
   spotify: "ok" | "unavailable";
-  youtube: "ok" | "not_configured" | "unavailable";
+  youtube: "ok" | "not_configured" | "not_requested" | "unavailable";
 };
 function spotifyBatchTracksToCatalogSongs(tracks: SpotifyBatchTrack[]): DiscoverTrendingTrack[] {
   return tracks
@@ -1218,22 +1219,32 @@ async function searchYouTubeCatalogPlaylists(
 }
 
 // Mixed catalog search. `results` remains the backward-compatible song array.
-// Spotify playlists/artists and YouTube playlists are provider-authored metadata;
-// failures are reported per provider rather than masquerading as "no matches".
+// Spotify playlists/artists and YouTube playlists are provider-authored metadata.
+// YouTube is opt-in for the dedicated playlist filter so its slower Mac-mini
+// lookup never blocks ordinary song search; failures remain visible per provider.
 app.get("/api/search/catalog", async (c) => {
   if (!c.get("user")) return jsonError("Unauthorized", 401);
-  const q = (c.req.query("q") || "").trim().slice(0, 100);
+  const url = new URL(c.req.url);
+  const q = (url.searchParams.get("q") || "").trim().slice(0, 100);
+  const includeYouTubePlaylists = shouldIncludeYouTubePlaylistSearch(url.searchParams);
   if (q.length < 2) {
     const providers: CatalogProviderStatus = {
       spotify: "ok",
-      youtube: canUseMacMiniProxy(c.env) ? "ok" : "not_configured",
+      youtube: includeYouTubePlaylists
+        ? canUseMacMiniProxy(c.env)
+          ? "ok"
+          : "not_configured"
+        : "not_requested",
     };
     return jsonCached(c, { query: q, results: [], playlists: [], artists: [], providers }, {
       cacheControl: "private, max-age=30",
     });
   }
 
-  const stagingStatus = readDiscoverStagingStatus(c.env, 4_000);
+  // Staging is an optional playback acceleration, not a prerequisite for showing
+  // search results. Keep it within the Spotify request's normal latency so an
+  // unreachable mini cannot turn a fast catalog hit into a multi-second wait.
+  const stagingStatus = readDiscoverStagingStatus(c.env, 1_500);
   const [spotify, youtube, stagedById] = await Promise.all([
     (async () => {
       try {
@@ -1255,7 +1266,12 @@ app.get("/api/search/catalog", async (c) => {
         };
       }
     })(),
-    searchYouTubeCatalogPlaylists(c.env, q),
+    includeYouTubePlaylists
+      ? searchYouTubeCatalogPlaylists(c.env, q)
+      : Promise.resolve({
+          status: "not_requested" as const,
+          playlists: [] as YouTubeCatalogPlaylist[],
+        }),
     stagingStatus,
   ]);
 

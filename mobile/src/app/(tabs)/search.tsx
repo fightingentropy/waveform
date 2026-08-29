@@ -3,6 +3,11 @@ import { ActivityIndicator, FlatList, TextInput, View, Text } from "react-native
 import { useRouter, type Href } from "expo-router";
 import { ListMusic, Search as SearchIcon, UserRound } from "lucide-react-native";
 import { songMatchesLibraryQuery } from "@spotify/shared/library-search";
+import {
+  catalogSearchPath,
+  catalogSearchSectionOrder,
+  type CatalogSearchFilter,
+} from "@spotify/shared/catalog-search";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { SongListItem } from "@/components/song/SongListItem";
 import { ProfileButton } from "@/components/profile/ProfileButton";
@@ -27,7 +32,6 @@ import { colors } from "@/theme";
 import type { PlayerSong } from "@/types/player";
 
 type SearchableSong = { song: PlayerSong; title: string; artist: string };
-type SearchFilter = "top" | "songs" | "artists" | "playlists";
 
 function score({ title, artist }: SearchableSong, q: string): number {
   if (title === q) return 100;
@@ -230,7 +234,7 @@ export default function SearchScreen() {
   const offlineRecords = useOfflineStore((state) => state.records);
   const accountScope = user?.id ?? "anonymous";
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<SearchFilter>("top");
+  const [filter, setFilter] = useState<CatalogSearchFilter>("top");
   const debouncedQuery = useDebouncedValue(query.trim(), 350);
   const { data, loading } = useApiData<SearchIndexPayload>(
     withAccountScope(
@@ -279,13 +283,13 @@ export default function SearchScreen() {
     [accountScope, isOnline, localResults, offlineRecords],
   );
 
-  // Platform results are debounced and scoped to the signed-in account. A new
-  // query clears the previous payload, preventing stale artists/playlists from
-  // flashing under different text.
+  // Platform results are debounced and scoped to the signed-in account. YouTube
+  // playlist lookup is requested only inside the Playlists filter, keeping Top
+  // and Songs on the fast Spotify path. A new query clears the previous payload.
   const catalogEnabled = debouncedQuery.length >= 2;
   const catalog = useApiData<SearchCatalogPayload>(
     withAccountScope(
-      `/api/search/catalog?q=${encodeURIComponent(debouncedQuery)}`,
+      catalogSearchPath(debouncedQuery, filter),
       user?.id ?? status,
     ),
     { query: "", results: [], playlists: [], artists: [], providers: {} },
@@ -331,16 +335,34 @@ export default function SearchScreen() {
 
   const rows = useMemo<SearchRow[]>(() => {
     const out: SearchRow[] = [];
-    if (filter === "top" || filter === "artists") {
-      const visibleArtists = filter === "top" ? artists.slice(0, 4) : artists;
-      if (visibleArtists.length > 0) {
-        out.push({ kind: "header", key: "hdr:artists", title: "Artists" });
-        visibleArtists.forEach((artist) =>
-          out.push({ kind: "artist", key: `artist:${artist.provider}:${artist.id}`, artist }),
+    for (const section of catalogSearchSectionOrder(filter)) {
+      if (section === "songs") {
+        addSongSection(
+          out,
+          "In your library",
+          "library",
+          filter === "top" ? visibleLocalResults.slice(0, 12) : visibleLocalResults,
         );
+        addSongSection(
+          out,
+          "Songs",
+          "catalog",
+          filter === "top" ? catalogSongs.slice(0, 18) : catalogSongs,
+        );
+        continue;
       }
-    }
-    if (filter === "top" || filter === "playlists") {
+
+      if (section === "artists") {
+        const visibleArtists = filter === "top" ? artists.slice(0, 4) : artists;
+        if (visibleArtists.length > 0) {
+          out.push({ kind: "header", key: "hdr:artists", title: "Artists" });
+          visibleArtists.forEach((artist) =>
+            out.push({ kind: "artist", key: `artist:${artist.provider}:${artist.id}`, artist }),
+          );
+        }
+        continue;
+      }
+
       const visiblePlaylists = filter === "top" ? playlists.slice(0, 8) : playlists;
       if (visiblePlaylists.length > 0) {
         out.push({ kind: "header", key: "hdr:playlists", title: "Playlists" });
@@ -352,20 +374,6 @@ export default function SearchScreen() {
           }),
         );
       }
-    }
-    if (filter === "top" || filter === "songs") {
-      addSongSection(
-        out,
-        "In your library",
-        "library",
-        filter === "top" ? visibleLocalResults.slice(0, 12) : visibleLocalResults,
-      );
-      addSongSection(
-        out,
-        "Songs",
-        "catalog",
-        filter === "top" ? catalogSongs.slice(0, 18) : catalogSongs,
-      );
     }
     return out;
   }, [artists, catalogSongs, filter, playlists, visibleLocalResults]);

@@ -43,11 +43,13 @@ describe("request timeout", () => {
 describe("API read timeout policy", () => {
   test("gives bounded provider read-throughs enough time without classifying them as connectivity failures", () => {
     const search = "/api/search/catalog?q=radiohead&auth=user";
+    const playlistSearch = "/api/search/catalog?q=radiohead&include=youtube-playlists&auth=user";
     const spotifyPlaylist = "/api/catalog/spotify/playlists/37i9dQZF1DXcBWIGoYBM5M";
     const youtubePlaylist = "/api/playlist/yt-mix-PL123456789";
     const topFifty = "/api/playlist/discover-top50";
 
     expect(apiReadTimeoutMs(search)).toBe(9_000);
+    expect(apiReadTimeoutMs(playlistSearch)).toBe(9_000);
     expect(apiReadTimeoutMs(spotifyPlaylist)).toBe(15_000);
     expect(apiReadTimeoutMs(youtubePlaylist)).toBe(22_000);
     expect(apiReadTimeoutMs(topFifty)).toBe(15_000);
