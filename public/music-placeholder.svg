@@ -1,6 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Music">
   <rect width="512" height="512" rx="64" fill="#151515"/>
-  <circle cx="202" cy="350" r="58" fill="#737373"/>
-  <circle cx="370" cy="310" r="58" fill="#737373"/>
-  <path d="M250 350V155l178-38v193" fill="none" stroke="#a3a3a3" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(-39 0)">
+    <circle cx="202" cy="350" r="58" fill="#737373"/>
+    <circle cx="370" cy="310" r="58" fill="#737373"/>
+    <path d="M250 350V155l178-38v193" fill="none" stroke="#a3a3a3" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
 </svg>
