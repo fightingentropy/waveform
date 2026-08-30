@@ -8,7 +8,7 @@ describe("CoverImage fallback", () => {
       <CoverImage src="/apple-icon.png" alt="Missing song cover" width={128} height={128} />,
     );
 
-    expect(markup).toContain('src="/music-placeholder.svg"');
+    expect(markup).toContain('src="/music-placeholder.svg?v=2"');
     expect(markup).not.toContain("/apple-icon.png");
   });
 

@@ -48,7 +48,7 @@ function artworkSrcSet(src: string): string | undefined {
 export function CoverImage({
   src,
   networkSrc,
-  fallbackSrc = "/music-placeholder.svg",
+  fallbackSrc = "/music-placeholder.svg?v=2",
   alt,
   ...props
 }: CoverImageProps) {
