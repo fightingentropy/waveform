@@ -13,6 +13,15 @@ export function isUnstagedDiscoverSong(song: PlayerSong | null | undefined): son
   return Boolean(song && song.discoverTrackId && !song.audioUrl);
 }
 
+// Listening history outlives the temporary preview cache. Resolve a preview on
+// play again; the staging endpoint reuses a valid copy or recreates a pruned one.
+// A preview that was promoted into the library already has a durable media path.
+export function prepareHistorySongForPlayback<T extends PlayerSong>(song: T): T {
+  return song.preview && song.discoverTrackId && song.audioUrl.includes("/.discover/")
+    ? { ...song, audioUrl: "" }
+    : song;
+}
+
 // Materialize an un-staged discover track into a playable song via the same
 // on-demand endpoint the Discover row uses. The response carries a real
 // audioUrl + stable id; we re-attach `discoverTrackId` so the now-playing
@@ -44,6 +53,7 @@ export async function stageDiscoverSong(song: PlayerSong): Promise<PlayerSong> {
         durationMs: song.duration ? Math.round(song.duration * 1000) : undefined,
         imageUrl: song.imageUrl,
         qualityProfile: "max",
+        ...(song.preview ? { preview: true } : {}),
       };
   const res = await fetch("/api/discover/stage", {
     method: "POST",
@@ -56,5 +66,10 @@ export async function stageDiscoverSong(song: PlayerSong): Promise<PlayerSong> {
     throw new Error(errorBody?.error || `Couldn't load this track (${res.status})`);
   }
   const real = (await res.json()) as PlayerSong;
-  return { ...real, discoverTrackId: trackId };
+  return {
+    ...real,
+    discoverTrackId: trackId,
+    youtubeVideoId: song.youtubeVideoId ?? real.youtubeVideoId,
+    preview: song.preview || real.preview,
+  };
 }

@@ -7,8 +7,32 @@ import {
   passesArtistGate,
   pickBestYouTubeMatch,
   scoreYouTubeCandidate,
+  splitTitleArtist,
   type YouTubeSearchEntry,
 } from "../src/server/youtube-preview";
+
+describe("Discover Mix song metadata", () => {
+  test("removes video decorations before separating the artist and title", () => {
+    expect(splitTitleArtist('MELISSES x KAS "VIKTORIA" - Official Music Video', "Mix")).toEqual({
+      artist: "MELISSES x KAS", title: "VIKTORIA",
+    });
+    expect(splitTitleArtist("Aspa – Ela (Έλα) | Official Music Video", "Mix")).toEqual({
+      artist: "Aspa", title: "Ela (Έλα)",
+    });
+    expect(splitTitleArtist("Γιώργος Σαμπάνης - Άλλαξε Τα Όλα | Official Video Clip", "Mix")).toEqual({
+      artist: "Γιώργος Σαμπάνης", title: "Άλλαξε Τα Όλα",
+    });
+  });
+
+  test("keeps song versions and uses the supplied artist when there is no separator", () => {
+    expect(splitTitleArtist("Artist - Song (Live) [Official Video Clip]", "Mix")).toEqual({
+      artist: "Artist", title: "Song (Live)",
+    });
+    expect(splitTitleArtist("Video Games", "Lana Del Rey")).toEqual({
+      artist: "Lana Del Rey", title: "Video Games",
+    });
+  });
+});
 
 // The Smart Shuffle YouTube-preview matcher must be "confident-match-or-nothing":
 // it stages a rec's audio only when artist AND (Spotify-known) duration line up.

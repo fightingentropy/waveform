@@ -35,6 +35,7 @@ import {
   prefetchUpcomingPlayback,
 } from "@/client/playback-warm";
 import { normalizeAccountScope } from "@/client/api";
+import { prepareHistorySongForPlayback } from "@/client/discover-queue";
 import {
   isEpisodeFinished,
   markEpisodeFinished,
@@ -91,7 +92,6 @@ type PlayListenEntry = {
 
 const STICKY_SEEK_RETRY_MS = 180;
 const MAX_STICKY_SEEK_ATTEMPTS = 30;
-const MAX_CONSECUTIVE_AUDIO_ERRORS = 3;
 const PODCAST_PROGRESS_WRITE_INTERVAL_MS = 5_000;
 const PODCAST_RESUME_MIN_SECONDS = 10;
 
@@ -123,6 +123,9 @@ export function usePlaybackEngine(): {
   const advanceToIndex = usePlayerStore((s) => s.advanceToIndex);
   const replaceSong = usePlayerStore((s) => s.replaceSong);
   const pause = usePlayerStore((s) => s.pause);
+  const playbackError = usePlayerStore((s) => s.playbackError);
+  const failPlayback = usePlayerStore((s) => s.failPlayback);
+  const clearPlaybackError = usePlayerStore((s) => s.clearPlaybackError);
   const cancelSleepTimer = usePlayerStore((s) => s.cancelSleepTimer);
 
   const { user, status: authStatus } = useAuth();
@@ -236,7 +239,6 @@ export function usePlaybackEngine(): {
   // updated ~1Hz while the full sheet is closed, matching MediaSession's own 1Hz
   // publish — so steady-state playback no longer re-renders PlayerBar at 4Hz.
   const lastTimeStateWriteRef = useRef<number>(0);
-  const consecutiveAudioErrorsRef = useRef<number>(0);
   const erroredSrcRetryRef = useRef<string | null>(null);
   const refreshNotFoundCountRef = useRef<{ id: string | null; count: number }>({ id: null, count: 0 });
   const sleepTimerPrevSongIdRef = useRef<string | null>(null);
@@ -680,6 +682,11 @@ export function usePlaybackEngine(): {
       // crossfade is ready for the rest of the session.
       ensureWebAudioGraph();
       cancelActiveCrossfade();
+      clearPlaybackError();
+      erroredSrcRetryRef.current = null;
+      // A failed element keeps its error when the source URL is unchanged.
+      // Explicit play must reload it so a restored file can be retried.
+      if (audio.error) unloadAudioSource(audio);
       if (audioSourceStateRef.current.get(audio)?.src !== resolvePlayableSrc(detail.audioUrl)) {
         resetPlaybackClock();
       }
@@ -690,7 +697,7 @@ export function usePlaybackEngine(): {
 
     window.addEventListener(PLAYBACK_GESTURE_EVENT, onPlaybackGesture);
     return () => window.removeEventListener(PLAYBACK_GESTURE_EVENT, onPlaybackGesture);
-  }, [cancelActiveCrossfade, ensureWebAudioGraph, getActiveAudio, loadAudioSource, playAudio, resetPlaybackClock]);
+  }, [cancelActiveCrossfade, clearPlaybackError, ensureWebAudioGraph, getActiveAudio, loadAudioSource, unloadAudioSource, playAudio, resetPlaybackClock]);
 
   const resumeActivePlayback = useCallback((audio: HTMLAudioElement) => {
     if (!isPlayingRef.current || audio !== getActiveAudio()) return;
@@ -1155,7 +1162,7 @@ export function usePlaybackEngine(): {
   }, [cancelActiveCrossfade, queue]);
 
   // "End of track" sleep mode: any song-id change (natural ended, crossfade
-  // commit, error-skip) means the armed track finished, so stop there. Initial
+  // commit, manual next) means the armed track finished, so stop there. Initial
   // mount (prev null) is playback starting, not a track ending.
   useEffect(() => {
     const previousSongId = sleepTimerPrevSongIdRef.current;
@@ -1719,20 +1726,19 @@ export function usePlaybackEngine(): {
   const handleActiveAudioPlaying = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
     if (event.currentTarget === getActiveAudio()) {
       resumeAfterSeekRef.current = false;
-      // A successful play clears the consecutive-error counter and the
-      // retried-source guard so future failures get a fresh retry budget.
-      consecutiveAudioErrorsRef.current = 0;
+      clearPlaybackError();
+      // Successful playback gives a future failure a fresh retry budget.
       erroredSrcRetryRef.current = null;
       notePlaybackNetworkSuccess();
     }
-  }, [getActiveAudio]);
+  }, [clearPlaybackError, getActiveAudio]);
 
   const handleActiveAudioError = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
     const audio = event.currentTarget;
-    if (audio !== getActiveAudio()) return;
+    if (audio !== getActiveAudio() || !audio.error) return;
     // Radio / browser-local sources have their own handling. Streaming podcasts
     // (plain HTTP through the media proxy) deliberately fall through to the same
-    // retry/skip path as music so one dead episode can't wedge the queue.
+    // retry path as music.
     if (currentSongIsBrowserLocal || currentSongIsRadio) return;
     notePlaybackNetworkFailure();
 
@@ -1740,35 +1746,37 @@ export function usePlaybackEngine(): {
     const baseSrc = state?.src ?? audio.currentSrc ?? audio.src;
     if (!baseSrc) return;
 
-    // Retry the same track once with a cache-busted URL before skipping. Don't
+    // Retry the same track once with a cache-busted URL. Don't
     // touch HLS sources (managed by hls.js) — only retry plain element srcs.
     if (!state?.hls && erroredSrcRetryRef.current !== baseSrc) {
       erroredSrcRetryRef.current = baseSrc;
       const sep = baseSrc.includes("?") ? "&" : "?";
       const bustedSrc = `${baseSrc}${sep}__retry=${Date.now()}`;
       try {
+        // Ignore the rejected play promise from the source we're replacing.
+        playRequestIdRef.current += 1;
         audio.src = bustedSrc;
         audioSourceStateRef.current.set(audio, { src: baseSrc, hls: null });
         audio.load();
-        if (isPlayingRef.current) void audio.play().catch(() => {});
+        if (isPlayingRef.current) void playAudio(audio);
         return;
       } catch {}
     }
 
-    // Retry failed (or already retried): count it and skip to the next track,
-    // stopping after a few consecutive failures so we don't loop through a dead
-    // queue forever.
-    consecutiveAudioErrorsRef.current += 1;
-    if (consecutiveAudioErrorsRef.current >= MAX_CONSECUTIVE_AUDIO_ERRORS) {
-      consecutiveAudioErrorsRef.current = 0;
-      erroredSrcRetryRef.current = null;
-      console.error("Playback stopped after repeated track load failures.");
-      pause();
-      return;
+    // A missing file is not a request to change songs. Keep the selected song
+    // and queue intact, including when a paused/restored source fails to load.
+    cancelActiveCrossfade();
+    resetPendingSeek();
+    isPlayingRef.current = false;
+    playRequestIdRef.current += 1;
+    audio.pause();
+    const failedSong = usePlayerStore.getState().currentSong;
+    if (failedSong?.id === currentSongId) {
+      const retrySong = prepareHistorySongForPlayback(failedSong);
+      if (retrySong !== failedSong) replaceSong(retrySong);
     }
-    erroredSrcRetryRef.current = null;
-    next();
-  }, [currentSongIsBrowserLocal, currentSongIsRadio, getActiveAudio, next, pause]);
+    if (currentSongId) failPlayback(currentSongId, "This song couldn’t load. Press play to retry.");
+  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsRadio, getActiveAudio, cancelActiveCrossfade, resetPendingSeek, playAudio, failPlayback, replaceSong]);
 
   const handleTogglePlayback = useCallback(() => {
     if (isPlaying) {
@@ -2002,6 +2010,9 @@ export function usePlaybackEngine(): {
     chrome: playbackSong
       ? {
           song: playbackSong,
+          playbackError: playbackError?.songId === playbackSong.id
+            ? playbackError.message
+            : null,
           duration,
           currentTime,
           onSeek,

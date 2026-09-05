@@ -235,7 +235,7 @@ export function youtubePreviewConfig(): YouTubePreviewConfig {
 // Resolve a Smart Shuffle rec to a YouTube video and stage its Opus audio. Returns
 // null (caller falls back / skips) when no confident match exists — never stages
 // the wrong track. Keeps native Opus (~140k anon); no lossy re-encode.
-async function fetchYouTubePreviewAudio(item: DiscoverStageItem): Promise<{ bytes: Buffer; ext: string } | null> {
+async function fetchYouTubePreviewAudio(item: DiscoverStageItem): Promise<{ bytes: Buffer; ext: string; imageUrl: string } | null> {
   const config = youtubePreviewConfig();
   // YouTube Music mix tracks already carry their videoId — download that exact
   // video (no search, more accurate + cheaper). Smart Shuffle recs have only a
@@ -252,7 +252,7 @@ async function fetchYouTubePreviewAudio(item: DiscoverStageItem): Promise<{ byte
   try {
     const audio = await downloadYouTubePreviewAudioResilient(videoId, config);
     if (!audio.bytes.byteLength || audio.bytes.byteLength > MAX_AUDIO_BYTES) return null;
-    return audio;
+    return { ...audio, imageUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` };
   } catch {
     return null;
   }
@@ -297,7 +297,7 @@ async function fetchDiscoverCandidateAudio(resolved: DiscoverResolved): Promise<
 async function writeDiscoverStagedFile(
   source: LibrarySource,
   item: DiscoverStageItem,
-  audio: { bytes: Buffer; ext: string },
+  audio: { bytes: Buffer; ext: string; imageUrl?: string },
 ): Promise<DiscoverStagingEntry> {
   const stem = sanitizeFileName(`${item.artist} - ${item.title}`);
   const ext = AUDIO_EXTENSIONS.has(audio.ext) ? audio.ext : ".flac";
@@ -316,15 +316,18 @@ async function writeDiscoverStagedFile(
     updatedAt: new Date().toISOString(),
   };
   let coverRelPath: string | undefined;
-  if (item.imageUrl) {
+  // A replayed preview may carry a cover URL from a deleted staging directory.
+  // Use the matched video's thumbnail when that original cover is unavailable.
+  for (const imageUrl of new Set([item.imageUrl, audio.imageUrl].filter(Boolean))) {
     const coverName = await saveRemoteImage(
-      item.imageUrl,
+      imageUrl!,
       basename(stagedAudioPath, extname(stagedAudioPath)),
       stagedAudioPath,
     ).catch(() => undefined);
     if (coverName) {
       sidecar.coverFile = coverName;
       coverRelPath = relative(source.root, resolve(stagedDir, coverName)).split(sep).join("/");
+      break;
     }
   }
   await writeSidecar(stagedAudioPath, sidecar);
@@ -664,7 +667,13 @@ export async function handleYouTubeMusicPlaylist(request: Request, listId: strin
     const cached = manifest.entries[trackId];
     // Already staged (played before) → an instantly-playable real song.
     if (cached && existsSync(resolve(source.root, cached.stagedRelPath))) {
-      return signDiscoverSong({ ...discoverEntryToSong(cached), youtubeVideoId: entry.videoId });
+      return signDiscoverSong({
+        ...discoverEntryToSong(cached),
+        title: entry.title,
+        artist: entry.artist,
+        duration: entry.duration ?? (cached.durationMs ? Math.round(cached.durationMs / 1000) : undefined),
+        youtubeVideoId: entry.videoId,
+      });
     }
     // Not staged → a placeholder the discover-stager materializes on play (by
     // videoId). Empty audioUrl keeps the engine idle until the swap.
@@ -673,6 +682,7 @@ export async function handleYouTubeMusicPlaylist(request: Request, listId: strin
       title: entry.title,
       artist: entry.artist,
       imageUrl: entry.imageUrl,
+      duration: entry.duration,
       audioUrl: "",
       source: "server",
       discoverTrackId: trackId,

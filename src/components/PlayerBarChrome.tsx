@@ -23,6 +23,7 @@ const QueueSheet = lazy(() => import("@/components/QueueSheet"));
 
 export type PlayerBarChromeProps = {
   song: PlayerSong;
+  playbackError?: string | null;
   duration: number;
   currentTime: number;
   onSeek: (value: number) => void;
@@ -41,6 +42,7 @@ export type PlayerBarChromeProps = {
 
 export function PlayerBarChrome({
   song,
+  playbackError,
   duration,
   currentTime,
   onSeek,
@@ -138,6 +140,11 @@ export function PlayerBarChrome({
         </Suspense>
       ) : null}
       <div className="fixed inset-x-0 z-40 bottom-[calc(var(--wf-mobile-nav-bottom-offset)+var(--wf-floating-gap))] text-white lg:bottom-0 lg:border-t lg:border-white/[0.08] lg:bg-black">
+      {playbackError ? (
+        <div role="alert" className="mx-[var(--wf-floating-inset)] mb-2 rounded-lg border border-white/15 bg-[#181818] px-4 py-2 text-center text-sm text-white/80 lg:mx-0 lg:mb-0 lg:rounded-none lg:border-x-0 lg:border-t-0">
+          {playbackError}
+        </div>
+      ) : null}
       {/* Mobile mini player */}
       <div className="relative mx-[var(--wf-floating-inset)] overflow-hidden rounded-[18px] border border-white/[0.13] bg-[rgba(10,12,16,0.84)] shadow-[0_8px_24px_rgba(0,0,0,0.34)] backdrop-blur-2xl lg:hidden">
         <div

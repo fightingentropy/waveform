@@ -584,13 +584,12 @@ async function handleMediaRefresh(request: Request): Promise<Response> {
   return json(
     {
       songs: (songs as MediaRefreshItem[]).map((song) => {
-        // Discover staging is intentionally temporary. Once its cache entry is
-        // pruned, listening history may still point at the dead .discover path.
-        // Prefer the promoted/current library copy when the same track exists.
+        // History can retain old artwork/audio paths after a restore or file
+        // replacement. Refresh exact library ids for every song. Only temporary
+        // Discover copies may fall back to a title/artist match after promotion.
         const stagedMedia = song.imageUrl.includes("/.discover/") || song.audioUrl.includes("/.discover/");
-        const currentSong = stagedMedia
-          ? snapshot?.entriesById.get(song.id)?.song ?? currentByTrack.get(trackKey(song.title, song.artist))
-          : null;
+        const currentSong = snapshot?.entriesById.get(song.id)?.song
+          ?? (stagedMedia ? currentByTrack.get(trackKey(song.title, song.artist)) : undefined);
         const media = currentSong ?? song;
         return {
           id: song.id,

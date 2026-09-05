@@ -13,6 +13,7 @@ import {
 } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
+import { prepareHistorySongForPlayback } from "@/client/discover-queue";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
@@ -89,9 +90,12 @@ export default function HomePage() {
     warmPlaybackSong(song, true);
   }, []);
 
-  const recentlyPlayedSongs = statsData.recentlyPlayed as HomeSong[];
+  const recentlyPlayedSongs = useMemo(
+    () => statsData.recentlyPlayed.map(prepareHistorySongForPlayback) as HomeSong[],
+    [statsData.recentlyPlayed],
+  );
   const mostPlayedSongs = useMemo(
-    () => statsData.mostPlayed.map((entry) => entry.song as HomeSong),
+    () => statsData.mostPlayed.map((entry) => prepareHistorySongForPlayback(entry.song) as HomeSong),
     [statsData.mostPlayed],
   );
 
@@ -101,7 +105,7 @@ export default function HomePage() {
     if (song.id === currentSongId) {
       if (isPlaying) pause();
       else {
-        requestImmediatePlayback(song);
+        requestImmediatePlayback(usePlayerStore.getState().currentSong ?? song);
         play();
       }
       return;

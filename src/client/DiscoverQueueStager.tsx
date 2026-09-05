@@ -10,30 +10,26 @@ import { isUnstagedDiscoverSong, stageDiscoverSong } from "@/client/discover-que
 // so it can play, and prefetch-stages the next one so advancing is seamless.
 // Mounted once, app-wide (next to PlayerBar) so it keeps working after the user
 // navigates away from the playlist page. Renders nothing.
-const MAX_CONSECUTIVE_FAILURES = 3;
-
 export function DiscoverQueueStager(): null {
   const queue = usePlayerStore((s) => s.queue);
   const currentIndex = usePlayerStore((s) => s.currentIndex);
   const currentSongId = usePlayerStore((s) => s.currentSong?.id ?? null);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const replaceStagedSong = usePlayerStore((s) => s.replaceStagedSong);
-  const next = usePlayerStore((s) => s.next);
-  const pause = usePlayerStore((s) => s.pause);
+  const failPlayback = usePlayerStore((s) => s.failPlayback);
 
   // Placeholder ids with a stage request in flight (dedupe) and ones that failed
   // (don't retry forever / loop through the whole queue).
   const inFlightRef = useRef<Set<string>>(new Set());
   const failedRef = useRef<Set<string>>(new Set());
-  const consecutiveFailuresRef = useRef(0);
 
   useEffect(() => {
-    const stage = (placeholderId: string, song: Parameters<typeof stageDiscoverSong>[0], isCurrent: boolean) => {
+    if (!isPlaying) return;
+    const stage = (placeholderId: string, song: Parameters<typeof stageDiscoverSong>[0]) => {
       if (inFlightRef.current.has(placeholderId) || failedRef.current.has(placeholderId)) return;
       inFlightRef.current.add(placeholderId);
       void stageDiscoverSong(song)
         .then((real) => {
-          if (isCurrent) consecutiveFailuresRef.current = 0;
           replaceStagedSong(placeholderId, real);
           // Nudge playback for the active track (the load effect also picks up the
           // new src since isPlaying stays true — this is belt-and-suspenders for
@@ -43,14 +39,9 @@ export function DiscoverQueueStager(): null {
         })
         .catch(() => {
           failedRef.current.add(placeholderId);
-          if (!isCurrent) return;
-          consecutiveFailuresRef.current += 1;
-          // Skip a dead track so the playlist keeps moving, but stop after a few
-          // misses in a row instead of churning through the entire queue.
-          const state = usePlayerStore.getState();
-          if (state.currentSong?.id !== placeholderId) return;
-          if (consecutiveFailuresRef.current < MAX_CONSECUTIVE_FAILURES) next();
-          else pause();
+          // Also handles a prefetched song that became current while loading.
+          // Late failures for a different selection leave playback untouched.
+          failPlayback(placeholderId, "This song couldn’t load. Press play to retry.");
         })
         .finally(() => {
           inFlightRef.current.delete(placeholderId);
@@ -59,16 +50,19 @@ export function DiscoverQueueStager(): null {
 
     const current = queue[currentIndex] ?? null;
     if (current && isUnstagedDiscoverSong(current)) {
-      stage(current.id, current, true);
+      // A new play attempt may retry a failed track. Prefetch failures remain
+      // suppressed until that track is actually selected.
+      failedRef.current.delete(current.id);
+      stage(current.id, current);
     }
 
     // Prefetch one ahead (linear only — shuffle's next pick is random). Stage it
     // while the current track plays so the transition is gapless.
     if (isPlaying && !usePlayerStore.getState().shuffle) {
       const upcoming = queue[currentIndex + 1] ?? null;
-      if (upcoming && isUnstagedDiscoverSong(upcoming)) stage(upcoming.id, upcoming, false);
+      if (upcoming && isUnstagedDiscoverSong(upcoming)) stage(upcoming.id, upcoming);
     }
-  }, [queue, currentIndex, currentSongId, isPlaying, next, pause, replaceStagedSong]);
+  }, [queue, currentIndex, currentSongId, isPlaying, failPlayback, replaceStagedSong]);
 
   return null;
 }

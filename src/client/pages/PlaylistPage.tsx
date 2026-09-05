@@ -289,6 +289,12 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
 
   const playlistIsActive = songs.some((song) => songKeyOf(song) === currentSongKey);
 
+  const resumeCurrent = useCallback(() => {
+    const current = usePlayerStore.getState().currentSong;
+    if (current?.audioUrl) requestImmediatePlayback(current);
+    play();
+  }, [play]);
+
   const playFromIndex = useCallback(
     (index: number) => {
       const song = setQueue(songs, index);
@@ -305,22 +311,22 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
       if (!song) return;
       if (songKeyOf(song) === currentSongKey) {
         if (isPlaying) pause();
-        else play();
+        else resumeCurrent();
         return;
       }
       playFromIndex(index);
     },
-    [songs, currentSongKey, isPlaying, pause, play, playFromIndex],
+    [songs, currentSongKey, isPlaying, pause, resumeCurrent, playFromIndex],
   );
 
   const handleHeaderPlay = useCallback(() => {
     if (playlistIsActive) {
       if (isPlaying) pause();
-      else play();
+      else resumeCurrent();
       return;
     }
     if (songs.length > 0) playFromIndex(0);
-  }, [playlistIsActive, isPlaying, pause, play, playFromIndex, songs.length]);
+  }, [playlistIsActive, isPlaying, pause, resumeCurrent, playFromIndex, songs.length]);
 
   const headerIsPlaying = playlistIsActive && isPlaying;
 
@@ -363,7 +369,7 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
           <ol className="space-y-1">
             {songs.map((track, index) => {
               const active = songKeyOf(track) === currentSongKey;
-              const loading = active && !currentHasAudio;
+              const loading = active && isPlaying && !currentHasAudio;
               const activePlaying = active && isPlaying && currentHasAudio;
               return (
                 <li key={track.id}>

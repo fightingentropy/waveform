@@ -33,6 +33,9 @@ type PlayerState = {
   playFuture: number[];
   shuffleRemaining: number[];
   isPlaying: boolean;
+  playbackError: { songId: string; message: string } | null;
+  failPlayback: (songId: string, message: string) => void;
+  clearPlaybackError: () => void;
   volume: number; // 0..1
   isMuted: boolean;
   shuffle: boolean;
@@ -305,6 +308,13 @@ export function getUpcomingPlaybackIndices(
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
+  playbackError: null,
+  failPlayback: (songId, message) => set((state) =>
+    state.currentSong?.id === songId
+      ? { isPlaying: false, playbackError: { songId, message } }
+      : state,
+  ),
+  clearPlaybackError: () => set({ playbackError: null }),
   queue: [],
   currentIndex: -1,
   currentSong: null,
@@ -344,6 +354,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       queue,
       currentIndex: start,
       currentSong,
+      playbackError: null,
       playHistory: [],
       playFuture: [],
       shuffleRemaining: get().shuffle ? createShuffleRemaining(queue.length, start) : [],
@@ -354,6 +365,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setSong: (song) =>
     set({
       currentSong: song,
+      playbackError: null,
       queue: song ? [song] : [],
       currentIndex: song ? 0 : -1,
       playHistory: [],
@@ -475,7 +487,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         shuffleRemaining: remapQueueIndices(s.shuffleRemaining, index, -1),
       };
     }),
-  play: () => set({ isPlaying: true }),
+  play: () => set({ isPlaying: true, playbackError: null }),
   pause: () => set({ isPlaying: false }),
   toggle: () => set((s) => ({ isPlaying: !s.isPlaying })),
   next: () =>

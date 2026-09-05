@@ -453,6 +453,7 @@ export type YouTubeMusicPlaylistEntry = {
   title: string;
   artist: string;
   imageUrl: string;
+  duration?: number;
 };
 export type YouTubeMusicPlaylist = {
   title: string;
@@ -464,7 +465,8 @@ export type YouTubeMusicPlaylist = {
 // reads cleanly. Cosmetic only — playback downloads by videoId, not by title.
 function cleanYouTubeTitle(raw: string): string {
   return raw
-    .replace(/\s*[([](?:official\s+)?(?:music\s+)?(?:video|audio|lyric[s]?(?:\s*video)?|visuali[sz]er|mv|hd|4k)[)\]]\s*/gi, " ")
+    .replace(/\s*[([](?:official\s+)?(?:music\s+)?(?:video(?:\s+clip)?|audio|lyric[s]?(?:\s*video)?|visuali[sz]er|mv|hd|4k)[)\]]\s*/gi, " ")
+    .replace(/\s*(?:\||[-–—])\s*(?:official\s+)?(?:music\s+)?(?:video(?:\s+clip)?|audio|lyrics?(?:\s+video)?|visuali[sz]er)\s*$/i, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -472,12 +474,14 @@ function cleanYouTubeTitle(raw: string): string {
 // YouTube music titles are usually "Artist - Title (Official Video)". Split on the
 // first " - " so the playlist shows a real artist column; fall back to the mix name
 // when there's no separator.
-function splitTitleArtist(raw: string, fallbackArtist: string): { title: string; artist: string } {
+export function splitTitleArtist(raw: string, fallbackArtist: string): { title: string; artist: string } {
   const cleaned = cleanYouTubeTitle(raw);
-  const dash = cleaned.indexOf(" - ");
-  if (dash > 0) {
-    return { artist: cleaned.slice(0, dash).trim(), title: cleaned.slice(dash + 3).trim() || cleaned };
+  const dash = /\s+[-–—]\s+/.exec(cleaned);
+  if (dash && dash.index > 0) {
+    return { artist: cleaned.slice(0, dash.index).trim(), title: cleaned.slice(dash.index + dash[0].length).trim() || cleaned };
   }
+  const quoted = /^(.+?)\s+["“]([^"”]+)["”]$/.exec(cleaned);
+  if (quoted) return { artist: quoted[1].trim(), title: quoted[2].trim() };
   return { artist: fallbackArtist, title: cleaned };
 }
 
@@ -512,7 +516,11 @@ export async function fetchYouTubeMusicPlaylist(
   const data = JSON.parse(stdout) as {
     title?: string;
     thumbnails?: Array<{ url?: string }>;
-    entries?: Array<{ id?: string; title?: string; thumbnails?: Array<{ url?: string }> }>;
+    entries?: Array<{
+      id?: string; title?: string; track?: string; artist?: string;
+      uploader?: string; channel?: string; duration?: number;
+      thumbnails?: Array<{ url?: string }>;
+    }>;
   };
   const mixTitle = typeof data.title === "string" && data.title.trim() ? data.title.trim() : "Discover Mix";
   const entries: YouTubeMusicPlaylistEntry[] = [];
@@ -525,12 +533,18 @@ export async function fetchYouTubeMusicPlaylist(
     if (!videoId || seen.has(videoId)) continue;
     seen.add(videoId);
     const rawTitle = typeof entry.title === "string" ? entry.title : "";
-    const { title, artist } = splitTitleArtist(rawTitle, mixTitle);
+    const fallbackArtist = entry.artist?.trim() || entry.uploader?.trim() || entry.channel?.trim() || mixTitle;
+    const parsed = splitTitleArtist(rawTitle, fallbackArtist.replace(/\s+-\s+Topic$/i, ""));
+    const title = entry.track?.trim() || parsed.title;
+    const artist = entry.artist?.trim() || parsed.artist;
     entries.push({
       videoId,
       title: title || rawTitle || videoId,
       artist: artist || mixTitle,
       imageUrl: bestThumbnail(entry.thumbnails),
+      duration: typeof entry.duration === "number" && Number.isFinite(entry.duration) && entry.duration > 0
+        ? Math.round(entry.duration)
+        : undefined,
     });
   }
   return { title: mixTitle, imageUrl: bestThumbnail(data.thumbnails), entries };

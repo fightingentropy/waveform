@@ -31,6 +31,7 @@ function idsAt(indices: number[]): string[] {
 
 beforeEach(() => {
   usePlayerStore.setState({
+    playbackError: null,
     queue: [],
     currentIndex: -1,
     currentSong: null,
@@ -40,6 +41,38 @@ beforeEach(() => {
     isPlaying: false,
     shuffle: false,
     repeatMode: "off",
+  });
+});
+
+describe("failed playback preserves the user's selection", () => {
+  test("a missing file pauses without consuming shuffle or changing the queue", () => {
+    usePlayerStore.setState({ shuffle: true });
+    usePlayerStore.getState().setQueue(songs("a", "b", "c"), 1);
+    const before = usePlayerStore.getState();
+
+    before.failPlayback("b", "Couldn’t load this song");
+
+    const after = usePlayerStore.getState();
+    expect(after.isPlaying).toBe(false);
+    expect(after.currentSong?.id).toBe("b");
+    expect(after.currentIndex).toBe(before.currentIndex);
+    expect(after.queue).toBe(before.queue);
+    expect(after.shuffleRemaining).toEqual(before.shuffleRemaining);
+    expect(after.playHistory).toEqual(before.playHistory);
+    expect(after.playbackError?.songId).toBe("b");
+
+    after.play();
+    expect(usePlayerStore.getState().currentSong?.id).toBe("b");
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+    expect(usePlayerStore.getState().playbackError).toBeNull();
+  });
+
+  test("a late or prefetched failure cannot pause a different song", () => {
+    usePlayerStore.getState().setQueue(songs("a", "b"), 1);
+    usePlayerStore.getState().failPlayback("a", "Couldn’t load this song");
+    expect(usePlayerStore.getState().currentSong?.id).toBe("b");
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+    expect(usePlayerStore.getState().playbackError).toBeNull();
   });
 });
 
